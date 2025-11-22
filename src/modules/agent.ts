@@ -4,7 +4,7 @@ import { callLLM, type LLMResponse, type Provider } from './llm'
 type WorkerStatus = 'working' | 'done' | 'blocked'
 type VerifierVerdict = 'instruct' | 'approve' | 'fail'
 
-const WORKER_SYSTEM_PROMPT = `You are Forge, a meticulous senior engineer agent focused on producing concrete, technically sound deliverables. Follow verifier instructions with discipline.
+const WORKER_SYSTEM_PROMPT = `You are a meticulous senior engineer agent focused on producing concrete, technically sound deliverables. Follow verifier instructions with discipline.
 
 Always return STRICT JSON with the shape:
 {
@@ -20,7 +20,7 @@ Rules:
 - Use status "blocked" when you cannot proceed without missing info; include what is missing in requests.
 - Never include Markdown fences or commentary outside the JSON object.`
 
-const VERIFIER_SYSTEM_PROMPT = `You are Axiom, a staff-level instructor verifying a worker agent's output for a demanding software task.
+const VERIFIER_SYSTEM_PROMPT = `You are a staff-level instructor verifying a worker agent's output for a demanding software task.
 
 Responsibilities:
 1. Internalize the user's objectives and acceptance criteria.

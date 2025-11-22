@@ -41,15 +41,17 @@ describe('Verifier/worker collaboration loop', () => {
 - Extend packages/board/src/types.ts so each Swimlane tracks bidirectional adjacency metadata plus a rolling risk index derived from blocked cards.
 - Propose a deterministic algorithm (pseudo-code welcome) for reconciling inbound/outbound dependencies across lanes up to depth 3, annotating the canvas with badges.
 - Describe the exact Vitest test additions to packages/board/tests/BoardCanvas.test.ts to validate the lane reconciliation logic.
-- Stay entirely within the nebula-kanban repo; do not reference or depend on any files from the current hyperagent project.`
+- Stay entirely within the nebula-kanban repo; do not reference or depend on any other files.`
 
     const result = await runVerifierWorkerLoop({
       userInstructions: scenario,
       provider: 'opencode',
       model: 'github-copilot/gpt-5-mini',
-      maxRounds: 2,
+      maxRounds: 5,
       sessionDir
     })
+
+    console.log('\n\n\n', result)
 
     expect(result.bootstrap.round).toBe(0)
     expect(result.bootstrap.parsed.instructions.trim().length).toBeGreaterThan(0)

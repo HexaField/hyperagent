@@ -132,11 +132,11 @@ export async function runCLI(command: string, args: string[], input: string, ses
     let err = ''
 
     child.stdout.on('data', (chunk) => {
-      // console.log(String(chunk))
+      console.log(String(chunk))
       out += String(chunk)
     })
     child.stderr.on('data', (chunk) => {
-      // console.log(String(chunk))
+      console.log(String(chunk))
       err += String(chunk)
     })
 
@@ -302,8 +302,9 @@ async function callOpencodeCLI(
   // Use the `run` subcommand with the prompt as a positional argument and request JSON output.
   const args = ['run', combined, '-m', modelToUse, '--format', 'json']
   if (sessionId) {
-    args.push('--session', sessionId, '--continue')
+    args.push('--session', `session-${sessionId}`)
   }
+  console.log(args)
   // opencode run manages its own sessions; do not force a session flag here.
   const res = await runCLI('opencode', args, '', sessionDir)
   console.log('Opencode CLI output:', res.split('\n').map(extractOrCreateJSON))
