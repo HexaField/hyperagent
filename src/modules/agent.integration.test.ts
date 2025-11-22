@@ -74,5 +74,5 @@ describe('Verifier/worker collaboration loop', () => {
       expect(entry.model).toBe('github-copilot/gpt-5-mini')
       expect(typeof entry.payload).toBe('object')
     }
-  }, 600_000)
+  }, 1_200_000) // super long... but needed for complex agent tasks
 })

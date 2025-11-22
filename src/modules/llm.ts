@@ -301,8 +301,17 @@ async function callOpencodeCLI(
 
   // Use the `run` subcommand with the prompt as a positional argument and request JSON output.
   const args = ['run', combined, '-m', modelToUse, '--format', 'json']
+  let sessionFlag: string | undefined
   if (sessionId) {
-    args.push('--session', `session-${sessionId}`)
+    const usable = await opencodeSessionExists(sessionId, sessionDir)
+    if (usable) {
+      sessionFlag = sessionId
+    } else {
+      console.warn(`Opencode session "${sessionId}" not found or unavailable; continuing without --session flag.`)
+    }
+  }
+  if (sessionFlag) {
+    args.push('--session', sessionFlag)
   }
   console.log(args)
   // opencode run manages its own sessions; do not force a session flag here.
@@ -342,6 +351,44 @@ async function callOpencodeCLI(
   }
   console.log('finalRes:', text)
   return text
+}
+
+async function opencodeSessionExists(sessionName: string, sessionDir?: string): Promise<boolean> {
+  if (!sessionName) return false
+  const probes: string[][] = [
+    ['session', 'list', '--format', 'json'],
+    ['session', 'list']
+  ]
+  for (const probe of probes) {
+    try {
+      const raw = await runCLI('opencode', probe, '', sessionDir)
+      if (!raw) continue
+      // Try JSON first
+      try {
+        const parsed = JSON.parse(raw)
+        const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : Array.isArray(parsed) ? parsed : []
+        if (
+          Array.isArray(sessions) &&
+          sessions.some((entry) => {
+            if (!entry) return false
+            if (typeof entry === 'string') return entry.trim() === sessionName
+            if (typeof entry === 'object') {
+              return entry.name === sessionName || entry.session === sessionName || entry.id === sessionName
+            }
+            return false
+          })
+        ) {
+          return true
+        }
+      } catch (err) {
+        // Not JSON; fall back to string search
+      }
+      if (raw.includes(sessionName)) return true
+    } catch (err) {
+      // Ignore probe failures, try next strategy
+    }
+  }
+  return false
 }
 
 async function callGooseCLI(

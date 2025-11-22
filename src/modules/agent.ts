@@ -1,3 +1,4 @@
+import { spawnSync } from 'child_process'
 import os from 'os'
 import { callLLM, type LLMResponse, type Provider } from './llm'
 
@@ -96,6 +97,9 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
   const workerSessionId = options.workerSessionId ?? `worker-${Date.now()}`
   const verifierSessionId = options.verifierSessionId ?? `verifier-${Date.now()}`
   const sessionDir = options.sessionDir ?? os.tmpdir() // Use OS temp dir if none provided
+
+  spawnSync('opencode', ['session', 'create', workerSessionId], { cwd: sessionDir })
+  spawnSync('opencode', ['session', 'create', verifierSessionId], { cwd: sessionDir })
 
   const rounds: ConversationRound[] = []
 
