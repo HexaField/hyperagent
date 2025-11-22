@@ -22,12 +22,14 @@ vi.mock('./llm', async () => {
   const actual = await vi.importActual<typeof import('./llm')>('./llm')
   return {
     ...actual,
-    runCLI: vi.fn(async (cmd: string, args: string[], input: string, sessionDir?: string) => {
+    runCLI: vi.fn(async (cmd: string, args: string[], input: string, sessionDir?: string, hooks?: any) => {
       if (sessionDir) {
         // noop; signature compatibility ensures callers may pass a path
       }
       // Return a simple JSON string regardless of the CLI
-      return '{"answer":"session-ok","status":"ok"}\n'
+      const payload = '{"answer":"session-ok","status":"ok"}\n'
+      hooks?.onStdout?.(payload)
+      return payload
     })
   }
 })
@@ -43,6 +45,17 @@ describe('callLLM', () => {
     expect(res.data).toContain('```json')
     // should include the JSON key from the mocked chunk
     expect(res.data).toContain('"hello"')
+  })
+
+  it('streams intermediary chunks when onStream is provided', async () => {
+    const chunks: llm.LLMStreamEvent[] = []
+    const res = await llm.callLLM('system', 'user prompt', 'ollama', 'llama3.2', {
+      onStream: (event) => chunks.push(event)
+    })
+    expect(res.success).toBe(true)
+    expect(chunks.length).toBeGreaterThan(0)
+    expect(chunks[0].provider).toBe('ollama')
+    expect(chunks[0].chunk).toContain('"hello"')
   })
 
   it('uses sessionId with ollama to accumulate message history across calls', async () => {

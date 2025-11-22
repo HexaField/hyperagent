@@ -1,6 +1,6 @@
 import { spawnSync } from 'child_process'
 import os from 'os'
-import { callLLM, type LLMResponse, type Provider } from './llm'
+import { callLLM, type LLMResponse, type LLMStreamCallback, type Provider } from './llm'
 
 type WorkerStatus = 'working' | 'done' | 'blocked'
 type VerifierVerdict = 'instruct' | 'approve' | 'fail'
@@ -81,6 +81,7 @@ export type AgentLoopOptions = {
   sessionDir?: string
   workerSessionId?: string
   verifierSessionId?: string
+  onStream?: AgentStreamCallback
 }
 
 export type AgentLoopResult = {
@@ -90,6 +91,18 @@ export type AgentLoopResult = {
   rounds: ConversationRound[]
 }
 
+export type AgentStreamEvent = {
+  role: 'worker' | 'verifier'
+  round: number
+  chunk: string
+  provider: Provider
+  model: string
+  attempt: number
+  sessionId?: string
+}
+
+export type AgentStreamCallback = (event: AgentStreamEvent) => void
+
 export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
   const provider = options.provider ?? 'ollama'
   const model = options.model ?? 'llama3.2'
@@ -97,6 +110,7 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
   const workerSessionId = options.workerSessionId ?? `worker-${Date.now()}`
   const verifierSessionId = options.verifierSessionId ?? `verifier-${Date.now()}`
   const sessionDir = options.sessionDir ?? os.tmpdir() // Use OS temp dir if none provided
+  const streamCallback = options.onStream
 
   spawnSync('opencode', ['session', 'create', workerSessionId], { cwd: sessionDir })
   spawnSync('opencode', ['session', 'create', verifierSessionId], { cwd: sessionDir })
@@ -110,7 +124,8 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
     sessionId: verifierSessionId,
     userInstructions: options.userInstructions,
     workerTurn: null,
-    round: 0
+    round: 0,
+    onStream: streamCallback
   })
 
   let pendingInstructions = bootstrap.parsed.instructions || options.userInstructions
@@ -125,7 +140,8 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
       userInstructions: options.userInstructions,
       verifierInstructions: pendingInstructions,
       verifierCritique: latestCritique,
-      round
+      round,
+      onStream: streamCallback
     })
 
     if (workerTurn.parsed.status === 'blocked') {
@@ -144,7 +160,8 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
       sessionId: verifierSessionId,
       userInstructions: options.userInstructions,
       workerTurn,
-      round
+      round,
+      onStream: streamCallback
     })
 
     rounds.push({ worker: workerTurn, verifier: verifierTurn })
@@ -188,6 +205,7 @@ type WorkerInvokeArgs = {
   verifierInstructions: string
   verifierCritique?: string
   round: number
+  onStream?: AgentStreamCallback
 }
 
 type VerifierInvokeArgs = {
@@ -198,13 +216,16 @@ type VerifierInvokeArgs = {
   userInstructions: string
   workerTurn: WorkerTurn | null
   round: number
+  onStream?: AgentStreamCallback
 }
 
 async function invokeWorker(args: WorkerInvokeArgs): Promise<WorkerTurn> {
   const query = buildWorkerPrompt(args.userInstructions, args.verifierInstructions, args.verifierCritique, args.round)
+  const streamBridge = createStreamBridge('worker', args.round, args.onStream)
   const res = await callLLM(WORKER_SYSTEM_PROMPT, query, args.provider, args.model, {
     sessionDir: args.sessionDir,
-    sessionId: args.sessionId
+    sessionId: args.sessionId,
+    onStream: streamBridge
   })
 
   const parsed = parseWorkerResponse('worker', res)
@@ -213,13 +234,34 @@ async function invokeWorker(args: WorkerInvokeArgs): Promise<WorkerTurn> {
 
 async function invokeVerifier(args: VerifierInvokeArgs): Promise<VerifierTurn> {
   const query = buildVerifierPrompt(args.userInstructions, args.workerTurn, args.round)
+  const streamBridge = createStreamBridge('verifier', args.round, args.onStream)
   const res = await callLLM(VERIFIER_SYSTEM_PROMPT, query, args.provider, args.model, {
     sessionDir: args.sessionDir,
-    sessionId: args.sessionId
+    sessionId: args.sessionId,
+    onStream: streamBridge
   })
 
   const parsed = parseVerifierResponse('verifier', res)
   return { round: args.round, raw: res.data || '', parsed }
+}
+
+function createStreamBridge(
+  role: AgentStreamEvent['role'],
+  round: number,
+  cb?: AgentStreamCallback
+): LLMStreamCallback | undefined {
+  if (!cb) return undefined
+  return (event) => {
+    cb({
+      role,
+      round,
+      chunk: event.chunk,
+      provider: event.provider,
+      model: event.model,
+      attempt: event.attempt,
+      sessionId: event.sessionId
+    })
+  }
 }
 
 function buildWorkerPrompt(

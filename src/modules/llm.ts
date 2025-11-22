@@ -31,6 +31,23 @@ export type LLMResponse = {
 
 export type Provider = 'ollama' | 'opencode' | 'goose' | 'ollama-cli'
 
+export type LLMStreamEvent = {
+  chunk: string
+  provider: Provider
+  model: string
+  attempt: number
+  sessionId?: string
+}
+
+export type LLMStreamCallback = (event: LLMStreamEvent) => void
+
+export type CallLLMOptions = {
+  retries?: number
+  sessionId?: string
+  sessionDir?: string
+  onStream?: LLMStreamCallback
+}
+
 // Simple in-memory session stores. For ollama we keep a rolling chat history per session.
 // For CLI-based providers we prefer passing a --session flag, but also retain the
 // last assistant text for optional future heuristics if desired.
@@ -118,7 +135,18 @@ function findLatestLogEntry(meta: SessionMeta, predicate: (entry: LogEntry) => b
   return undefined
 }
 
-export async function runCLI(command: string, args: string[], input: string, sessionDir?: string): Promise<string> {
+type CLIStreamHooks = {
+  onStdout?: (chunk: string) => void
+  onStderr?: (chunk: string) => void
+}
+
+export async function runCLI(
+  command: string,
+  args: string[],
+  input: string,
+  sessionDir?: string,
+  hooks?: CLIStreamHooks
+): Promise<string> {
   const workingDir = sessionDir || path.join(os.tmpdir(), 'hyperagent-cli')
   if (!fs.existsSync(workingDir)) {
     fs.mkdirSync(workingDir, { recursive: true })
@@ -132,12 +160,24 @@ export async function runCLI(command: string, args: string[], input: string, ses
     let err = ''
 
     child.stdout.on('data', (chunk) => {
-      console.log(String(chunk))
-      out += String(chunk)
+      const text = String(chunk)
+      console.log(text)
+      out += text
+      try {
+        hooks?.onStdout?.(text)
+      } catch (err) {
+        console.warn('runCLI stdout hook failed', err)
+      }
     })
     child.stderr.on('data', (chunk) => {
-      console.log(String(chunk))
-      err += String(chunk)
+      const text = String(chunk)
+      console.log(text)
+      err += text
+      try {
+        hooks?.onStderr?.(text)
+      } catch (errHook) {
+        console.warn('runCLI stderr hook failed', errHook)
+      }
     })
 
     child.on('error', (e) => reject(e))
@@ -213,7 +253,8 @@ async function callOllama(
   userQuery: string,
   model: string,
   sessionId?: string,
-  sessionDir?: string
+  sessionDir?: string,
+  onChunk?: (chunk: string) => void
 ): Promise<string> {
   // Maintain a per-session message history when a sessionId is provided
   let messages: ChatMessage[]
@@ -248,7 +289,9 @@ async function callOllama(
   let fullMessage = ''
   for await (const chunk of response as any) {
     if (chunk.message?.content) {
-      fullMessage += chunk.message.content
+      const text = chunk.message.content
+      fullMessage += text
+      if (text) onChunk?.(text)
     }
   }
   // Store assistant turn for session continuity
@@ -276,7 +319,8 @@ async function callOpencodeCLI(
   userQuery: string,
   model: string,
   sessionId?: string,
-  sessionDir?: string
+  sessionDir?: string,
+  onChunk?: (chunk: string) => void
 ): Promise<string> {
   // We assume `opencode` CLI is installed. We'll pass the combined prompt as a positional argument.
   const combined = `${systemPrompt}\n${userQuery}`
@@ -314,8 +358,13 @@ async function callOpencodeCLI(
     args.push('--session', sessionFlag)
   }
   console.log(args)
-  // opencode run manages its own sessions; do not force a session flag here.
-  const res = await runCLI('opencode', args, '', sessionDir)
+  let emitted = false
+  const res = await runCLI('opencode', args, '', sessionDir, {
+    onStdout: (chunk) => {
+      emitted = true
+      if (chunk) onChunk?.(chunk)
+    }
+  })
   console.log('Opencode CLI output:', res.split('\n').map(extractOrCreateJSON))
 
   const finalRes = res
@@ -349,6 +398,7 @@ async function callOpencodeCLI(
       sessionDir
     )
   }
+  if (!emitted && text) onChunk?.(text)
   console.log('finalRes:', text)
   return text
 }
@@ -396,7 +446,8 @@ async function callGooseCLI(
   userQuery: string,
   model: string,
   sessionId?: string,
-  sessionDir?: string
+  sessionDir?: string,
+  onChunk?: (chunk: string) => void
 ): Promise<string> {
   const combined = `${systemPrompt}\n${userQuery}`
   // Try to pick a provider/model that exists locally via opencode models if possible.
@@ -409,7 +460,13 @@ async function callGooseCLI(
   // if (model) args.push('--model', model)
   // Use quiet mode if available to reduce extra output
 
-  const out = await runCLI('goose', args, '', sessionDir)
+  let emitted = false
+  const out = await runCLI('goose', args, '', sessionDir, {
+    onStdout: (chunk) => {
+      emitted = true
+      if (chunk) onChunk?.(chunk)
+    }
+  })
   console.log('Goose CLI output:', out)
   if (sessionId) {
     cliLastResponses.set(sessionId, out)
@@ -424,7 +481,9 @@ async function callGooseCLI(
       sessionDir
     )
   }
-  return outClean(out)
+  const cleaned = outClean(out)
+  if (!emitted && cleaned) onChunk?.(cleaned)
+  return cleaned
 }
 
 async function callOllamaCLI(
@@ -432,13 +491,20 @@ async function callOllamaCLI(
   userQuery: string,
   model: string,
   sessionId?: string,
-  sessionDir?: string
+  sessionDir?: string,
+  onChunk?: (chunk: string) => void
 ): Promise<string> {
   const combined = `${systemPrompt}\n${userQuery}`
   // Use `ollama run MODEL PROMPT --format json` to get a JSON response when supported.
   // Pass the prompt as a positional argument; do not send via stdin.
   const args = ['run', model, combined, '--format', 'json']
-  const out = await runCLI('ollama', args, '', sessionDir)
+  let emitted = false
+  const out = await runCLI('ollama', args, '', sessionDir, {
+    onStdout: (chunk) => {
+      emitted = true
+      if (chunk) onChunk?.(chunk)
+    }
+  })
   if (sessionId) {
     cliLastResponses.set(sessionId, out)
     const meta = loadSessionMeta(sessionId, sessionDir)
@@ -452,7 +518,9 @@ async function callOllamaCLI(
       sessionDir
     )
   }
-  return outClean(out)
+  const cleaned = outClean(out)
+  if (!emitted && cleaned) onChunk?.(cleaned)
+  return cleaned
 }
 
 function outClean(s: string): string {
@@ -463,24 +531,27 @@ function outClean(s: string): string {
 /**
  * callLLM - unified LLM caller with simple provider adapters and retries.
  * - provider: 'ollama' | 'opencode' | 'goose'
+ * - emits incremental chunks through `onStream` when provided
  * - ensures the returned `data` contains a JSON code-fence so callers can reliably parse it.
  */
 export async function callLLM(
   systemPrompt: string,
   userQuery: string,
-  provider = 'ollama',
+  provider: Provider = 'ollama',
   model = 'llama3.2',
-  optionsOrRetries?: number | { retries?: number; sessionId?: string; sessionDir?: string }
+  optionsOrRetries?: number | CallLLMOptions
 ): Promise<LLMResponse> {
   let retries = 2
   let sessionId: string | undefined = undefined
   let sessionDir: string | undefined = undefined
+  let onStream: LLMStreamCallback | undefined = undefined
   if (typeof optionsOrRetries === 'number') {
     retries = optionsOrRetries
   } else if (typeof optionsOrRetries === 'object' && optionsOrRetries) {
     if (typeof optionsOrRetries.retries === 'number') retries = optionsOrRetries.retries
     if (typeof optionsOrRetries.sessionId === 'string') sessionId = optionsOrRetries.sessionId
-    if (typeof (optionsOrRetries as any).sessionDir === 'string') sessionDir = (optionsOrRetries as any).sessionDir
+    if (typeof optionsOrRetries.sessionDir === 'string') sessionDir = optionsOrRetries.sessionDir
+    if (typeof optionsOrRetries.onStream === 'function') onStream = optionsOrRetries.onStream
   }
   // Ensure session meta exists when sessionId provided
   if (sessionId) {
@@ -497,16 +568,28 @@ export async function callLLM(
 
   let lastErr: any = null
   for (let attempt = 0; attempt <= retries; attempt++) {
+    const emitChunk = onStream
+      ? (chunk: string) => {
+          if (!chunk) return
+          onStream({
+            chunk,
+            provider,
+            model: String(model),
+            attempt,
+            sessionId
+          })
+        }
+      : undefined
     try {
       let raw = ''
       if (provider === 'ollama') {
-        raw = await callOllama(systemPrompt, userQuery, model, sessionId, sessionDir)
+        raw = await callOllama(systemPrompt, userQuery, model, sessionId, sessionDir, emitChunk)
       } else if (provider === 'opencode') {
-        raw = await callOpencodeCLI(systemPrompt, userQuery, String(model), sessionId, sessionDir)
+        raw = await callOpencodeCLI(systemPrompt, userQuery, String(model), sessionId, sessionDir, emitChunk)
       } else if (provider === 'goose') {
-        raw = await callGooseCLI(systemPrompt, userQuery, String(model), sessionId, sessionDir)
+        raw = await callGooseCLI(systemPrompt, userQuery, String(model), sessionId, sessionDir, emitChunk)
       } else if (provider === 'ollama-cli') {
-        raw = await callOllamaCLI(systemPrompt, userQuery, String(model), sessionId, sessionDir)
+        raw = await callOllamaCLI(systemPrompt, userQuery, String(model), sessionId, sessionDir, emitChunk)
       } else {
         throw new Error(`Unsupported LLM provider: ${provider}`)
       }
