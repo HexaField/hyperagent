@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import { For, Show, createMemo, createSignal, onCleanup } from 'solid-js'
 
 export type AgentLogEntry = {
   role: 'worker' | 'verifier'
@@ -33,7 +33,7 @@ type AgentChunkPayload = {
   sessionId?: string
 }
 
-const DEFAULT_PROMPT = `Refactor the LLM module to support a new provider and document trade-offs.`
+const DEFAULT_PROMPT = `Draft a quick project overview for a habit-tracking app.`
 
 export default function AgentDuet () {
   const [prompt, setPrompt] = createSignal(DEFAULT_PROMPT)
@@ -55,23 +55,8 @@ export default function AgentDuet () {
     })
   )
 
-  onMount(() => {
-    let cancelled = false
-    fetch('/api/devtools/code-server')
-      .then(async res => res.json())
-      .then(meta => {
-        if (!cancelled && meta?.url) {
-          setCodeServerUrl(meta.url as string)
-        }
-      })
-      .catch(() => {
-        setCodeServerUrl(null)
-      })
-
-    onCleanup(() => {
-      cancelled = true
-      abortController?.abort()
-    })
+  onCleanup(() => {
+    abortController?.abort()
   })
 
   const startRun = async () => {
@@ -90,6 +75,7 @@ export default function AgentDuet () {
     setResult(null)
     setError(null)
     setSessionDir(null)
+    setCodeServerUrl(null)
 
     try {
       const response = await fetch('/api/agent/run', {
@@ -153,9 +139,12 @@ export default function AgentDuet () {
 
   const handleServerPacket = (packet: StreamPacket) => {
     switch (packet.type) {
-      case 'session':
-        setSessionDir(packet.payload?.sessionDir ?? null)
+      case 'session': {
+        const payload = packet.payload ?? {}
+        setSessionDir(payload.sessionDir ?? null)
+        setCodeServerUrl(payload.codeServerUrl ?? null)
         break
+      }
       case 'chunk':
         updateLog(packet.payload as AgentChunkPayload)
         break
@@ -166,6 +155,8 @@ export default function AgentDuet () {
         setError(packet.payload?.message ?? 'Agent server error')
         break
       case 'end':
+        setCodeServerUrl(null)
+        break
       default:
         break
     }
@@ -202,6 +193,8 @@ export default function AgentDuet () {
     abortController?.abort()
     abortController = null
     setIsRunning(false)
+    setCodeServerUrl(null)
+    setSessionDir(null)
   }
 
   return (
@@ -252,11 +245,6 @@ export default function AgentDuet () {
           </div>
 
           <div class="flex flex-col gap-2 text-sm text-[var(--text)]">
-            <Show when={sessionDir()}>
-              <p>
-                Session dir: <code class="rounded bg-[var(--bg-muted)] px-1.5 py-0.5">{sessionDir()}</code>
-              </p>
-            </Show>
             <Show when={error()}>
               <p class="font-semibold text-red-600">{error()}</p>
             </Show>
@@ -269,7 +257,7 @@ export default function AgentDuet () {
             </Show>
           </div>
 
-          <div class="flex h-[420px] flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-4">
+          <div class="flex h-[420px] flex-col gap-3 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-4">
             <For each={orderedLogs()}>
               {entry => (
                 <article
@@ -300,17 +288,34 @@ export default function AgentDuet () {
         </div>
 
         <div class="flex flex-col gap-3">
-          <div class="flex items-center justify-between">
-            <p class="text-sm font-semibold text-[var(--text-muted)]">Workspace editor</p>
-            <Show when={!codeServerUrl()}>
-              <p class="text-sm text-[var(--text-muted)]">Waiting for code-server…</p>
+          <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <div class="flex flex-col gap-1">
+              <p class="text-sm font-semibold text-[var(--text-muted)]">Workspace editor</p>
+              <Show
+                when={sessionDir()}
+                fallback={<p class="text-xs text-[var(--text-muted)]">Run the agents to allocate a workspace folder.</p>}
+              >
+                {dir => (
+                  <code
+                    class="max-w-full truncate rounded bg-[var(--bg-muted)] px-2 py-1 text-xs text-[var(--text)]"
+                    title={dir()}
+                  >
+                    {dir()}
+                  </code>
+                )}
+              </Show>
+            </div>
+            <Show when={isRunning() && !codeServerUrl()}>
+              <p class="text-xs text-[var(--text-muted)]">Launching code-server…</p>
             </Show>
           </div>
           <Show
             when={codeServerUrl()}
             fallback={
               <div class="flex flex-1 items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-6 text-center text-sm text-[var(--text-muted)]">
-                code-server is starting…
+                {isRunning()
+                  ? 'code-server is starting in the agent workspace…'
+                  : 'Run the agents to launch code-server inside their workspace.'}
               </div>
             }
           >
