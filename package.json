@@ -18,7 +18,7 @@
     "storybook": "storybook dev -p 6006 -c .storybook",
     "storybook:build": "storybook build -c .storybook",
     "storybook:test": "test-storybook -c .storybook",
-    "ui:server": "ts-node-dev --respawn --transpile-only ui/server/index.ts",
+    "ui:server": "ts-node-dev --respawn --transpile-only --project ui/server/tsconfig.json ui/server/index.ts",
     "ui:web": "vite --config web/vite.config.ts",
     "ui:dev": "concurrently -k -n server,web -c green,cyan \"npm:ui:server\" \"npm:ui:web\""
   },
@@ -28,6 +28,8 @@
     "app-root-path": "^3.1.0",
     "axios": "^1.13.2",
     "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "http-proxy-middleware": "^3.0.5",
     "multer": "^2.0.2",
     "ollama": "^0.6.0",
     "pacote": "^21.0.4",

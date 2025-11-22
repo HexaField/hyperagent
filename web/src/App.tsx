@@ -1,17 +1,10 @@
-import NodeGraph from './components/NodeGraph'
+import AgentDuet from './components/AgentDuet'
 
-export default function App () {
-    return (
-        <main class="app-shell">
-            <header class="app-shell__header">
-                <p class="app-shell__eyebrow">Graph tooling · experimental</p>
-                <h1>Visual Node Graph Builder</h1>
-                <p>
-                    Prototype flows by adding labeled steps, connecting them, and dragging nodes into the layout
-                    that makes sense for your workflow.
-                </p>
-            </header>
-            <NodeGraph />
-        </main>
-    )
+export default function App() {
+  return (
+    <main class="mx-auto flex h-full w-full max-w-[1200px] flex-col gap-6 px-4 pb-12 pt-8 sm:px-6 lg:px-10">
+      <AgentDuet />
+      {/* <NodeGraph /> */}
+    </main>
+  )
 }

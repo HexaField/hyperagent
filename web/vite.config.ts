@@ -11,6 +11,11 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:5175',
         changeOrigin: true
+      },
+      '/code-server': {
+        target: 'http://localhost:5175',
+        changeOrigin: true,
+        ws: true
       }
     }
   },
