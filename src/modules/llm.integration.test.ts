@@ -83,17 +83,18 @@ describe('LLM CLI integrations', () => {
       expect(r1.data).toContain('```json')
       expect(r2.data).toContain('```json')
 
-      // Validate meta.json persisted in the sessionDir with two entries
-      const metaPath = path.join(sessionDir, 'meta.json')
+      // Validate .hyperagent.json persisted in the sessionDir with log entries
+      const metaPath = path.join(sessionDir, '.hyperagent.json')
       expect(fs.existsSync(metaPath)).toBe(true)
       const metaRaw = fs.readFileSync(metaPath, 'utf8')
       const meta = JSON.parse(metaRaw)
       expect(meta && typeof meta === 'object').toBe(true)
-      // For CLI providers, we track outputs in providerData.cli.last (array)
-      const last = (((meta || {}).providerData || {}).cli || {}).last || []
-      expect(Array.isArray(last)).toBe(true)
-      expect(last.length).toBeGreaterThanOrEqual(2)
-      const joined = String(last.join('\n'))
+      const log = Array.isArray(meta.log) ? meta.log : []
+      const providerEntries = log.filter((entry: any) => entry.provider === p.provider)
+      expect(providerEntries.length).toBeGreaterThanOrEqual(2)
+      const joined = providerEntries
+        .map((entry: any) => JSON.stringify(entry.payload || {}))
+        .join('\n')
       expect(joined).toContain(expected1)
       expect(joined).toContain(expected2)
     }, 60_000)

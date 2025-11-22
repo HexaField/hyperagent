@@ -22,7 +22,10 @@ vi.mock('./llm', async () => {
   const actual = await vi.importActual<typeof import('./llm')>('./llm')
   return {
     ...actual,
-    runCLI: vi.fn(async (cmd: string, args: string[], input: string) => {
+    runCLI: vi.fn(async (cmd: string, args: string[], input: string, sessionDir?: string) => {
+      if (sessionDir) {
+        // noop; signature compatibility ensures callers may pass a path
+      }
       // Return a simple JSON string regardless of the CLI
       return '{"answer":"session-ok","status":"ok"}\n'
     })

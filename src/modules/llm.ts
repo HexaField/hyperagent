@@ -43,14 +43,19 @@ const cliLastResponses = new Map<string, string>()
 function metaFile(sessionId: string, baseDir?: string) {
   const dir = baseDir ? path.join(baseDir) : path.join(os.tmpdir(), '.sessions', sessionId)
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-  return path.join(dir, 'meta.json')
+  return path.join(dir, '.hyperagent.json')
+}
+type LogEntry = {
+  entryId: string
+  provider: Provider | 'agent'
+  model?: string
+  role?: string
+  payload: any
+  createdAt: string
 }
 type SessionMeta = {
   id: string
-  providerData?: {
-    ollama?: { messages: ChatMessage[] }
-    cli?: { last: string[] }
-  }
+  log: LogEntry[]
   createdAt: string
   updatedAt: string
 }
@@ -59,14 +64,16 @@ function loadSessionMeta(sessionId: string, baseDir?: string): SessionMeta {
   if (fs.existsSync(file)) {
     try {
       const raw = fs.readFileSync(file, 'utf-8')
-      return JSON.parse(raw)
+      const parsed = JSON.parse(raw)
+      parsed.log = Array.isArray(parsed.log) ? parsed.log : []
+      return parsed
     } catch (e) {
       console.log('Failed to parse session meta.json; recreating', e)
     }
   }
   const blank: SessionMeta = {
     id: sessionId,
-    providerData: { ollama: { messages: [] }, cli: { last: [] } },
+    log: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   }
@@ -79,14 +86,60 @@ function saveSessionMeta(meta: SessionMeta, baseDir?: string) {
   fs.writeFileSync(file, JSON.stringify(meta, null, 2))
 }
 
-export async function runCLI(command: string, args: string[], input: string): Promise<string> {
+type LogEntryInit = {
+  provider: Provider | 'agent'
+  model?: string
+  role?: string
+  payload: any
+  entryId?: string
+  createdAt?: string
+}
+
+function appendLogEntry(meta: SessionMeta, entry: LogEntryInit, baseDir?: string) {
+  const normalized: LogEntry = {
+    entryId:
+      entry.entryId || `${entry.provider}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    provider: entry.provider,
+    model: entry.model,
+    role: entry.role,
+    payload: entry.payload,
+    createdAt: entry.createdAt || new Date().toISOString()
+  }
+  meta.log = Array.isArray(meta.log) ? meta.log : []
+  meta.log.push(normalized)
+  saveSessionMeta(meta, baseDir)
+}
+
+function findLatestLogEntry(meta: SessionMeta, predicate: (entry: LogEntry) => boolean): LogEntry | undefined {
+  const log = Array.isArray(meta.log) ? meta.log : []
+  for (let i = log.length - 1; i >= 0; i--) {
+    const entry = log[i]
+    if (predicate(entry)) return entry
+  }
+  return undefined
+}
+
+export async function runCLI(command: string, args: string[], input: string, sessionDir?: string): Promise<string> {
+  const workingDir = sessionDir || path.join(os.tmpdir(), 'hyperagent-cli')
+  if (!fs.existsSync(workingDir)) {
+    fs.mkdirSync(workingDir, { recursive: true })
+  }
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(command, args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: workingDir
+    })
     let out = ''
     let err = ''
 
-    child.stdout.on('data', (chunk) => (out += String(chunk)))
-    child.stderr.on('data', (chunk) => (err += String(chunk)))
+    child.stdout.on('data', (chunk) => {
+      console.log(String(chunk) )
+      out += String(chunk)
+    })
+    child.stderr.on('data', (chunk) => {
+      console.log(String(chunk) )
+      err += String(chunk)
+    })
 
     child.on('error', (e) => reject(e))
     child.on('close', (code) => {
@@ -167,7 +220,13 @@ async function callOllama(
   let messages: ChatMessage[]
   if (sessionId) {
     const meta = loadSessionMeta(sessionId, sessionDir)
-    messages = (meta.providerData?.ollama?.messages as ChatMessage[]) || []
+    const lastLog = findLatestLogEntry(
+      meta,
+      (entry) => entry.provider === 'ollama' && Array.isArray(entry.payload?.messages)
+    )
+    const storedMessages = (lastLog?.payload?.messages as ChatMessage[]) || []
+    // clone to avoid mutating prior log entries
+    messages = JSON.parse(JSON.stringify(storedMessages))
     if (messages.length === 0) messages.push({ role: 'system', content: systemPrompt })
     messages.push({ role: 'user', content: userQuery })
     ollamaSessions.set(sessionId, messages)
@@ -200,9 +259,15 @@ async function callOllama(
     ollamaSessions.set(sessionId, hist)
     // Persist to disk
     const meta = loadSessionMeta(sessionId, sessionDir)
-    meta.providerData = meta.providerData || {}
-    meta.providerData.ollama = { messages: hist }
-    saveSessionMeta(meta, sessionDir)
+    appendLogEntry(
+      meta,
+      {
+        provider: 'ollama',
+        model,
+        payload: { messages: hist }
+      },
+      sessionDir
+    )
   }
   return fullMessage
 }
@@ -220,7 +285,7 @@ async function callOpencodeCLI(
   let modelToUse = model
   if (!model.includes('/')) {
     try {
-      const modelsRaw = await runCLI('opencode', ['models'], '')
+      const modelsRaw = await runCLI('opencode', ['models'], '', sessionDir)
       const lines = modelsRaw
         .split(/\r?\n/)
         .map((l) => l.trim())
@@ -237,8 +302,11 @@ async function callOpencodeCLI(
 
   // Use the `run` subcommand with the prompt as a positional argument and request JSON output.
   const args = ['run', combined, '-m', modelToUse, '--format', 'json']
+  if (sessionId) {
+    args.push('--session', sessionId, '--continue')
+  }
   // opencode run manages its own sessions; do not force a session flag here.
-  const res = await runCLI('opencode', args, '')
+  const res = await runCLI('opencode', args, '', sessionDir)
   console.log('Opencode CLI output:', res.split('\n').map(extractOrCreateJSON))
 
   const finalRes = res
@@ -262,10 +330,15 @@ async function callOpencodeCLI(
   if (sessionId) {
     cliLastResponses.set(sessionId, text)
     const meta = loadSessionMeta(sessionId, sessionDir)
-    meta.providerData = meta.providerData || {}
-    const prev = meta.providerData.cli?.last || []
-    meta.providerData.cli = { last: [...prev, text] }
-    saveSessionMeta(meta, sessionDir)
+    appendLogEntry(
+      meta,
+      {
+        provider: 'opencode',
+        model: modelToUse,
+        payload: { output: text }
+      },
+      sessionDir
+    )
   }
   console.log('finalRes:', text)
   return text
@@ -289,15 +362,20 @@ async function callGooseCLI(
   // if (model) args.push('--model', model)
   // Use quiet mode if available to reduce extra output
 
-  const out = await runCLI('goose', args, '')
+  const out = await runCLI('goose', args, '', sessionDir)
   console.log('Goose CLI output:', out)
   if (sessionId) {
     cliLastResponses.set(sessionId, out)
     const meta = loadSessionMeta(sessionId, sessionDir)
-    meta.providerData = meta.providerData || {}
-    const prev = meta.providerData.cli?.last || []
-    meta.providerData.cli = { last: [...prev, out] }
-    saveSessionMeta(meta, sessionDir)
+    appendLogEntry(
+      meta,
+      {
+        provider: 'goose',
+        model,
+        payload: { output: out }
+      },
+      sessionDir
+    )
   }
   return outClean(out)
 }
@@ -313,14 +391,19 @@ async function callOllamaCLI(
   // Use `ollama run MODEL PROMPT --format json` to get a JSON response when supported.
   // Pass the prompt as a positional argument; do not send via stdin.
   const args = ['run', model, combined, '--format', 'json']
-  const out = await runCLI('ollama', args, '')
+  const out = await runCLI('ollama', args, '', sessionDir)
   if (sessionId) {
     cliLastResponses.set(sessionId, out)
     const meta = loadSessionMeta(sessionId, sessionDir)
-    meta.providerData = meta.providerData || {}
-    const prev = meta.providerData.cli?.last || []
-    meta.providerData.cli = { last: [...prev, out] }
-    saveSessionMeta(meta, sessionDir)
+    appendLogEntry(
+      meta,
+      {
+        provider: 'ollama-cli',
+        model,
+        payload: { output: out }
+      },
+      sessionDir
+    )
   }
   return outClean(out)
 }
