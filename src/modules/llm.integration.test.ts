@@ -92,11 +92,54 @@ describe('LLM CLI integrations', () => {
       const log = Array.isArray(meta.log) ? meta.log : []
       const providerEntries = log.filter((entry: any) => entry.provider === p.provider)
       expect(providerEntries.length).toBeGreaterThanOrEqual(2)
-      const joined = providerEntries
-        .map((entry: any) => JSON.stringify(entry.payload || {}))
-        .join('\n')
+      const joined = providerEntries.map((entry: any) => JSON.stringify(entry.payload || {})).join('\n')
       expect(joined).toContain(expected1)
       expect(joined).toContain(expected2)
     }, 60_000)
   }
+
+  it('opencode provider can write files to tmpdir', async () => {
+    const exists = commandExists('opencode')
+    expect(exists, "Required CLI 'opencode' not found on PATH").toBe(true)
+
+    const pwd = process.cwd()
+    const sessionDir = path.join(pwd, '.tests', `opencode-filetest-${Date.now()}`)
+    fs.mkdirSync(sessionDir, { recursive: true })
+    // const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-filetest-'))
+
+    fs.writeFileSync(
+      path.join(sessionDir, 'opencode.json'),
+      JSON.stringify(
+        {
+          $schema: 'https://opencode.ai/config.json',
+          permission: {
+            edit: 'allow',
+            bash: 'allow',
+            webfetch: 'allow',
+            doom_loop: 'allow',
+            external_directory: 'deny'
+          }
+        },
+        null,
+        2
+      ),
+      'utf8'
+    )
+
+    const targetFile = path.join(sessionDir, `file-${Date.now()}.txt`)
+    const expectedContent = `opencode-file-check-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+    const systemPrompt = `You are an autonomous coding agent with full filesystem access. When the user requests a file to be written, you must create it exactly as specified before responding. Always confirm success in JSON.`
+    const userPrompt = `Write a UTF-8 text file located at ${targetFile} with the exact contents:\n${expectedContent}\nRespond only with JSON: {"status":"done","path":"${targetFile}"}`
+
+    const res = await callLLM(systemPrompt, userPrompt, 'opencode', 'github-copilot/gpt-5-mini', {
+      sessionId: `opencode-file-${Date.now()}`,
+      sessionDir
+    })
+
+    expect(res.success).toBe(true)
+    expect(fs.existsSync(targetFile)).toBe(true)
+    const data = fs.readFileSync(targetFile, 'utf8')
+    expect(data.trim()).toBe(expectedContent)
+  }, 30_000)
 })

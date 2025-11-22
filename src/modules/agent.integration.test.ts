@@ -11,30 +11,32 @@ function commandExists(cmd: string): boolean {
 
 describe('Verifier/worker collaboration loop', () => {
   it('iterates on a complex graph-feature coding brief', async () => {
-    const dir = path.join(process.cwd(), `.tests/agent-integration-${Date.now()}`)
+    const sessionDir = path.join(process.cwd(), `.tests/agent-integration-${Date.now()}`)
     const exists = commandExists('opencode')
     expect(exists, "Required CLI 'opencode' not found on PATH").toBe(true)
 
-    fs.mkdirSync(dir, { recursive: true })
+    fs.mkdirSync(sessionDir, { recursive: true })
 
     fs.writeFileSync(
-      path.join(dir, 'opencode.json'),
-      JSON.stringify({
-        $schema: 'https://opencode.ai/config.json',
-        permission: {
-          edit: 'allow'
-        }
-      }),
+      path.join(sessionDir, 'opencode.json'),
+      JSON.stringify(
+        {
+          $schema: 'https://opencode.ai/config.json',
+          permission: {
+            edit: 'allow',
+            bash: 'allow',
+            webfetch: 'allow',
+            doom_loop: 'allow',
+            external_directory: 'deny'
+          }
+        },
+        null,
+        2
+      ),
       'utf8'
     )
 
-    const repoRoot = path.join(dir, 'nebula-kanban')
-    const boardSrc = path.join(repoRoot, 'packages/board/src')
-    const boardTests = path.join(repoRoot, 'packages/board/tests')
-    fs.mkdirSync(boardSrc, { recursive: true })
-    fs.mkdirSync(boardTests, { recursive: true })
-
-    const scenario = `You are working inside a standalone repository named 'nebula-kanban' with packages/board housing the whiteboard UI.
+    const scenario = `You are starting from a completely empty repository named 'nebula-kanban'. Create everything you need under this repo root.
 - Implement a conflict-aware swimlane merge assistant inside packages/board/src/BoardCanvas.tsx that can highlight nodes belonging to overlapping sprints.
 - Extend packages/board/src/types.ts so each Swimlane tracks bidirectional adjacency metadata plus a rolling risk index derived from blocked cards.
 - Propose a deterministic algorithm (pseudo-code welcome) for reconciling inbound/outbound dependencies across lanes up to depth 3, annotating the canvas with badges.
@@ -46,7 +48,7 @@ describe('Verifier/worker collaboration loop', () => {
       provider: 'opencode',
       model: 'github-copilot/gpt-5-mini',
       maxRounds: 2,
-      sessionDir: dir
+      sessionDir
     })
 
     expect(result.bootstrap.round).toBe(0)
@@ -60,10 +62,7 @@ describe('Verifier/worker collaboration loop', () => {
 
     expect(['approved', 'failed', 'max-rounds']).toContain(result.outcome)
 
-    expect(fs.existsSync(boardSrc)).toBe(true)
-    expect(fs.existsSync(boardTests)).toBe(true)
-
-    const metaPath = path.join(dir, '.hyperagent.json')
+    const metaPath = path.join(sessionDir, '.hyperagent.json')
     expect(fs.existsSync(metaPath)).toBe(true)
     const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'))
     expect(Array.isArray(meta.log)).toBe(true)

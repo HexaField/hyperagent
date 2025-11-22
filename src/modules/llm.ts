@@ -97,8 +97,7 @@ type LogEntryInit = {
 
 function appendLogEntry(meta: SessionMeta, entry: LogEntryInit, baseDir?: string) {
   const normalized: LogEntry = {
-    entryId:
-      entry.entryId || `${entry.provider}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    entryId: entry.entryId || `${entry.provider}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     provider: entry.provider,
     model: entry.model,
     role: entry.role,
@@ -133,11 +132,11 @@ export async function runCLI(command: string, args: string[], input: string, ses
     let err = ''
 
     child.stdout.on('data', (chunk) => {
-      console.log(String(chunk) )
+      // console.log(String(chunk))
       out += String(chunk)
     })
     child.stderr.on('data', (chunk) => {
-      console.log(String(chunk) )
+      // console.log(String(chunk))
       err += String(chunk)
     })
 
