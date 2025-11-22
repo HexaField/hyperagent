@@ -2,6 +2,7 @@ import axios from 'axios'
 import { spawn } from 'child_process'
 import fs from 'fs'
 import ollama from 'ollama'
+import os from 'os'
 import path from 'path'
 
 const modelSettings = {
@@ -40,7 +41,7 @@ const cliLastResponses = new Map<string, string>()
 // Persistent session storage now lives inside a caller-provided directory (e.g. a sourceDir).
 // We support legacy global path for backward compatibility if no directory supplied.
 function metaFile(sessionId: string, baseDir?: string) {
-  const dir = baseDir ? path.join(baseDir) : path.join(process.cwd(), '.sessions', sessionId)
+  const dir = baseDir ? path.join(baseDir) : path.join(os.tmpdir(), '.sessions', sessionId)
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
   return path.join(dir, 'meta.json')
 }
