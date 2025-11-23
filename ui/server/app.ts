@@ -57,6 +57,17 @@ type GraphEdge = {
   to: string
 }
 
+type GitMetadata = {
+  repositoryPath: string
+  branch: string | null
+  commit: {
+    hash: string | null
+    message: string | null
+    timestamp: string | null
+  } | null
+  remotes: Array<{ name: string; url: string }>
+}
+
 export type CreateServerOptions = {
   runLoop?: RunLoop
   controllerFactory?: ControllerFactory
@@ -206,6 +217,84 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
         }
       })
     })
+  }
+
+  const readGitMetadata = async (repoPath: string): Promise<GitMetadata | null> => {
+    const resolved = path.resolve(repoPath)
+    try {
+      await fs.stat(resolved)
+    } catch {
+      return null
+    }
+
+    const readValue = async (args: string[]): Promise<string | null> => {
+      try {
+        const output = await runGitCommand(args, resolved)
+        return output.trim()
+      } catch {
+        return null
+      }
+    }
+
+    const [branch, commitHash, commitMessage, commitTimestamp, remotesRaw] = await Promise.all([
+      readValue(['rev-parse', '--abbrev-ref', 'HEAD']),
+      readValue(['rev-parse', 'HEAD']),
+      readValue(['log', '-1', '--pretty=%s']),
+      readValue(['log', '-1', '--pretty=%cI']),
+      readValue(['remote', '-v'])
+    ])
+
+    const remotes: Array<{ name: string; url: string }> = []
+    if (remotesRaw) {
+      const seen = new Set<string>()
+      remotesRaw
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .forEach((line) => {
+          const parts = line.split(/\s+/)
+          if (parts.length < 2) return
+          const [name, url] = parts
+          const key = `${name}:${url}`
+          if (seen.has(key)) return
+          seen.add(key)
+          remotes.push({ name, url })
+        })
+    }
+
+    return {
+      repositoryPath: resolved,
+      branch,
+      commit: commitHash
+        ? {
+            hash: commitHash,
+            message: commitMessage,
+            timestamp: commitTimestamp
+          }
+        : null,
+      remotes
+    }
+  }
+
+  const collectGitMetadata = async (paths: string[]): Promise<Map<string, GitMetadata | null>> => {
+    const unique = [...new Set(paths.map((entry) => path.resolve(entry)))]
+    const results = await Promise.all(
+      unique.map(async (entry) => ({ path: entry, git: await readGitMetadata(entry) }))
+    )
+    const map = new Map<string, GitMetadata | null>()
+    results.forEach((item) => {
+      map.set(item.path, item.git)
+    })
+    return map
+  }
+
+  const isGitRepository = async (dirPath: string): Promise<boolean> => {
+    try {
+      await fs.access(path.join(dirPath, '.git'))
+      return true
+    } catch {
+      return false
+    }
   }
 
   function extractCommitFromStep (
@@ -415,6 +504,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     try {
       const projects = persistence.projects.list()
       const uniquePaths = [...new Set(projects.map(project => path.resolve(project.repositoryPath)))]
+      const gitMetadata = await collectGitMetadata(uniquePaths)
       const inspections = await Promise.all(
         uniquePaths.map(async repoPath => {
           try {
@@ -436,6 +526,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
         return {
           project,
           radicle: entry?.info ?? null,
+          git: gitMetadata.get(resolved) ?? null,
           error: entry?.error ?? null
         }
       })
@@ -547,8 +638,73 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     }
   }
 
-  const listProjectsHandler: RequestHandler = (_req, res) => {
-    res.json({ projects: persistence.projects.list() })
+  const listProjectsHandler: RequestHandler = async (_req, res) => {
+    try {
+      const projects = persistence.projects.list()
+      const gitMap = await collectGitMetadata(projects.map(project => project.repositoryPath))
+      const payload = projects.map(project => ({
+        ...project,
+        git: gitMap.get(path.resolve(project.repositoryPath)) ?? null
+      }))
+      res.json({ projects: payload })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to list projects'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const registerRadicleRepositoryHandler: RequestHandler = async (req, res) => {
+    const { repositoryPath, name, description } = req.body ?? {}
+    if (!repositoryPath || typeof repositoryPath !== 'string') {
+      res.status(400).json({ error: 'repositoryPath is required' })
+      return
+    }
+    try {
+      const repository = await radicleModule.registerRepository({
+        repositoryPath,
+        name: typeof name === 'string' && name.length ? name : undefined,
+        description: typeof description === 'string' && description.length ? description : undefined
+      })
+      res.json({ repository })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to register repository with Radicle'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const browseFilesystemHandler: RequestHandler = async (req, res) => {
+    const requestedPath = typeof req.query.path === 'string' && req.query.path.length ? req.query.path : os.homedir()
+    try {
+      const resolved = path.resolve(requestedPath)
+      const stats = await fs.stat(resolved)
+      if (!stats.isDirectory()) {
+        res.status(400).json({ error: 'Path is not a directory' })
+        return
+      }
+      const entries = await fs.readdir(resolved, { withFileTypes: true })
+      const directories = entries.filter((entry) => entry.isDirectory())
+      const payload = await Promise.all(
+        directories.map(async (entry) => {
+          const absolute = path.join(resolved, entry.name)
+          return {
+            name: entry.name,
+            path: absolute,
+            isGitRepository: await isGitRepository(absolute)
+          }
+        })
+      )
+      payload.sort((a, b) => a.name.localeCompare(b.name))
+      const parent = path.dirname(resolved)
+      const isRoot = resolved === path.parse(resolved).root
+      res.json({
+        path: resolved,
+        parent: isRoot ? null : parent,
+        entries: payload
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to browse filesystem'
+      res.status(500).json({ error: message })
+    }
   }
 
   const createProjectHandler: RequestHandler = (req, res) => {
@@ -645,6 +801,8 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
 
   app.get('/api/radicle/status', radicleStatusHandler)
   app.get('/api/radicle/repositories', radicleRepositoriesHandler)
+  app.post('/api/radicle/register', registerRadicleRepositoryHandler)
+  app.get('/api/fs/browse', browseFilesystemHandler)
   app.get('/api/projects', listProjectsHandler)
   app.get('/api/projects/:projectId/graph', repositoryGraphHandler)
   app.post('/api/projects', createProjectHandler)

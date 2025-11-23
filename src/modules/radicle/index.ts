@@ -5,6 +5,7 @@ import { createRadicleSession } from './session'
 import type {
   RadicleConfig,
   RadicleModule,
+  RadicleRegisterOptions,
   RadicleRepositoryInfo,
   RadicleSessionInit,
   RadicleStatus
@@ -45,6 +46,14 @@ export const createRadicleModule = (config: RadicleConfig): RadicleModule => {
     }
   }
 
+  const registerRepository = async (options: RadicleRegisterOptions): Promise<RadicleRepositoryInfo> => {
+    const resolved = path.resolve(options.repositoryPath)
+    await ensureGitRepository(resolved)
+    await ensureRadicleProject(resolved, options)
+    await ensureRadRemote(resolved)
+    return await inspectRepository(resolved)
+  }
+
   const getStatus = async (): Promise<RadicleStatus> => {
     const nodeStatus = await checkRadicleNode()
     if (!nodeStatus.reachable) {
@@ -73,6 +82,7 @@ export const createRadicleModule = (config: RadicleConfig): RadicleModule => {
     createSession,
     cleanup,
     inspectRepository,
+    registerRepository,
     getStatus
   }
 }
@@ -107,6 +117,59 @@ const readRadRemoteUrl = async (repoPath: string): Promise<string | null> => {
   try {
     const output = await runCliCommand('git', ['config', '--get', 'remote.rad.url'], { cwd: repoPath })
     return output.length ? output : null
+  } catch {
+    return null
+  }
+}
+
+const ensureGitRepository = async (repoPath: string) => {
+  await runCliCommand('git', ['rev-parse', '--is-inside-work-tree'], { cwd: repoPath })
+}
+
+const ensureRadicleProject = async (repoPath: string, options: RadicleRegisterOptions) => {
+  const alreadyInitialized = await hasRadicleProject(repoPath)
+  if (alreadyInitialized) return
+  const args = ['init']
+  if (options.name) {
+    args.push('--name', options.name)
+  }
+  if (options.description) {
+    args.push('--description', options.description)
+  }
+  await runCliCommand('rad', args, { cwd: repoPath })
+}
+
+const hasRadicleProject = async (repoPath: string): Promise<boolean> => {
+  try {
+    await runCliCommand('rad', ['inspect'], { cwd: repoPath })
+    return true
+  } catch {
+    return false
+  }
+}
+
+const ensureRadRemote = async (repoPath: string) => {
+  const existing = await readRadRemoteUrl(repoPath)
+  if (existing) return existing
+  const projectId = await readRadProjectId(repoPath)
+  if (!projectId) return null
+  const remoteUrl = projectId.startsWith('rad://') ? projectId : `rad://${projectId}`
+  try {
+    await runCliCommand('git', ['remote', 'add', 'rad', remoteUrl], { cwd: repoPath })
+    return remoteUrl
+  } catch (error) {
+    if (error instanceof Error && /already exists/i.test(error.message)) {
+      return remoteUrl
+    }
+    throw error
+  }
+}
+
+const readRadProjectId = async (repoPath: string): Promise<string | null> => {
+  try {
+    const raw = await runCliCommand('rad', ['inspect', '--json'], { cwd: repoPath })
+    const parsed = JSON.parse(raw)
+    return parsed?.rid ?? parsed?.urn ?? parsed?.id ?? null
   } catch {
     return null
   }

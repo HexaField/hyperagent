@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createResource, createSignal } from 'solid-js'
-import AgentDuet from '../components/AgentDuet'
+import Agent from '../components/Agent'
 import { fetchJson } from '../lib/http'
 import { buildTasksFromInput } from '../lib/workflows'
 
@@ -64,8 +64,8 @@ export default function LaunchWorkflowPage () {
       <header class="flex flex-wrap items-center justify-between gap-4">
         <div>
           <p class="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">Launchpad</p>
-          <h1 class="text-3xl font-semibold text-[var(--text)]">Queue workflows & run agents</h1>
-          <p class="text-[var(--text-muted)]">Craft a workflow plan on the left, and keep the live agent duet handy for exploratory runs.</p>
+          <h1 class="text-3xl font-semibold text-[var(--text)]">Queue workflows & run the agent</h1>
+          <p class="text-[var(--text-muted)]">Craft a workflow plan on the left, and keep the autonomous coding agent handy for exploratory runs.</p>
         </div>
         <button class="rounded-xl border border-[var(--border)] px-4 py-2 text-sm text-[var(--text)]" type="button" onClick={() => refetch()}>
           Refresh projects
@@ -127,7 +127,7 @@ export default function LaunchWorkflowPage () {
           </Show>
         </form>
 
-        <AgentDuet />
+        <Agent />
       </div>
     </div>
   )

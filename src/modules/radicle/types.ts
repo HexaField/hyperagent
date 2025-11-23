@@ -57,6 +57,12 @@ export type RadicleRepositoryInfo = {
   registered: boolean
 }
 
+export type RadicleRegisterOptions = {
+  repositoryPath: string
+  name?: string
+  description?: string
+}
+
 export type RadicleStatus = {
   reachable: boolean
   loggedIn: boolean
@@ -80,5 +86,6 @@ export type RadicleModule = {
   createSession: (init: RadicleSessionInit) => Promise<RadicleSessionHandle>
   cleanup: () => Promise<void>
   inspectRepository: (repositoryPath: string) => Promise<RadicleRepositoryInfo>
+  registerRepository: (options: RadicleRegisterOptions) => Promise<RadicleRepositoryInfo>
   getStatus: () => Promise<RadicleStatus>
 }

@@ -35,7 +35,7 @@ type AgentChunkPayload = {
 
 const DEFAULT_PROMPT = `Draft a quick project overview for a habit-tracking app.`
 
-export default function AgentDuet () {
+export default function Agent () {
   const [prompt, setPrompt] = createSignal(DEFAULT_PROMPT)
   const [isRunning, setIsRunning] = createSignal(false)
   const [logs, setLogs] = createSignal<AgentLogEntry[]>([])
@@ -63,7 +63,7 @@ export default function AgentDuet () {
     if (isRunning()) return
     const trimmed = prompt().trim()
     if (!trimmed) {
-      setError('Enter a prompt to start the duo conversation.')
+      setError('Enter a prompt to start the autonomous agent.')
       return
     }
 
@@ -202,10 +202,10 @@ export default function AgentDuet () {
     <section class="flex flex-col gap-6 rounded-[1.25rem] border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[0_18px_30px_rgba(15,23,42,0.08)]">
       <div class="flex flex-wrap items-center justify-between gap-4">
         <div class="space-y-2">
-          <p class="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">Dual-agent verifier loop</p>
-          <h2 class="text-2xl font-semibold text-[var(--text)]">Live worker & verifier duet</h2>
+          <p class="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">Autonomous coding agent</p>
+          <h2 class="text-2xl font-semibold text-[var(--text)]">Live autonomous agent</h2>
           <p class="text-[var(--text-muted)]">
-            Stream the reasoning trail for both agents, and inspect the repo inside the embedded code-server.
+            Stream the agent's reasoning and inspect the repo inside the embedded code-server.
           </p>
         </div>
         <div class="flex items-center gap-3">
@@ -215,7 +215,7 @@ export default function AgentDuet () {
             onClick={startRun}
             disabled={isRunning()}
           >
-            {isRunning() ? 'Running…' : 'Run agents'}
+            {isRunning() ? 'Running…' : 'Run agent'}
           </button>
           <Show when={isRunning()}>
             <button
@@ -241,7 +241,7 @@ export default function AgentDuet () {
               rows={4}
               value={prompt()}
               onInput={event => setPrompt(event.currentTarget.value)}
-              placeholder="Describe the task you want both agents to tackle"
+              placeholder="Describe the task you want the agent to tackle"
             />
           </div>
 
@@ -282,7 +282,7 @@ export default function AgentDuet () {
             </For>
             <Show when={!orderedLogs().length && !isRunning()}>
               <div class="flex flex-1 items-center justify-center rounded-xl border border-dashed border-[var(--border)] text-center text-sm text-[var(--text-muted)]">
-                Run the agents to see their live reasoning stream.
+                Run the agent to see its live reasoning stream.
               </div>
             </Show>
           </div>
@@ -294,7 +294,7 @@ export default function AgentDuet () {
               <p class="text-sm font-semibold text-[var(--text-muted)]">Workspace editor</p>
               <Show
                 when={sessionDir()}
-                fallback={<p class="text-xs text-[var(--text-muted)]">Run the agents to allocate a workspace folder.</p>}
+                fallback={<p class="text-xs text-[var(--text-muted)]">Run the agent to allocate a workspace folder.</p>}
               >
                 {dir => (
                   <code
@@ -316,7 +316,7 @@ export default function AgentDuet () {
               <div class="flex flex-1 items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-6 text-center text-sm text-[var(--text-muted)]">
                 {isRunning()
                   ? 'code-server is starting in the agent workspace…'
-                  : 'Run the agents to launch code-server inside their workspace.'}
+                  : 'Run the agent to launch code-server inside its workspace.'}
               </div>
             }
           >

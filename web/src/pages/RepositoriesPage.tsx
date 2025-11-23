@@ -1,6 +1,9 @@
 import { A } from '@solidjs/router'
-import { For, Show, createResource, createSignal } from 'solid-js'
+import { For, Show, createEffect, createResource, createSignal, onMount } from 'solid-js'
 import { fetchJson } from '../lib/http'
+
+const BROWSER_PAGE_SIZE = 10
+const BROWSER_STATE_STORAGE_KEY = 'hyperagent:repoBrowser'
 
 type Project = {
   id: string
@@ -9,6 +12,18 @@ type Project = {
   repositoryPath: string
   defaultBranch: string
   createdAt: string
+  git?: GitInfo | null
+}
+
+type GitInfo = {
+  repositoryPath: string
+  branch: string | null
+  commit: {
+    hash: string | null
+    message: string | null
+    timestamp: string | null
+  } | null
+  remotes: Array<{ name: string; url: string }>
 }
 
 type RadicleRepositoryEntry = {
@@ -20,7 +35,79 @@ type RadicleRepositoryEntry = {
     defaultBranch: string | null
     registered: boolean
   } | null
+  git: GitInfo | null
   error?: string | null
+}
+
+type DirectoryEntry = {
+  name: string
+  path: string
+  isGitRepository: boolean
+}
+
+type DirectoryListing = {
+  path: string
+  parent: string | null
+  entries: DirectoryEntry[]
+}
+
+const RepoInfoPanel = (props: { git: GitInfo | null; path: string }) => {
+  const commit = () => props.git?.commit ?? null
+  const shortHash = () => (commit()?.hash ? commit()!.hash!.slice(0, 7) : null)
+  return (
+    <div class="mt-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 text-sm text-[var(--text)]">
+      <div class="flex flex-col gap-2">
+        <div>
+          <p class="text-xs font-semibold text-[var(--text-muted)]">Repository path</p>
+          <code class="mt-1 block overflow-hidden text-ellipsis whitespace-nowrap rounded bg-[var(--bg-muted)] px-2 py-1 text-xs">
+            {props.git?.repositoryPath ?? props.path}
+          </code>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <div>
+            <p class="text-xs font-semibold text-[var(--text-muted)]">Current branch</p>
+            <p>{props.git?.branch ?? 'Unknown'}</p>
+          </div>
+          <div>
+            <p class="text-xs font-semibold text-[var(--text-muted)]">Current commit</p>
+            <Show when={commit()} fallback={<p>Unavailable</p>}>
+              {current => (
+                <p>
+                  <span class="font-mono">{shortHash()}</span>
+                  <Show when={current().message}>
+                    {message => <span class="ml-2 text-[var(--text-muted)]">{message()}</span>}
+                  </Show>
+                </p>
+              )}
+            </Show>
+          </div>
+        </div>
+        <div>
+          <p class="text-xs font-semibold text-[var(--text-muted)]">Remotes</p>
+          <Show when={(props.git?.remotes?.length ?? 0) > 0} fallback={<p>No remotes configured.</p>}>
+            <ul class="mt-1 flex flex-col gap-1">
+              <For each={props.git?.remotes ?? []}>
+                {remote => (
+                  <li class="flex flex-wrap items-center gap-2">
+                    <span class="rounded-full bg-[var(--bg-muted)] px-2 py-0.5 text-xs font-semibold">{remote.name}</span>
+                    <code class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap rounded bg-[var(--bg-muted)] px-2 py-0.5 text-xs">
+                      {remote.url}
+                    </code>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const toBasename = (input: string) => {
+  const normalized = input.replace(/\\/g, '/').replace(/\/+$/, '')
+  const parts = normalized.split('/')
+  return parts[parts.length - 1] || normalized
 }
 
 export default function RepositoriesPage () {
@@ -31,6 +118,17 @@ export default function RepositoriesPage () {
     defaultBranch: 'main'
   })
   const [status, setStatus] = createSignal<string | null>(null)
+  const [browser, setBrowser] = createSignal<DirectoryListing | null>(null)
+  const [browserLoading, setBrowserLoading] = createSignal(false)
+  const [browserError, setBrowserError] = createSignal<string | null>(null)
+  const [browserPathInput, setBrowserPathInput] = createSignal('')
+  const [browserExpanded, setBrowserExpanded] = createSignal(false)
+  const [browserPage, setBrowserPage] = createSignal(1)
+  const [browserPathInvalid, setBrowserPathInvalid] = createSignal(false)
+  const [folderStatus, setFolderStatus] = createSignal<string | null>(null)
+  const [expandedProjects, setExpandedProjects] = createSignal(new Set<string>())
+  const [expandedRadRepos, setExpandedRadRepos] = createSignal(new Set<string>())
+  let lastKnownBrowserPath: string | undefined
 
   const [projects, { refetch: refetchProjects }] = createResource(async () => {
     const payload = await fetchJson<{ projects: Project[] }>('/api/projects')
@@ -71,6 +169,132 @@ export default function RepositoriesPage () {
     await Promise.all([refetchProjects(), refetchRadicleRepositories()])
   }
 
+  const loadDirectory = async (targetPath?: string) => {
+    setBrowserLoading(true)
+    const query = targetPath ? `?path=${encodeURIComponent(targetPath)}` : ''
+    try {
+      const payload = await fetchJson<DirectoryListing>(`/api/fs/browse${query}`)
+      setBrowser(payload)
+      setBrowserPathInput(payload.path)
+      setBrowserError(null)
+      setBrowserPage(1)
+      setBrowserPathInvalid(false)
+      lastKnownBrowserPath = payload.path
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to browse filesystem'
+      setBrowserError(message)
+      const normalized = message.toLowerCase()
+      const invalid = normalized.includes('no such file') || normalized.includes('enoent') || normalized.includes('not a directory') || normalized.includes('path is not a directory')
+      setBrowserPathInvalid(invalid)
+    } finally {
+      setBrowserLoading(false)
+    }
+  }
+
+  const browseToParent = async () => {
+    const parent = browser()?.parent
+    if (!parent) return
+    await loadDirectory(parent)
+  }
+
+  const registerRadicleRepo = async (repoPath: string) => {
+    setFolderStatus(`Registering ${repoPath}…`)
+    try {
+      await fetchJson('/api/radicle/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repositoryPath: repoPath, name: toBasename(repoPath) })
+      })
+      setFolderStatus('Repository registered with Radicle')
+      await Promise.all([refreshProjects(), loadDirectory(browserPathInput())])
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to register repository'
+      setFolderStatus(message)
+    }
+  }
+
+  const toggleExpanded = (setCollection: (value: Set<string> | ((prev: Set<string>) => Set<string>)) => void, id: string) => {
+    setCollection(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  onMount(() => {
+    let initialPath: string | undefined
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = window.localStorage.getItem(BROWSER_STATE_STORAGE_KEY)
+        if (raw) {
+          const stored = JSON.parse(raw)
+          if (typeof stored === 'object' && stored !== null) {
+            if (typeof stored.expanded === 'boolean') {
+              setBrowserExpanded(stored.expanded)
+            }
+            if (typeof stored.path === 'string' && stored.path.length) {
+              initialPath = stored.path
+              lastKnownBrowserPath = stored.path
+            }
+          }
+        }
+      } catch {
+        // ignore storage errors
+      }
+    }
+    void loadDirectory(initialPath)
+  })
+
+  const entriesCount = () => browser()?.entries.length ?? 0
+  const totalPages = () => {
+    const count = entriesCount()
+    return count ? Math.ceil(count / BROWSER_PAGE_SIZE) : 1
+  }
+
+  createEffect(() => {
+    const maxPage = totalPages()
+    setBrowserPage(prev => (prev > maxPage ? maxPage : prev))
+  })
+
+  createEffect(() => {
+    if (typeof window === 'undefined') return
+    const currentPath = browser()?.path
+    if (currentPath) {
+      lastKnownBrowserPath = currentPath
+    }
+    const pathToPersist = lastKnownBrowserPath ?? ''
+    try {
+      window.localStorage.setItem(
+        BROWSER_STATE_STORAGE_KEY,
+        JSON.stringify({
+          expanded: browserExpanded(),
+          path: pathToPersist
+        })
+      )
+    } catch {
+      // ignore storage errors
+    }
+  })
+
+  const paginatedEntries = () => {
+    const entries = browser()?.entries ?? []
+    const page = Math.min(browserPage(), totalPages())
+    const start = (page - 1) * BROWSER_PAGE_SIZE
+    return entries.slice(start, start + BROWSER_PAGE_SIZE)
+  }
+
+  const goToPreviousPage = () => {
+    setBrowserPage(prev => Math.max(1, prev - 1))
+  }
+
+  const goToNextPage = () => {
+    setBrowserPage(prev => Math.min(totalPages(), prev + 1))
+  }
+
   return (
     <div class="flex flex-col gap-6">
       <header>
@@ -78,6 +302,147 @@ export default function RepositoriesPage () {
         <h1 class="text-3xl font-semibold text-[var(--text)]">Projects</h1>
         <p class="text-[var(--text-muted)]">Register repositories to unlock workflow orchestration, commit graphs, and diffs.</p>
       </header>
+
+      <section class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)]">
+        <button
+          class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+          type="button"
+          onClick={() => setBrowserExpanded(prev => !prev)}
+        >
+          <div>
+            <p class="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">Local folders</p>
+            <h2 class="text-lg font-semibold text-[var(--text)]">Browse & register repositories</h2>
+          </div>
+          <span class="text-sm text-[var(--text-muted)]">{browserExpanded() ? 'Collapse' : 'Expand'}</span>
+        </button>
+        <Show when={browserExpanded()}>
+          <div class="border-t border-[var(--border)] p-4">
+            <div class="mb-4">
+              <p class="text-sm text-[var(--text-muted)]">
+                Pick any repo on disk, register it with Radicle, or copy the path into a workflow project.
+              </p>
+            </div>
+            <div class="flex flex-col gap-3">
+              <div class="flex items-center gap-2">
+                <button
+                  class="flex h-11 w-11 items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] text-[var(--text)] disabled:opacity-40"
+                  type="button"
+                  aria-label="Go to parent folder"
+                  disabled={!browser()?.parent}
+                  onClick={() => void browseToParent()}
+                >
+                  <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 5v14" />
+                    <path d="M6 11l6-6 6 6" />
+                  </svg>
+                </button>
+                <input
+                  type="text"
+                  class={`flex-1 rounded-2xl border bg-[var(--bg-muted)] p-3 text-sm text-[var(--text)] focus:outline-none focus:ring-2 ${browserPathInvalid()
+                    ? 'border-red-500 focus:ring-red-500'
+                    : 'border-[var(--border)] focus:ring-blue-500'
+                  }`}
+                  value={browserPathInput()}
+                  onInput={event => {
+                    setBrowserPathInput(event.currentTarget.value)
+                    if (browserPathInvalid()) setBrowserPathInvalid(false)
+                  }}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      void loadDirectory(browserPathInput())
+                    }
+                  }}
+                  placeholder="/Users/me/dev"
+                />
+                <button
+                  class="flex h-11 w-11 items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] text-[var(--text)]"
+                  type="button"
+                  aria-label="Open folder"
+                  onClick={() => void loadDirectory(browserPathInput())}
+                >
+                  <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 12h14" />
+                    <path d="M13 6l6 6-6 6" />
+                  </svg>
+                </button>
+              </div>
+              <Show when={browserError()}>
+                {message => <p class="text-xs text-red-600">{message()}</p>}
+              </Show>
+              <div class="flex flex-col gap-2 rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-3">
+                <Show when={!browserLoading()} fallback={<p class="text-sm text-[var(--text-muted)]">Loading folders…</p>}>
+                  <Show when={(browser()?.entries.length ?? 0) > 0} fallback={<p class="text-sm text-[var(--text-muted)]">No subfolders here.</p>}>
+                    <ul class="flex flex-col divide-y divide-[var(--border)]">
+                      <For each={paginatedEntries()}>
+                        {entry => (
+                          <li class="flex flex-wrap items-center justify-between gap-3 py-2">
+                            <div>
+                              <p class="font-semibold text-[var(--text)]">{entry.name}</p>
+                              <p class="text-xs text-[var(--text-muted)]">{entry.path}</p>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-2">
+                              <button
+                                class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs font-semibold"
+                                type="button"
+                                onClick={() => void loadDirectory(entry.path)}
+                              >
+                                Open
+                              </button>
+                              <button
+                                class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs"
+                                type="button"
+                                onClick={() => setForm(prev => ({ ...prev, repositoryPath: entry.path }))}
+                              >
+                                Use in form
+                              </button>
+                              <Show when={entry.isGitRepository}>
+                                <button
+                                  class="rounded-xl bg-blue-600 px-3 py-1 text-xs font-semibold text-white"
+                                  type="button"
+                                  onClick={() => void registerRadicleRepo(entry.path)}
+                                >
+                                  Register via Radicle
+                                </button>
+                              </Show>
+                            </div>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                    <div class="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-[var(--text-muted)]">
+                      <span>
+                        Showing page {browserPage()} of {totalPages()} ({entriesCount()} items)
+                      </span>
+                      <div class="flex gap-2">
+                        <button
+                          class="rounded-xl border border-[var(--border)] px-3 py-1"
+                          type="button"
+                          disabled={browserPage() <= 1 || entriesCount() === 0}
+                          onClick={goToPreviousPage}
+                        >
+                          Previous
+                        </button>
+                        <button
+                          class="rounded-xl border border-[var(--border)] px-3 py-1"
+                          type="button"
+                          disabled={entriesCount() === 0 || browserPage() >= totalPages()}
+                          onClick={goToNextPage}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  </Show>
+                </Show>
+              </div>
+              <Show when={folderStatus()}>
+                {message => <p class="text-xs text-[var(--text-muted)]">{message()}</p>}
+              </Show>
+            </div>
+          </div>
+        </Show>
+      </section>
 
       <section class="grid gap-6 lg:grid-cols-[360px,1fr]">
         <form class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4" onSubmit={handleSubmit}>
@@ -151,6 +516,16 @@ export default function RepositoriesPage () {
                         <span>Default branch: {project.defaultBranch}</span>
                         <span>Created: {new Date(project.createdAt).toLocaleString()}</span>
                       </div>
+                      <button
+                        class="mt-3 text-xs font-semibold text-blue-600"
+                        type="button"
+                        onClick={() => toggleExpanded(setExpandedProjects, project.id)}
+                      >
+                        {expandedProjects().has(project.id) ? 'Hide repo info' : 'Show repo info'}
+                      </button>
+                      <Show when={expandedProjects().has(project.id)}>
+                        <RepoInfoPanel git={project.git ?? null} path={project.repositoryPath} />
+                      </Show>
                     </li>
                   )}
                 </For>
@@ -201,6 +576,16 @@ export default function RepositoriesPage () {
                           {error => <span class="text-red-600">{error()}</span>}
                         </Show>
                       </div>
+                      <button
+                        class="mt-3 text-xs font-semibold text-blue-600"
+                        type="button"
+                        onClick={() => toggleExpanded(setExpandedRadRepos, entry.project.id)}
+                      >
+                        {expandedRadRepos().has(entry.project.id) ? 'Hide repo info' : 'Show repo info'}
+                      </button>
+                      <Show when={expandedRadRepos().has(entry.project.id)}>
+                        <RepoInfoPanel git={entry.git ?? null} path={entry.project.repositoryPath} />
+                      </Show>
                     </li>
                   )}
                 </For>
