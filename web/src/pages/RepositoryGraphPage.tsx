@@ -8,9 +8,12 @@ type GraphCommit = {
   branch: string
   message: string
   label: string
-  workflowId: string
-  stepId: string
+  workflowId: string | null
+  stepId: string | null
   timestamp: string
+  authorName: string | null
+  authorEmail: string | null
+  source: 'hyperagent' | 'git'
 }
 
 type GraphResponse = {
@@ -98,9 +101,23 @@ export default function RepositoryGraphPage() {
                               <span class="rounded-full bg-[var(--bg-card)] px-2 py-0.5 font-mono">
                                 {commit.commitHash.slice(0, 8)}
                               </span>
-                              <A href={`/workflows/${commit.workflowId}`} class="text-blue-600">
-                                View workflow
-                              </A>
+                              <span>{commit.authorName ?? 'Unknown author'}</span>
+                              <span
+                                class="rounded-full px-2 py-0.5"
+                                classList={{
+                                  'bg-blue-600/10 text-blue-500': commit.source === 'hyperagent',
+                                  'bg-[var(--bg-card)] text-[var(--text-muted)]': commit.source !== 'hyperagent'
+                                }}
+                              >
+                                {commit.source === 'hyperagent' ? 'Hyperagent' : 'Git'}
+                              </span>
+                              <Show when={commit.workflowId}>
+                                {(workflowId) => (
+                                  <A href={`/workflows/${workflowId()}`} class="text-blue-600">
+                                    View workflow
+                                  </A>
+                                )}
+                              </Show>
                             </div>
                           </article>
                         )}

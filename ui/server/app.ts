@@ -21,6 +21,7 @@ import {
   type ProjectRecord,
   type RadicleRegistrationRecord
 } from '../../src/modules/database'
+import { listBranchCommits, listGitBranches } from '../../src/modules/git'
 import type { Provider } from '../../src/modules/llm'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import { createTerminalModule, type LiveTerminalSession, type TerminalModule } from '../../src/modules/terminal'
@@ -34,6 +35,8 @@ import {
 
 const DEFAULT_PORT = Number(process.env.UI_SERVER_PORT || 5556)
 const CODE_SERVER_HOST = process.env.CODE_SERVER_HOST || '127.0.0.1'
+const GRAPH_BRANCH_LIMIT = Math.max(Number(process.env.REPO_GRAPH_BRANCH_LIMIT ?? 6) || 6, 1)
+const GRAPH_COMMITS_PER_BRANCH = Math.max(Number(process.env.REPO_GRAPH_COMMITS_PER_BRANCH ?? 25) || 25, 1)
 
 export type ProxyWithUpgrade = RequestHandler & {
   upgrade?: (req: IncomingMessage, socket: Socket, head: Buffer) => void
@@ -60,9 +63,12 @@ type GraphCommitNode = {
   branch: string
   message: string
   label: string
-  workflowId: string
-  stepId: string
+  workflowId: string | null
+  stepId: string | null
   timestamp: string
+  authorName: string | null
+  authorEmail: string | null
+  source: 'hyperagent' | 'git'
 }
 
 type GraphEdge = {
@@ -361,6 +367,17 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     }
   }
 
+  const sortCommitsByTimestamp = (entries: GraphCommitNode[]): GraphCommitNode[] => {
+    return entries.sort((a, b) => {
+      const aTime = Date.parse(a.timestamp)
+      const bTime = Date.parse(b.timestamp)
+      if (!Number.isFinite(aTime) || !Number.isFinite(bTime)) {
+        return a.timestamp.localeCompare(b.timestamp)
+      }
+      return aTime - bTime
+    })
+  }
+
   function extractCommitFromStep(
     step: WorkflowDetail['steps'][number]
   ): { commitHash: string; branch: string; message: string } | null {
@@ -631,7 +648,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     }
   }
 
-  const repositoryGraphHandler: RequestHandler = (req, res) => {
+  const repositoryGraphHandler: RequestHandler = async (req, res) => {
     const projectId = req.params.projectId
     if (!projectId) {
       res.status(400).json({ error: 'projectId is required' })
@@ -642,51 +659,106 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       res.status(404).json({ error: 'Unknown project' })
       return
     }
-    const workflows = workflowRuntime.listWorkflows(projectId)
-    const branchMap = new Map<string, GraphCommitNode[]>()
-    const seenCommits = new Set<string>()
 
-    workflows.forEach((workflow) => {
-      const steps = persistence.workflowSteps.listByWorkflow(workflow.id)
-      steps.forEach((step) => {
-        const commit = extractCommitFromStep(step)
-        if (!commit) return
-        if (seenCommits.has(commit.commitHash)) return
-        seenCommits.add(commit.commitHash)
-        const branchName = commit.branch === 'unknown' ? project.defaultBranch : commit.branch
-        const label =
-          typeof step.data?.title === 'string' && step.data.title.length
-            ? (step.data.title as string)
-            : `Step ${step.sequence}`
-        const node: GraphCommitNode = {
-          id: commit.commitHash,
-          commitHash: commit.commitHash,
-          branch: branchName,
-          message: commit.message,
-          label,
-          workflowId: workflow.id,
-          stepId: step.id,
-          timestamp: step.updatedAt
-        }
-        const list = branchMap.get(branchName) ?? []
-        list.push(node)
-        branchMap.set(branchName, list)
+    try {
+      const branchCandidates = [project.defaultBranch, ...(await listGitBranches(project.repositoryPath))]
+      const gitBranches = [...new Set(branchCandidates)].slice(0, GRAPH_BRANCH_LIMIT)
+      const branchCommits = await Promise.all(
+        gitBranches.map(async (branch) => {
+          const commits = await listBranchCommits({
+            repoPath: project.repositoryPath,
+            branch,
+            limit: GRAPH_COMMITS_PER_BRANCH
+          })
+          return {
+            branch,
+            commits: commits.map<GraphCommitNode>((commit) => ({
+              id: commit.hash,
+              commitHash: commit.hash,
+              branch,
+              message: commit.message,
+              label: commit.message || commit.hash,
+              workflowId: null,
+              stepId: null,
+              timestamp: commit.timestamp,
+              authorName: commit.authorName || null,
+              authorEmail: commit.authorEmail || null,
+              source: 'git'
+            }))
+          }
+        })
+      )
+
+      const branchMap = new Map<string, GraphCommitNode[]>()
+      branchCommits.forEach(({ branch, commits }) => {
+        branchMap.set(branch, sortCommitsByTimestamp(commits))
       })
-    })
-
-    const branches = [...branchMap.entries()].map(([name, commits]) => ({
-      name,
-      commits: commits.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-    }))
-
-    const edges: GraphEdge[] = []
-    branches.forEach((branch) => {
-      for (let index = 1; index < branch.commits.length; index++) {
-        edges.push({ from: branch.commits[index - 1].id, to: branch.commits[index].id })
+      if (!branchMap.size) {
+        branchMap.set(project.defaultBranch, [])
       }
-    })
 
-    res.json({ project, branches, edges })
+      const workflows = workflowRuntime.listWorkflows(projectId)
+      workflows.forEach((workflow) => {
+        const steps = persistence.workflowSteps.listByWorkflow(workflow.id)
+        steps.forEach((step) => {
+          const commit = extractCommitFromStep(step)
+          if (!commit) return
+          const branchName = commit.branch === 'unknown' ? project.defaultBranch : commit.branch
+          const label =
+            typeof step.data?.title === 'string' && step.data.title.length
+              ? (step.data.title as string)
+              : `Step ${step.sequence}`
+          const node: GraphCommitNode = {
+            id: commit.commitHash,
+            commitHash: commit.commitHash,
+            branch: branchName,
+            message: commit.message,
+            label,
+            workflowId: workflow.id,
+            stepId: step.id,
+            timestamp: step.updatedAt,
+            authorName: 'Hyperagent Workflow',
+            authorEmail: null,
+            source: 'hyperagent'
+          }
+          const list = branchMap.get(branchName) ?? []
+          const existingIndex = list.findIndex((entry) => entry.commitHash === node.commitHash)
+          if (existingIndex >= 0) {
+            const existing = list[existingIndex]
+            list[existingIndex] = {
+              ...existing,
+              label: node.label,
+              workflowId: node.workflowId,
+              stepId: node.stepId,
+              source: 'hyperagent',
+              timestamp: node.timestamp,
+              authorName: existing.authorName ?? node.authorName,
+              authorEmail: existing.authorEmail ?? node.authorEmail
+            }
+          } else {
+            list.push(node)
+          }
+          branchMap.set(branchName, sortCommitsByTimestamp(list).slice(-GRAPH_COMMITS_PER_BRANCH))
+        })
+      })
+
+      const branches = [...branchMap.entries()].map(([name, commits]) => ({
+        name,
+        commits
+      }))
+
+      const edges: GraphEdge[] = []
+      branches.forEach((branch) => {
+        for (let index = 1; index < branch.commits.length; index++) {
+          edges.push({ from: branch.commits[index - 1].id, to: branch.commits[index].id })
+        }
+      })
+
+      res.json({ project, branches, edges })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to build repository graph'
+      res.status(500).json({ error: message })
+    }
   }
 
   const workflowStepDiffHandler: RequestHandler = async (req, res) => {
