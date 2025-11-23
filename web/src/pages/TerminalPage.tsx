@@ -25,7 +25,7 @@ const TerminalPage = () => {
   let term: Terminal | null = null
   let fitAddon: FitAddon | null = null
   let socket: WebSocket | null = null
-  let resizeObserver: ResizeObserver | null = null
+  let detachResizeListener: (() => void) | null = null
   let inputSubscription: { dispose: () => void } | null = null
 
   const activeSession = createMemo(() => sessions().find((session) => session.id === activeSessionId()) ?? null)
@@ -51,6 +51,20 @@ const TerminalPage = () => {
     }
   }
 
+  const sendResizeUpdate = () => {
+    if (!term || socket?.readyState !== WebSocket.OPEN) return
+    socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+  }
+
+  const scheduleFit = () => {
+    if (!fitAddon || !term) return
+    requestAnimationFrame(() => {
+      if (!fitAddon || !term) return
+      fitAddon.fit()
+      sendResizeUpdate()
+    })
+  }
+
   const ensureTerminal = () => {
     if (term || !terminalContainer) return
     term = new Terminal({
@@ -73,19 +87,15 @@ const TerminalPage = () => {
         socket.send(JSON.stringify({ type: 'input', data }))
       }
     })
-    resizeObserver = new ResizeObserver(() => {
-      requestAnimationFrame(() => {
-        if (!fitAddon || !term) return
-        fitAddon.fit()
-        sendResizeUpdate()
-      })
-    })
-    resizeObserver.observe(terminalContainer)
-  }
-
-  const sendResizeUpdate = () => {
-    if (!term || socket?.readyState !== WebSocket.OPEN) return
-    socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+    if (typeof window !== 'undefined') {
+      const handleResize = () => scheduleFit()
+      window.addEventListener('resize', handleResize)
+      detachResizeListener = () => {
+        window.removeEventListener('resize', handleResize)
+        detachResizeListener = null
+      }
+    }
+    scheduleFit()
   }
 
   const attachSocketHandlers = (sessionId: string) => {
@@ -184,7 +194,7 @@ const TerminalPage = () => {
 
   onCleanup(() => {
     socket?.close()
-    resizeObserver?.disconnect()
+    detachResizeListener?.()
     inputSubscription?.dispose()
     term?.dispose()
   })

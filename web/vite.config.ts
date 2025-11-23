@@ -18,6 +18,11 @@ const proxyConfig = {
     target: API_TARGET,
     changeOrigin: true,
     ws: true
+  },
+  '/ws/terminal': {
+    target: API_TARGET,
+    changeOrigin: true,
+    ws: true
   }
 }
 
