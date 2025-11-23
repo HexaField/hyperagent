@@ -1,19 +1,86 @@
-import type {
-  AgentRunRecord,
-  Persistence,
-  ProjectRecord,
-  WorkflowInput,
-  WorkflowRecord,
-  WorkflowStepInput,
-  WorkflowStepRecord,
-  WorkflowStepsRepository
-} from './persistence'
+import type Database from 'better-sqlite3'
+import crypto from 'crypto'
+import type { AgentRunRecord, AgentRunsRepository } from './agent'
+import type { PersistenceContext, PersistenceModule, Timestamp } from './database'
+import type { ProjectRecord, ProjectsRepository } from './projects'
 import type {
   CommitResult,
   RadicleModule,
   RadicleSessionHandle,
   WorkspaceInfo as RadicleWorkspaceInfo
 } from './radicle/types'
+
+export type WorkflowStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
+export type WorkflowKind = 'new_project' | 'refactor' | 'bugfix' | 'custom'
+
+export type WorkflowRecord = {
+  id: string
+  projectId: string
+  plannerRunId: string | null
+  kind: WorkflowKind | string
+  status: WorkflowStatus
+  data: Record<string, unknown>
+  createdAt: Timestamp
+  updatedAt: Timestamp
+}
+
+export type WorkflowInput = {
+  id?: string
+  projectId: string
+  plannerRunId?: string | null
+  kind?: WorkflowKind | string
+  status?: WorkflowStatus
+  data?: Record<string, unknown>
+}
+
+export type WorkflowStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
+
+export type WorkflowStepRecord = {
+  id: string
+  workflowId: string
+  taskId: string | null
+  status: WorkflowStepStatus
+  sequence: number
+  dependsOn: string[]
+  data: Record<string, unknown>
+  result: Record<string, unknown> | null
+  updatedAt: Timestamp
+}
+
+export type WorkflowStepInput = {
+  id?: string
+  taskId?: string | null
+  sequence: number
+  dependsOn?: string[]
+  data?: Record<string, unknown>
+}
+
+export type WorkflowsRepository = {
+  insert: (input: WorkflowInput) => WorkflowRecord
+  updateStatus: (id: string, status: WorkflowStatus) => void
+  getById: (id: string) => WorkflowRecord | null
+  list: (projectId?: string) => WorkflowRecord[]
+}
+
+export type WorkflowStepsRepository = {
+  insertMany: (workflowId: string, steps: WorkflowStepInput[]) => WorkflowStepRecord[]
+  listByWorkflow: (workflowId: string) => WorkflowStepRecord[]
+  findReady: (limit?: number) => WorkflowStepRecord[]
+  claim: (stepId: string) => boolean
+  update: (stepId: string, patch: Partial<Pick<WorkflowStepRecord, 'status' | 'result'>>) => void
+}
+
+export type WorkflowsBindings = {
+  workflows: WorkflowsRepository
+  workflowSteps: WorkflowStepsRepository
+}
+
+type WorkflowPersistenceAdapter = {
+  projects: ProjectsRepository
+  workflows: WorkflowsRepository
+  workflowSteps: WorkflowStepsRepository
+  agentRuns: AgentRunsRepository
+}
 
 export type PlannerTask = {
   id: string
@@ -55,7 +122,7 @@ export type AgentExecutorResult = {
 export type AgentExecutor = (args: AgentExecutorArgs) => Promise<AgentExecutorResult>
 
 export type WorkflowRuntimeOptions = {
-  persistence: Persistence
+  persistence: WorkflowPersistenceAdapter
   agentExecutor?: AgentExecutor
   pollIntervalMs?: number
   radicle?: RadicleModule
@@ -264,7 +331,7 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
 function refreshWorkflowStatus(
   workflowId: string,
   stepsRepo: WorkflowStepsRepository,
-  workflowRepo: Persistence['workflows']
+  workflowRepo: WorkflowsRepository
 ): void {
   const steps = stepsRepo.listByWorkflow(workflowId)
   if (!steps.length) return
@@ -329,4 +396,207 @@ function slugify(value: string): string {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+export const workflowsPersistence: PersistenceModule<WorkflowsBindings> = {
+  name: 'workflows',
+  applySchema: (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS workflows (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        planner_run_id TEXT,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        data TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS workflow_steps (
+        id TEXT PRIMARY KEY,
+        workflow_id TEXT NOT NULL REFERENCES workflows(id),
+        task_id TEXT,
+        status TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        depends_on TEXT NOT NULL,
+        data TEXT NOT NULL,
+        result TEXT,
+        updated_at TEXT NOT NULL
+      );
+    `)
+  },
+  createBindings: ({ db }: PersistenceContext) => ({
+    workflows: createWorkflowsRepository(db),
+    workflowSteps: createWorkflowStepsRepository(db)
+  })
+}
+
+function createWorkflowsRepository(db: Database.Database): WorkflowsRepository {
+  return {
+    insert: (input) => {
+      const now = new Date().toISOString()
+      const id = input.id ?? crypto.randomUUID()
+      db.prepare(
+        `INSERT INTO workflows (id, project_id, planner_run_id, kind, status, data, created_at, updated_at)
+         VALUES (@id, @projectId, @plannerRunId, @kind, @status, @data, @createdAt, @updatedAt)`
+      ).run({
+        id,
+        projectId: input.projectId,
+        plannerRunId: input.plannerRunId ?? null,
+        kind: input.kind ?? 'custom',
+        status: input.status ?? 'pending',
+        data: JSON.stringify(input.data ?? {}),
+        createdAt: now,
+        updatedAt: now
+      })
+      const row = db.prepare('SELECT * FROM workflows WHERE id = ?').get(id)
+      return mapWorkflow(row)
+    },
+    updateStatus: (id, status) => {
+      db.prepare('UPDATE workflows SET status = ?, updated_at = ? WHERE id = ?').run(
+        status,
+        new Date().toISOString(),
+        id
+      )
+    },
+    getById: (id) => {
+      const row = db.prepare('SELECT * FROM workflows WHERE id = ?').get(id)
+      return row ? mapWorkflow(row) : null
+    },
+    list: (projectId) => {
+      const rows = projectId
+        ? db.prepare('SELECT * FROM workflows WHERE project_id = ? ORDER BY created_at DESC').all(projectId)
+        : db.prepare('SELECT * FROM workflows ORDER BY created_at DESC').all()
+      return rows.map(mapWorkflow)
+    }
+  }
+}
+
+function createWorkflowStepsRepository(db: Database.Database): WorkflowStepsRepository {
+  return {
+    insertMany: (workflowId, steps) => {
+      const insert = db.prepare(
+        `INSERT INTO workflow_steps (id, workflow_id, task_id, status, sequence, depends_on, data, result, updated_at)
+         VALUES (@id, @workflowId, @taskId, @status, @sequence, @dependsOn, @data, NULL, @updatedAt)`
+      )
+      const now = new Date().toISOString()
+      const records: WorkflowStepRecord[] = []
+      const tx = db.transaction((batch: WorkflowStepInput[]) => {
+        for (const step of batch) {
+          const id = step.id ?? crypto.randomUUID()
+          insert.run({
+            id,
+            workflowId,
+            taskId: step.taskId ?? null,
+            status: 'pending',
+            sequence: step.sequence,
+            dependsOn: JSON.stringify(step.dependsOn ?? []),
+            data: JSON.stringify(step.data ?? {}),
+            updatedAt: now
+          })
+          const row = db.prepare('SELECT * FROM workflow_steps WHERE id = ?').get(id)
+          records.push(mapWorkflowStep(row))
+        }
+      })
+      tx(steps)
+      return records
+    },
+    listByWorkflow: (workflowId) => {
+      const rows = db
+        .prepare('SELECT * FROM workflow_steps WHERE workflow_id = ? ORDER BY sequence ASC')
+        .all(workflowId)
+      return rows.map(mapWorkflowStep)
+    },
+    findReady: (limit = 10) => {
+      const rows = db
+        .prepare(
+          `SELECT ws.*, w.status as workflow_status
+           FROM workflow_steps ws
+           JOIN workflows w ON ws.workflow_id = w.id
+           WHERE ws.status = 'pending'
+           ORDER BY ws.sequence ASC`
+        )
+        .all()
+      const steps = (rows as Array<Record<string, unknown> & { workflow_status: WorkflowStatus }>)
+        .filter((row) => row.workflow_status === 'running')
+        .map(mapWorkflowStep)
+      const ready: WorkflowStepRecord[] = []
+      for (const step of steps) {
+        if (ready.length >= limit) break
+        const deps = step.dependsOn
+        if (!deps.length) {
+          ready.push(step)
+          continue
+        }
+        const depStatuses = db
+          .prepare(
+            `SELECT status FROM workflow_steps WHERE workflow_id = ? AND id IN (${deps.map(() => '?').join(',')})`
+          )
+          .all(step.workflowId, ...deps) as Array<{ status: WorkflowStepStatus }>
+        const satisfied = depStatuses.every((dep) => dep.status === 'completed')
+        if (satisfied) {
+          ready.push(step)
+        }
+      }
+      return ready
+    },
+    claim: (stepId) => {
+      const res = db
+        .prepare(
+          `UPDATE workflow_steps
+           SET status = 'running', updated_at = ?
+           WHERE id = ? AND status = 'pending'`
+        )
+        .run(new Date().toISOString(), stepId)
+      return res.changes > 0
+    },
+    update: (stepId, patch) => {
+      const current = db.prepare('SELECT * FROM workflow_steps WHERE id = ?').get(stepId) as any
+      if (!current) return
+      const nextStatus = patch.status ?? current.status
+      const nextResult = patch.result ? JSON.stringify(patch.result) : current.result
+      db.prepare(
+        `UPDATE workflow_steps
+         SET status = ?, result = ?, updated_at = ?
+         WHERE id = ?`
+      ).run(nextStatus, nextResult, new Date().toISOString(), stepId)
+    }
+  }
+}
+
+function mapWorkflow(row: any): WorkflowRecord {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    plannerRunId: row.planner_run_id ?? null,
+    kind: row.kind,
+    status: row.status,
+    data: parseJsonField<Record<string, unknown>>(row.data, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }
+}
+
+function mapWorkflowStep(row: any): WorkflowStepRecord {
+  return {
+    id: row.id,
+    workflowId: row.workflow_id,
+    taskId: row.task_id ?? null,
+    status: row.status,
+    sequence: row.sequence,
+    dependsOn: parseJsonField<string[]>(row.depends_on, []),
+    data: parseJsonField<Record<string, unknown>>(row.data, {}),
+    result: row.result ? parseJsonField<Record<string, unknown>>(row.result, {}) : null,
+    updatedAt: row.updated_at
+  }
+}
+
+function parseJsonField<T>(value: string | null, fallback: T): T {
+  if (value == null || value === '') return fallback
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return fallback
+  }
 }

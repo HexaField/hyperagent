@@ -1,6 +1,8 @@
 import type { ChildProcessWithoutNullStreams } from 'child_process'
 import { spawn } from 'child_process'
+import crypto from 'crypto'
 import path from 'path'
+import type { PersistenceContext, PersistenceModule, Timestamp } from './database'
 
 export type CodeServerOptions = {
   host?: string
@@ -129,4 +131,142 @@ function startCodeServer(options: Required<CodeServerOptions>, onExit: () => voi
 function buildPublicUrl(basePath: string, repoRoot: string): string {
   const normalized = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath
   return `${normalized}/?folder=${encodeURIComponent(repoRoot)}`
+}
+
+export type CodeServerSessionStatus = 'running' | 'stopped'
+
+export type CodeServerSessionRecord = {
+  id: string
+  projectId: string
+  branch: string
+  workspacePath: string
+  url: string
+  authToken: string
+  processId: number | null
+  status: CodeServerSessionStatus
+  startedAt: Timestamp
+  stoppedAt: Timestamp | null
+}
+
+export type CodeServerSessionInput = {
+  id?: string
+  projectId: string
+  branch: string
+  workspacePath: string
+  url: string
+  authToken: string
+  processId?: number | null
+}
+
+export type CodeServerSessionsRepository = {
+  upsert: (input: CodeServerSessionInput) => CodeServerSessionRecord
+  markStopped: (id: string) => void
+  findByProjectAndBranch: (projectId: string, branch: string) => CodeServerSessionRecord | null
+  listActive: () => CodeServerSessionRecord[]
+  resetAllRunning: () => void
+}
+
+export type CodeServerSessionsBindings = {
+  codeServerSessions: CodeServerSessionsRepository
+}
+
+export const codeServerSessionsPersistence: PersistenceModule<CodeServerSessionsBindings> = {
+  name: 'codeServerSessions',
+  applySchema: (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS code_server_sessions (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        branch TEXT NOT NULL,
+        workspace_path TEXT NOT NULL,
+        url TEXT NOT NULL,
+        auth_token TEXT NOT NULL,
+        process_id INTEGER,
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        stopped_at TEXT
+      );
+    `)
+  },
+  createBindings: ({ db }: PersistenceContext) => ({
+    codeServerSessions: createCodeServerSessionsRepository(db)
+  })
+}
+
+function createCodeServerSessionsRepository(db: PersistenceContext['db']): CodeServerSessionsRepository {
+  return {
+    upsert: (input) => {
+      const now = new Date().toISOString()
+      const id = input.id ?? crypto.randomUUID()
+      db.prepare(
+        `INSERT INTO code_server_sessions (id, project_id, branch, workspace_path, url, auth_token, process_id, status, started_at, stopped_at)
+         VALUES (@id, @projectId, @branch, @workspacePath, @url, @authToken, @processId, 'running', @startedAt, NULL)
+         ON CONFLICT(id) DO UPDATE SET
+           project_id = excluded.project_id,
+           branch = excluded.branch,
+           workspace_path = excluded.workspace_path,
+           url = excluded.url,
+           auth_token = excluded.auth_token,
+           process_id = excluded.process_id,
+           status = excluded.status,
+           started_at = excluded.started_at,
+           stopped_at = excluded.stopped_at`
+      ).run({
+        id,
+        projectId: input.projectId,
+        branch: input.branch,
+        workspacePath: input.workspacePath,
+        url: input.url,
+        authToken: input.authToken,
+        processId: input.processId ?? null,
+        startedAt: now
+      })
+      const row = db.prepare('SELECT * FROM code_server_sessions WHERE id = ?').get(id)
+      return mapCodeServerSession(row)
+    },
+    markStopped: (id) => {
+      db.prepare(
+        `UPDATE code_server_sessions
+         SET status = 'stopped', stopped_at = ?
+         WHERE id = ?`
+      ).run(new Date().toISOString(), id)
+    },
+    findByProjectAndBranch: (projectId, branch) => {
+      const row = db
+        .prepare(
+          `SELECT * FROM code_server_sessions
+           WHERE project_id = ? AND branch = ?
+           ORDER BY started_at DESC
+           LIMIT 1`
+        )
+        .get(projectId, branch)
+      return row ? mapCodeServerSession(row) : null
+    },
+    listActive: () => {
+      const rows = db.prepare('SELECT * FROM code_server_sessions WHERE status = ?').all('running')
+      return rows.map(mapCodeServerSession)
+    },
+    resetAllRunning: () => {
+      db.prepare(
+        `UPDATE code_server_sessions
+         SET status = 'stopped', stopped_at = COALESCE(stopped_at, ?)
+         WHERE status = 'running'`
+      ).run(new Date().toISOString())
+    }
+  }
+}
+
+function mapCodeServerSession(row: any): CodeServerSessionRecord {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    branch: row.branch,
+    workspacePath: row.workspace_path,
+    url: row.url,
+    authToken: row.auth_token,
+    processId: typeof row.process_id === 'number' ? row.process_id : null,
+    status: row.status,
+    startedAt: row.started_at,
+    stoppedAt: row.stopped_at ?? null
+  }
 }

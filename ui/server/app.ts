@@ -8,19 +8,20 @@ import type { Server as HttpServer, IncomingMessage } from 'node:http'
 import { createServer, type AddressInfo, type Socket } from 'node:net'
 import os from 'os'
 import path from 'path'
+import WebSocket, { WebSocketServer, type RawData } from 'ws'
 import { runVerifierWorkerLoop, type AgentStreamEvent } from '../../src/modules/agent'
 import {
   createCodeServerController,
   type CodeServerController,
   type CodeServerOptions
 } from '../../src/modules/codeServer'
-import type { Provider } from '../../src/modules/llm'
 import {
   createPersistence,
   type Persistence,
   type ProjectRecord,
   type RadicleRegistrationRecord
-} from '../../src/modules/persistence'
+} from '../../src/modules/database'
+import type { Provider } from '../../src/modules/llm'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import { createTerminalModule, type LiveTerminalSession, type TerminalModule } from '../../src/modules/terminal'
 import {
@@ -30,7 +31,6 @@ import {
   type WorkflowDetail,
   type WorkflowRuntime
 } from '../../src/modules/workflows'
-import WebSocket, { type RawData, WebSocketServer } from 'ws'
 
 const DEFAULT_PORT = Number(process.env.UI_SERVER_PORT || 5556)
 const CODE_SERVER_HOST = process.env.CODE_SERVER_HOST || '127.0.0.1'

@@ -1,5 +1,6 @@
 import { spawn } from 'child_process'
 import path from 'path'
+import type { PersistenceContext, PersistenceModule, Timestamp } from '../database'
 import { createRadicleRepoManager } from './repoManager'
 import { createRadicleSession } from './session'
 import type {
@@ -366,5 +367,93 @@ const fetchRadicleIdentity = async (): Promise<{
         message
       }
     }
+  }
+}
+
+export type RadicleRegistrationRecord = {
+  repositoryPath: string
+  name: string | null
+  description: string | null
+  visibility: 'public' | 'private' | null
+  defaultBranch: string | null
+  registeredAt: Timestamp
+}
+
+export type RadicleRegistrationInput = {
+  repositoryPath: string
+  name?: string | null
+  description?: string | null
+  visibility?: 'public' | 'private' | null
+  defaultBranch?: string | null
+}
+
+export type RadicleRegistrationsRepository = {
+  upsert: (input: RadicleRegistrationInput) => RadicleRegistrationRecord
+  list: () => RadicleRegistrationRecord[]
+}
+
+export type RadicleRegistrationsBindings = {
+  radicleRegistrations: RadicleRegistrationsRepository
+}
+
+export const radicleRegistrationsPersistence: PersistenceModule<RadicleRegistrationsBindings> = {
+  name: 'radicleRegistrations',
+  applySchema: (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS radicle_registrations (
+        repository_path TEXT PRIMARY KEY,
+        name TEXT,
+        description TEXT,
+        visibility TEXT,
+        default_branch TEXT,
+        registered_at TEXT NOT NULL
+      );
+    `)
+  },
+  createBindings: ({ db }: PersistenceContext) => ({
+    radicleRegistrations: createRadicleRegistrationsRepository(db)
+  })
+}
+
+function createRadicleRegistrationsRepository(db: PersistenceContext['db']): RadicleRegistrationsRepository {
+  return {
+    upsert: (input) => {
+      const now = new Date().toISOString()
+      const resolvedPath = path.resolve(input.repositoryPath)
+      db.prepare(
+        `INSERT INTO radicle_registrations (repository_path, name, description, visibility, default_branch, registered_at)
+         VALUES (@repositoryPath, @name, @description, @visibility, @defaultBranch, @registeredAt)
+         ON CONFLICT(repository_path) DO UPDATE SET
+           name = excluded.name,
+           description = excluded.description,
+           visibility = excluded.visibility,
+           default_branch = excluded.default_branch,
+           registered_at = excluded.registered_at`
+      ).run({
+        repositoryPath: resolvedPath,
+        name: input.name ?? null,
+        description: input.description ?? null,
+        visibility: input.visibility ?? null,
+        defaultBranch: input.defaultBranch ?? null,
+        registeredAt: now
+      })
+      const row = db.prepare('SELECT * FROM radicle_registrations WHERE repository_path = ?').get(resolvedPath)
+      return mapRadicleRegistration(row)
+    },
+    list: () => {
+      const rows = db.prepare('SELECT * FROM radicle_registrations ORDER BY registered_at DESC').all()
+      return rows.map(mapRadicleRegistration)
+    }
+  }
+}
+
+function mapRadicleRegistration(row: any): RadicleRegistrationRecord {
+  return {
+    repositoryPath: row.repository_path,
+    name: row.name ?? null,
+    description: row.description ?? null,
+    visibility: row.visibility === 'public' || row.visibility === 'private' ? row.visibility : null,
+    defaultBranch: row.default_branch ?? null,
+    registeredAt: row.registered_at
   }
 }

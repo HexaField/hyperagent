@@ -1,6 +1,6 @@
 import fs from 'fs/promises'
-import crypto from 'node:crypto'
 import { execFileSync } from 'node:child_process'
+import crypto from 'node:crypto'
 import { once } from 'node:events'
 import { createServer as createHttpServer } from 'node:http'
 import { AddressInfo } from 'node:net'
@@ -8,13 +8,13 @@ import { TextDecoder } from 'node:util'
 import os from 'os'
 import path from 'path'
 import { describe, expect, it, vi, type Mock } from 'vitest'
+import WebSocket from 'ws'
 import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../../src/modules/agent'
 import type { CodeServerController, CodeServerHandle, CodeServerOptions } from '../../src/modules/codeServer'
+import type { TerminalSessionRecord } from '../../src/modules/database'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
-import type { TerminalSessionRecord } from '../../src/modules/persistence'
 import type { LiveTerminalSession, TerminalModule } from '../../src/modules/terminal'
 import { createServerApp } from './app'
-import WebSocket from 'ws'
 
 const mockResult: AgentLoopResult = {
   outcome: 'approved',
