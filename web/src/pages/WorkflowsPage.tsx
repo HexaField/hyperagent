@@ -1,6 +1,7 @@
-import { A } from '@solidjs/router'
+import { A, useSearchParams } from '@solidjs/router'
 import { For, Show, createResource } from 'solid-js'
 import { fetchJson } from '../lib/http'
+import WorkflowDetailView from '../components/WorkflowDetailView'
 
 type WorkflowRecord = {
   id: string
@@ -30,6 +31,14 @@ export default function WorkflowsPage() {
     const payload = await fetchJson<{ workflows: WorkflowSummary[] }>('/api/workflows')
     return payload.workflows
   })
+  const [searchParams, setSearchParams] = useSearchParams()
+  const focusedSessionId = () => {
+    const value = searchParams.sessionId
+    return typeof value === 'string' && value.length ? value : null
+  }
+  const closeSessionView = () => {
+    setSearchParams({ sessionId: undefined })
+  }
 
   return (
     <div class="flex flex-col gap-6">
@@ -100,6 +109,33 @@ export default function WorkflowsPage() {
               </For>
             </div>
           </Show>
+        )}
+      </Show>
+      <Show when={focusedSessionId()}>
+        {(workflowId) => (
+          <div
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6"
+            data-testid="workflow-session-viewer"
+            onClick={closeSessionView}
+          >
+            <div
+              class="max-h-[95vh] w-full max-w-5xl overflow-y-auto rounded-3xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <WorkflowDetailView
+                workflowId={workflowId()}
+                actions={
+                  <button
+                    type="button"
+                    class="rounded-xl border border-[var(--border)] px-4 py-2 text-sm text-[var(--text)]"
+                    onClick={closeSessionView}
+                  >
+                    Close session
+                  </button>
+                }
+              />
+            </div>
+          </div>
         )}
       </Show>
     </div>

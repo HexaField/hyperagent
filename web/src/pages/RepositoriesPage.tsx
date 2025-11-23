@@ -1,6 +1,7 @@
-import { A } from '@solidjs/router'
+import { A, useNavigate } from '@solidjs/router'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onMount } from 'solid-js'
 import { fetchJson } from '../lib/http'
+import { buildSessionWorkflowPayload } from '../lib/sessions'
 
 const BROWSER_PAGE_SIZE = 10
 const BROWSER_STATE_STORAGE_KEY = 'hyperagent:repoBrowser'
@@ -51,6 +52,12 @@ type DirectoryListing = {
   path: string
   parent: string | null
   entries: DirectoryEntry[]
+}
+
+type WorkflowCreationResponse = {
+  workflow: {
+    id: string
+  }
 }
 
 const RepoInfoPanel = (props: { git: GitInfo | null; path: string }) => {
@@ -123,6 +130,7 @@ const normalizeFsPath = (input: string | undefined | null) => {
 }
 
 export default function RepositoriesPage() {
+  const navigate = useNavigate()
   const [form, setForm] = createSignal({
     name: '',
     repositoryPath: '',
@@ -140,6 +148,11 @@ export default function RepositoriesPage() {
   const [folderStatus, setFolderStatus] = createSignal<string | null>(null)
   const [expandedProjects, setExpandedProjects] = createSignal(new Set<string>())
   const [expandedRadRepos, setExpandedRadRepos] = createSignal(new Set<string>())
+  const [sessionProject, setSessionProject] = createSignal<Project | null>(null)
+  const [sessionName, setSessionName] = createSignal('')
+  const [sessionDetails, setSessionDetails] = createSignal('')
+  const [sessionStatus, setSessionStatus] = createSignal<string | null>(null)
+  const [sessionSubmitting, setSessionSubmitting] = createSignal(false)
   let lastKnownBrowserPath: string | undefined
 
   const [projects, { refetch: refetchProjects }] = createResource(async () => {
@@ -266,6 +279,54 @@ export default function RepositoriesPage() {
       }
       return next
     })
+  }
+
+  const openSessionModal = (project: Project) => {
+    setSessionProject(project)
+    setSessionName(`${project.name} session`)
+    setSessionDetails('')
+    setSessionStatus(null)
+  }
+
+  const closeSessionModal = (force = false) => {
+    if (sessionSubmitting() && !force) return
+    setSessionProject(null)
+    setSessionName('')
+    setSessionDetails('')
+    setSessionStatus(null)
+    setSessionSubmitting(false)
+  }
+
+  const handleSessionSubmit = async (event: SubmitEvent) => {
+    event.preventDefault()
+    const project = sessionProject()
+    if (!project) return
+    let payload
+    try {
+      payload = buildSessionWorkflowPayload({
+        projectId: project.id,
+        sessionName: sessionName(),
+        sessionDetails: sessionDetails()
+      })
+    } catch (error) {
+      setSessionStatus(error instanceof Error ? error.message : 'Invalid session details')
+      return
+    }
+    try {
+      setSessionSubmitting(true)
+      const response = await fetchJson<WorkflowCreationResponse>('/api/workflows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      const workflowId = response.workflow.id
+      closeSessionModal(true)
+      navigate(`/workflows?sessionId=${encodeURIComponent(workflowId)}`)
+    } catch (error) {
+      setSessionStatus(error instanceof Error ? error.message : 'Failed to start session')
+    } finally {
+      setSessionSubmitting(false)
+    }
   }
 
   onMount(() => {
@@ -610,12 +671,21 @@ export default function RepositoriesPage() {
                           <p class="text-lg font-semibold text-[var(--text)]">{project.name}</p>
                           <p class="text-xs text-[var(--text-muted)]">{project.repositoryPath}</p>
                         </div>
-                        <A
-                          href={`/repositories/${project.id}/graph`}
-                          class="rounded-xl border border-blue-600 px-3 py-1.5 text-sm font-semibold text-blue-600"
-                        >
-                          View graph
-                        </A>
+                        <div class="flex flex-wrap items-center gap-2">
+                          <button
+                            class="rounded-xl bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white"
+                            type="button"
+                            onClick={() => openSessionModal(project)}
+                          >
+                            New session
+                          </button>
+                          <A
+                            href={`/repositories/${project.id}/graph`}
+                            class="rounded-xl border border-blue-600 px-3 py-1.5 text-sm font-semibold text-blue-600"
+                          >
+                            View graph
+                          </A>
+                        </div>
                       </div>
                       <div class="mt-3 flex flex-wrap items-center gap-4 text-xs text-[var(--text-muted)]">
                         <span>Default branch: {project.defaultBranch}</span>
@@ -720,6 +790,71 @@ export default function RepositoriesPage() {
           )}
         </Show>
       </section>
+
+      <Show when={sessionProject()}>
+        {(activeProject) => (
+          <div
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+            role="dialog"
+            aria-modal="true"
+            onClick={() => closeSessionModal()}
+          >
+            <form
+              class="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+              onSubmit={handleSessionSubmit}
+            >
+              <header class="mb-4">
+                <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">New session</p>
+                <h2 class="text-2xl font-semibold text-[var(--text)]">{activeProject().name}</h2>
+                <p class="text-xs text-[var(--text-muted)]">{activeProject().repositoryPath}</p>
+              </header>
+              <label class="text-xs font-semibold text-[var(--text-muted)]" for="session-name">
+                Session name
+              </label>
+              <input
+                id="session-name"
+                type="text"
+                class="mb-3 mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
+                value={sessionName()}
+                onInput={(event) => setSessionName(event.currentTarget.value)}
+                disabled={sessionSubmitting()}
+              />
+              <label class="text-xs font-semibold text-[var(--text-muted)]" for="session-details">
+                Details / prompt
+              </label>
+              <textarea
+                id="session-details"
+                rows={5}
+                class="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
+                value={sessionDetails()}
+                onInput={(event) => setSessionDetails(event.currentTarget.value)}
+                disabled={sessionSubmitting()}
+              />
+              <Show when={sessionStatus()}>
+                {(message) => <p class="mt-2 text-xs text-red-500">{message()}</p>}
+              </Show>
+              <div class="mt-4 flex justify-end gap-2">
+                <button
+                  class="rounded-xl border border-[var(--border)] px-4 py-2 text-sm"
+                  type="button"
+                  onClick={() => closeSessionModal()}
+                  disabled={sessionSubmitting()}
+                >
+                  Cancel
+                </button>
+                <button
+                  class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  type="submit"
+                  disabled={sessionSubmitting()}
+                >
+                  {sessionSubmitting() ? 'Creating…' : 'Create'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+      </Show>
     </div>
   )
 }

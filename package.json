@@ -27,6 +27,7 @@
   "license": "MIT",
   "dependencies": {
     "@solidjs/router": "^0.15.4",
+    "@solidjs/testing-library": "^0.8.10",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "app-root-path": "^3.1.0",
@@ -62,6 +63,7 @@
     "concurrently": "^9.1.2",
     "cross-fetch": "^3.1.8",
     "eslint": "^8.47.0",
+    "jsdom": "^27.2.0",
     "postcss": "^8.4.49",
     "prettier": "^3.6.2",
     "prettier-plugin-organize-imports": "^4.3.0",
