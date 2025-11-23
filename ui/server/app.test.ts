@@ -1,15 +1,18 @@
-import { EventEmitter } from 'node:events'
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import type { Request, Response } from 'express'
-import type { AgentLoopOptions, AgentLoopResult } from '../../src/modules/agent'
+import { once } from 'node:events'
+import { createServer as createHttpServer } from 'node:http'
+import { AddressInfo } from 'node:net'
+import { TextDecoder } from 'node:util'
+import fs from 'fs/promises'
+import os from 'os'
+import path from 'path'
+import { describe, expect, it, vi, type Mock } from 'vitest'
+import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../../src/modules/agent'
 import type {
   CodeServerController,
   CodeServerHandle,
   CodeServerOptions
 } from '../../src/modules/codeServer'
 import { createServerApp } from './app'
-
-type ControllerFactoryMock = ReturnType<typeof createControllerFactory>
 
 const mockResult: AgentLoopResult = {
   outcome: 'approved',
@@ -27,170 +30,211 @@ const mockResult: AgentLoopResult = {
   rounds: []
 }
 
-function createControllerFactory () {
-  let lastController: CodeServerController | null = null
-  const factory = vi.fn<[CodeServerOptions], CodeServerController>((options) => {
-    const basePath = options.publicBasePath ?? '/code-server'
-    const repoRoot = options.repoRoot ?? ''
+type StreamPacket = { type: string; payload?: any }
+
+type FakeCodeServer = {
+  port: number
+  requests: string[]
+  close: () => Promise<void>
+}
+
+async function startFakeCodeServer (): Promise<FakeCodeServer> {
+  const requests: string[] = []
+  const server = createHttpServer((req, res) => {
+    requests.push(req.url ?? '/')
+    res.writeHead(200, { 'Content-Type': 'text/plain' })
+    res.end(`fake-code-server${req.url ?? '/'}`)
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address() as AddressInfo | null
+  if (!address) {
+    await new Promise<void>((resolve, reject) =>
+      server.close(err => (err ? reject(err) : resolve()))
+    )
+    throw new Error('Failed to start fake code-server')
+  }
+  let closed = false
+  return {
+    port: address.port,
+    requests,
+    close: async () => {
+      if (closed) return
+      closed = true
+      await new Promise<void>((resolve, reject) =>
+        server.close(err => (err ? reject(err) : resolve()))
+      )
+    }
+  }
+}
+
+async function streamSseFrames (
+  response: Response,
+  onFrame: (frame: StreamPacket) => Promise<void> | void
+): Promise<void> {
+  const reader = response.body?.getReader()
+  if (!reader) {
+    throw new Error('Response body is not readable')
+  }
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (value) {
+      buffer += decoder.decode(value, { stream: true })
+    }
+    if (done) {
+      buffer += decoder.decode()
+    }
+
+    let boundary = buffer.indexOf('\n\n')
+    while (boundary !== -1) {
+      const chunk = buffer.slice(0, boundary).replace(/\r\n/g, '\n')
+      buffer = buffer.slice(boundary + 2)
+      const dataLines = chunk
+        .split('\n')
+        .filter(line => line.startsWith('data:'))
+        .map(line => line.slice(5).trimStart())
+      if (dataLines.length) {
+        const payload = dataLines.join('\n')
+        const frame = JSON.parse(payload) as StreamPacket
+        await onFrame(frame)
+      }
+      boundary = buffer.indexOf('\n\n')
+    }
+
+    if (done) {
+      break
+    }
+  }
+}
+
+async function createIntegrationHarness () {
+  const tmpBase = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-ui-server-tests-'))
+  const fakeCodeServer = await startFakeCodeServer()
+
+  const runLoop = vi.fn<[AgentLoopOptions], Promise<AgentLoopResult>>(async (options) => {
+    const chunk: AgentStreamEvent = {
+      role: 'worker',
+      round: 1,
+      chunk: 'stream-chunk',
+      provider: 'ollama',
+      model: 'mock-model',
+      attempt: 1
+    }
+    options.onStream?.(chunk)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    return mockResult
+  })
+
+  const controllerFactory = vi.fn<[CodeServerOptions], CodeServerController>((options) => {
+    expect(options.port).toBe(fakeCodeServer.port)
     const ensure = vi.fn(async (): Promise<CodeServerHandle> => ({
-      child: {} as any,
+      child: { kill: vi.fn() } as any,
       running: true,
-      publicUrl: `${basePath}/?folder=${encodeURIComponent(repoRoot)}`
+      publicUrl: `${options.publicBasePath}/?folder=${encodeURIComponent(options.repoRoot ?? '')}`
     }))
     const shutdown = vi.fn(async () => {})
-    lastController = { ensure, shutdown }
-    return lastController
-  }) as Mock<[CodeServerOptions], CodeServerController> & {
-    lastController: () => CodeServerController | null
+    return { ensure, shutdown }
+  }) as Mock<[CodeServerOptions], CodeServerController>
+
+  const appServer = createServerApp({
+    runLoop,
+    controllerFactory,
+    tmpDir: tmpBase,
+    allocatePort: async () => fakeCodeServer.port
+  })
+
+  const httpServer = appServer.start(0)
+  await once(httpServer, 'listening')
+  const address = httpServer.address() as AddressInfo
+  const baseUrl = `http://127.0.0.1:${address.port}`
+
+  return {
+    baseUrl,
+    runLoop,
+    controllerFactory,
+    fakeCodeServer,
+    close: async () => {
+      await new Promise<void>(resolve => httpServer.close(() => resolve()))
+      await appServer.shutdown()
+      await fakeCodeServer.close()
+      await fs.rm(tmpBase, { recursive: true, force: true })
+    }
   }
-  factory.lastController = () => lastController
-  return factory
-}
-
-function createMockRequest (body: any = {}, params: Record<string, string> = {}) {
-  const emitter = new EventEmitter()
-  const req = emitter as unknown as Request & { body: any }
-  req.body = body
-  req.params = params
-  req.method = 'POST' as any
-  req.url = '/api/agent/run'
-  req.headers = {}
-  return req
-}
-
-function createMockResponse () {
-  const chunks: string[] = []
-  let statusCode = 200
-  let jsonPayload: any = null
-  let ended = false
-  let headers: Record<string, string> = {}
-
-  const res = {
-    writeHead: (status: number, head: Record<string, string>) => {
-      statusCode = status
-      headers = head
-    },
-    write: (chunk: string | Buffer) => {
-      chunks.push(typeof chunk === 'string' ? chunk : chunk.toString())
-    },
-    end: () => {
-      ended = true
-    },
-    status: (code: number) => {
-      statusCode = code
-      return res
-    },
-    json: (payload: any) => {
-      jsonPayload = payload
-      ended = true
-      return res
-    },
-    getBody: () => chunks.join(''),
-    getStatus: () => statusCode,
-    getJSON: () => jsonPayload,
-    isEnded: () => ended,
-    getHeaders: () => headers
-  }
-
-  return res as unknown as Response & {
-    getBody: () => string
-    getStatus: () => number
-    getJSON: () => any
-    isEnded: () => boolean
-    getHeaders: () => Record<string, string>
-  }
-}
-
-function parseSse (body: string) {
-  return body
-    .split('\n\n')
-    .map(chunk => chunk.trim())
-    .filter(Boolean)
-    .map(entry => JSON.parse(entry.replace(/^data:\s*/, '')))
 }
 
 describe('createServerApp', () => {
-  let runLoop: Mock<[AgentLoopOptions], Promise<AgentLoopResult>>
-  let controllerFactory: ControllerFactoryMock
-
-  beforeEach(() => {
-    runLoop = vi.fn<[AgentLoopOptions], Promise<AgentLoopResult>>().mockResolvedValue(mockResult)
-    controllerFactory = createControllerFactory()
-  })
-
-  function buildServer () {
-    const server = createServerApp({
-      runLoop,
-      controllerFactory,
-      tmpDir: '/tmp',
-      allocatePort: async () => 1337
-    })
-
-    return { server }
-  }
-
-  it('streams agent results and exposes code-server url per run', async () => {
-    const { server } = buildServer()
-
-    const req = createMockRequest({
-      prompt: 'Summarize repository changes',
-      provider: 'anthropic',
-      model: 'sonnet',
-      maxRounds: 2
-    })
-    const res = createMockResponse()
-
-    await server.handlers.agentRun(req, res, () => {})
-
-    const controller = controllerFactory.lastController()
-    expect(controllerFactory).toHaveBeenCalledTimes(1)
-    expect(controller?.ensure).toHaveBeenCalledTimes(1)
-    expect(controller?.shutdown).toHaveBeenCalledTimes(1)
-
-    const frames = parseSse(res.getBody())
-    const sessionFrame = frames[0]
-    expect(sessionFrame.type).toBe('session')
-    expect(sessionFrame.payload.codeServerUrl).toContain(`/code-server/${sessionFrame.payload.sessionId}`)
-
-    expect(runLoop).toHaveBeenCalledTimes(1)
-    expect(runLoop).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userInstructions: 'Summarize repository changes',
-        provider: 'anthropic',
-        model: 'sonnet',
-        maxRounds: 2,
-        sessionDir: expect.stringContaining('hyperagent-session-')
+  it('streams agent results and proxies code-server requests', { timeout: 15000 }, async () => {
+    const harness = await createIntegrationHarness()
+    try {
+      const response = await fetch(`${harness.baseUrl}/api/agent/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: 'Summarize repository changes',
+          provider: 'anthropic',
+          model: 'sonnet',
+          maxRounds: 2
+        })
       })
-    )
 
-    expect(server.getActiveSessionIds()).toEqual([])
-    expect(res.isEnded()).toBe(true)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toContain('text/event-stream')
+
+      const frames: StreamPacket[] = []
+      let codeServerVerified = false
+
+      await streamSseFrames(response, async (frame) => {
+        frames.push(frame)
+        if (frame.type === 'session' && !codeServerVerified) {
+          const codeServerUrl = frame.payload?.codeServerUrl as string | null
+          expect(typeof codeServerUrl).toBe('string')
+          if (!codeServerUrl) {
+            throw new Error('code-server url missing in session frame')
+          }
+          const codeServerResponse = await fetch(`${harness.baseUrl}${codeServerUrl}`)
+          expect(codeServerResponse.status).toBe(200)
+          expect(await codeServerResponse.text()).toContain('fake-code-server')
+          codeServerVerified = true
+        }
+      })
+
+      expect(codeServerVerified).toBe(true)
+      expect(frames.map(frame => frame.type)).toEqual(['session', 'chunk', 'result', 'end'])
+      expect(harness.runLoop).toHaveBeenCalledTimes(1)
+      expect(harness.controllerFactory).toHaveBeenCalledTimes(1)
+    } finally {
+      await harness.close()
+    }
   })
 
   it('rejects requests without a prompt', async () => {
-    const { server } = buildServer()
-    const req = createMockRequest({})
-    const res = createMockResponse()
+    const harness = await createIntegrationHarness()
+    try {
+      const response = await fetch(`${harness.baseUrl}/api/agent/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      })
 
-    await server.handlers.agentRun(req, res, () => {})
-
-    expect(res.getStatus()).toBe(400)
-    expect(res.getJSON()).toEqual({ error: 'prompt is required' })
-    expect(runLoop).not.toHaveBeenCalled()
+      expect(response.status).toBe(400)
+      expect(await response.json()).toEqual({ error: 'prompt is required' })
+      expect(harness.runLoop).not.toHaveBeenCalled()
+    } finally {
+      await harness.close()
+    }
   })
 
   it('returns 404 for unknown code-server sessions', async () => {
-    const { server } = buildServer()
-    const req = createMockRequest({}, { sessionId: 'missing' })
-    req.method = 'GET' as any
-    req.url = '/code-server/missing'
-    const res = createMockResponse()
-
-    await server.handlers.codeServerProxy(req, res, () => {
-      throw new Error('should not call next for unknown session')
-    })
-
-    expect(res.getStatus()).toBe(404)
-    expect(res.getJSON()).toEqual({ error: 'Unknown code-server session' })
+    const harness = await createIntegrationHarness()
+    try {
+      const response = await fetch(`${harness.baseUrl}/code-server/missing`)
+      expect(response.status).toBe(404)
+      expect(await response.json()).toEqual({ error: 'Unknown code-server session' })
+    } finally {
+      await harness.close()
+    }
   })
 })

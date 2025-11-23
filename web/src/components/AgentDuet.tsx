@@ -110,7 +110,7 @@ export default function AgentDuet () {
     while (true) {
       const { value, done } = await reader.read()
       if (done) break
-      buffer += decoder.decode(value, { stream: true })
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
       let boundary = buffer.indexOf('\n\n')
       while (boundary !== -1) {
         const chunk = buffer.slice(0, boundary).trim()
@@ -120,8 +120,9 @@ export default function AgentDuet () {
       }
     }
 
-    if (buffer.trim().length) {
-      processFrame(buffer)
+    const remaining = buffer.replace(/\r\n/g, '\n').trim()
+    if (remaining.length) {
+      processFrame(remaining)
     }
   }
 

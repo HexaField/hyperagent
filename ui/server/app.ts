@@ -162,10 +162,12 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive'
     })
+    res.flushHeaders?.()
+    req.socket?.setKeepAlive?.(true)
 
     let closed = false
     let sessionId: string | null = null
-    req.on('close', () => {
+    res.on('close', () => {
       closed = true
       if (sessionId) {
         void shutdownCodeServerSession(sessionId)
@@ -175,11 +177,16 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     const emit = (packet: Record<string, unknown>) => {
       if (closed) return
       res.write(`data: ${JSON.stringify(packet)}\n\n`)
+      const maybeFlush = (res as Response & { flush?: () => void }).flush
+      if (typeof maybeFlush === 'function') {
+        maybeFlush.call(res)
+      }
     }
 
     const sessionDir = await fs.mkdtemp(path.join(tmpDir, 'hyperagent-session-'))
     sessionId = path.basename(sessionDir)
     const codeServerSession = await startCodeServerForSession(sessionId, sessionDir)
+    console.log('session ready', sessionId)
     emit({
       type: 'session',
       payload: {
@@ -199,6 +206,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       const modelToUse = typeof model === 'string' && model.length ? model : undefined
       const normalizedMaxRounds = typeof maxRounds === 'number' ? maxRounds : undefined
 
+      console.log('running loop', sessionId)
       const result = await runLoop({
         userInstructions: prompt,
         provider: providerToUse,
@@ -207,6 +215,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
         sessionDir,
         onStream: streamHandler
       })
+      console.log('runLoop completed', sessionId)
       emit({ type: 'result', payload: result })
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Agent loop failed'
@@ -220,7 +229,9 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       }
     } finally {
       if (!closed) {
+        console.log('emitting end frame', sessionId)
         emit({ type: 'end' })
+        console.log('ending response', sessionId)
         res.end()
       }
       if (sessionId) {
