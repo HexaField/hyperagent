@@ -1,14 +1,16 @@
 # Foundational Capabilities
 
 ## 1. Substrate Definition
+
 The substrate is a versioned, typed graph workspace where every entity—agents, data, humans, policies—is modeled as a composable node connected through declarative, schema-driven edges. It stores:
+
 - Immutable graph snapshots with diff history and provenance metadata.
 - Typed ports describing inputs, outputs, cost/safety tags, and side-effect scopes.
 - Execution traces and artifacts bound directly to their producing nodes.
-- Shared memory objects (documents, embeddings, metrics) referenced as first-class graph nodes.
-This substrate acts as the single source of truth for intent (natural language), structure (graph), execution (runtime plans), and governance (policies).
+- Shared memory objects (documents, embeddings, metrics) referenced as first-class graph nodes. This substrate acts as the single source of truth for intent (natural language), structure (graph), execution (runtime plans), and governance (policies).
 
 ## 2. Core Primitives
+
 1. **Node**: Typed capability definition (agent, tool, human role, dataset, memory) with declarative IO, configuration schema, and policy tags.
 2. **Edge**: Verified contract linking node ports; carries dataflow semantics, trigger conditions, fan-out/fan-in hints, and failure handling policies.
 3. **Graph Snapshot**: Immutable state of all nodes/edges, versioned with lineage, supporting branching, merging, and reusable subgraph packaging.
@@ -18,6 +20,7 @@ This substrate acts as the single source of truth for intent (natural language),
 7. **Template/Subgraph**: Parameterized bundle of nodes/edges treated as a reusable primitive with published interfaces and governance metadata.
 
 ## 3. Foundational Capability Families
+
 1. **Graph Authoring & Versioning**
    - Real-time canvas editing with presence overlays.
    - Natural-language-to-graph synthesis and diff explanations.
