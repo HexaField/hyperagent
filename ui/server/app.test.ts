@@ -1,4 +1,5 @@
 import fs from 'fs/promises'
+import crypto from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer as createHttpServer } from 'node:http'
@@ -10,7 +11,10 @@ import { describe, expect, it, vi, type Mock } from 'vitest'
 import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../../src/modules/agent'
 import type { CodeServerController, CodeServerHandle, CodeServerOptions } from '../../src/modules/codeServer'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
+import type { TerminalSessionRecord } from '../../src/modules/persistence'
+import type { LiveTerminalSession, TerminalModule } from '../../src/modules/terminal'
 import { createServerApp } from './app'
+import WebSocket from 'ws'
 
 const mockResult: AgentLoopResult = {
   outcome: 'approved',
@@ -104,7 +108,7 @@ async function streamSseFrames(
   }
 }
 
-async function createIntegrationHarness(options?: { radicleModule?: RadicleModule }) {
+async function createIntegrationHarness(options?: { radicleModule?: RadicleModule; terminalModule?: TerminalModule }) {
   const tmpBase = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-ui-server-tests-'))
   const dbFile = path.join(tmpBase, 'runtime.db')
   const fakeCodeServer = await startFakeCodeServer()
@@ -139,6 +143,7 @@ async function createIntegrationHarness(options?: { radicleModule?: RadicleModul
   }) as Mock<[CodeServerOptions], CodeServerController>
 
   const radicleModule = options?.radicleModule ?? createFakeRadicleModule(radicleWorkspaceRoot)
+  const terminalModule = options?.terminalModule ?? createFakeTerminalModule()
 
   const appServer = createServerApp({
     runLoop,
@@ -146,7 +151,8 @@ async function createIntegrationHarness(options?: { radicleModule?: RadicleModul
     tmpDir: tmpBase,
     allocatePort: async () => fakeCodeServer.port,
     persistenceFile: dbFile,
-    radicleModule
+    radicleModule,
+    terminalModule
   })
 
   const httpServer = appServer.start(0)
@@ -163,6 +169,7 @@ async function createIntegrationHarness(options?: { radicleModule?: RadicleModul
       await new Promise<void>((resolve) => httpServer.close(() => resolve()))
       await appServer.shutdown()
       await radicleModule.cleanup()
+      await terminalModule.cleanup()
       await fakeCodeServer.close()
       await fs.rm(tmpBase, { recursive: true, force: true })
     }
@@ -230,6 +237,137 @@ function createFakeRadicleModule(workspaceRoot: string): RadicleModule {
     }),
     cleanup: async () => {}
   }
+}
+
+function createFakeTerminalModule(): TerminalModule {
+  const sessions = new Map<string, TerminalSessionRecord>()
+  const liveSessions = new Map<string, LiveTerminalSession>()
+
+  const createSession = async (userId: string, options?: { cwd?: string; shell?: string }) => {
+    const record: TerminalSessionRecord = {
+      id: crypto.randomUUID(),
+      userId,
+      projectId: null,
+      shellCommand: options?.shell ?? '/bin/sh',
+      initialCwd: options?.cwd ?? process.cwd(),
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      closedAt: null
+    }
+    sessions.set(record.id, record)
+    return record
+  }
+
+  const attachSession = async (sessionId: string, userId: string) => {
+    const record = sessions.get(sessionId)
+    if (!record) throw new Error('Session not found')
+    if (record.userId !== userId) throw new Error('Unauthorized')
+    const existing = liveSessions.get(sessionId)
+    if (existing) return existing
+    const pty = createFakePty(() => {
+      record.status = 'closed'
+      record.closedAt = new Date().toISOString()
+      liveSessions.delete(sessionId)
+    })
+    const live: LiveTerminalSession = {
+      id: record.id,
+      userId: record.userId,
+      record,
+      pty: pty as unknown as LiveTerminalSession['pty']
+    }
+    liveSessions.set(sessionId, live)
+    return live
+  }
+
+  const closeSession = async (sessionId: string, userId: string) => {
+    const record = sessions.get(sessionId)
+    if (!record || record.userId !== userId) return
+    const live = liveSessions.get(sessionId)
+    if (live) {
+      liveSessions.delete(sessionId)
+      live.pty.kill()
+    }
+    record.status = 'closed'
+    record.closedAt = new Date().toISOString()
+  }
+
+  const listSessions = async (userId: string) => {
+    return [...sessions.values()].filter((record) => record.userId === userId)
+  }
+
+  const getSession = async (sessionId: string) => {
+    return sessions.get(sessionId) ?? null
+  }
+
+  const cleanup = async () => {
+    for (const live of liveSessions.values()) {
+      live.pty.kill()
+    }
+    liveSessions.clear()
+    sessions.clear()
+  }
+
+  return {
+    createSession,
+    attachSession,
+    closeSession,
+    listSessions,
+    getSession,
+    cleanup
+  }
+}
+
+function createFakePty(onExit: () => void) {
+  let cols = 80
+  let rows = 24
+  let closed = false
+  const dataListeners = new Set<(chunk: string) => void>()
+  const exitListeners = new Set<(payload: { exitCode: number; signal?: number }) => void>()
+
+  const emitData = (chunk: string) => {
+    dataListeners.forEach((listener) => listener(chunk))
+  }
+
+  const emitExit = () => {
+    if (closed) return
+    closed = true
+    exitListeners.forEach((listener) => listener({ exitCode: 0 }))
+    onExit()
+  }
+
+  const fake = {
+    cols,
+    rows,
+    onData: (listener: (chunk: string) => void) => {
+      dataListeners.add(listener)
+      return { dispose: () => dataListeners.delete(listener) }
+    },
+    onExit: (listener: (payload: { exitCode: number }) => void) => {
+      exitListeners.add(listener)
+      return { dispose: () => exitListeners.delete(listener) }
+    },
+    write: (input: string) => {
+      const normalized = input.trim()
+      if (normalized.startsWith('echo ')) {
+        const output = normalized.slice(5)
+        setTimeout(() => emitData(`${output}\n`), 5)
+      } else {
+        setTimeout(() => emitData(`${input}`), 5)
+      }
+      if (/exit/i.test(normalized)) {
+        setTimeout(() => emitExit(), 10)
+      }
+    },
+    resize: (nextCols: number, nextRows: number) => {
+      if (nextCols > 0) cols = nextCols
+      if (nextRows > 0) rows = nextRows
+      fake.cols = cols
+      fake.rows = rows
+    },
+    kill: () => emitExit()
+  }
+
+  return fake
 }
 
 const RAD_REAL_STUB_ID = 'ztestrid1234'
@@ -567,6 +705,87 @@ describe('createServerApp', () => {
       expect(match).toBeTruthy()
       expect(match.radicle).not.toBeNull()
       expect(match.project.id).toContain('rad-only')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('creates terminal sessions and streams output via websocket', { timeout: 20000 }, async () => {
+    const harness = await createIntegrationHarness()
+    try {
+      const initialList = await fetch(`${harness.baseUrl}/api/terminal/sessions`)
+      expect(initialList.status).toBe(200)
+      const initialPayload = await initialList.json()
+      expect(initialPayload.sessions).toBeInstanceOf(Array)
+
+      const createResponse = await fetch(`${harness.baseUrl}/api/terminal/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd: process.cwd() })
+      })
+      expect(createResponse.status).toBe(201)
+      const { session } = await createResponse.json()
+      expect(session.status).toBe('active')
+
+      const wsUrl = new URL(`/ws/terminal/${session.id}`, harness.baseUrl)
+      wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+      const socket = new WebSocket(wsUrl)
+      const marker = '__hyper_terminal__'
+      let outputBuffer = ''
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('Timed out waiting for terminal output')), 12000)
+
+          const handleMessage = (data: WebSocket.RawData) => {
+            try {
+              const payload = JSON.parse(data.toString())
+              if (payload.type === 'ready') {
+                socket.send(JSON.stringify({ type: 'input', data: `echo ${marker}\n` }))
+                socket.send(JSON.stringify({ type: 'input', data: 'exit\n' }))
+              }
+              if (payload.type === 'output' && typeof payload.data === 'string') {
+                outputBuffer += payload.data
+              }
+              if (payload.type === 'exit') {
+                clearTimeout(timer)
+                resolve()
+              }
+              if (payload.type === 'error') {
+                clearTimeout(timer)
+                reject(new Error(payload.message ?? 'Terminal error'))
+              }
+            } catch (error) {
+              clearTimeout(timer)
+              reject(error instanceof Error ? error : new Error('Malformed terminal payload'))
+            }
+          }
+
+          socket.on('message', handleMessage)
+          socket.once('error', (error) => {
+            clearTimeout(timer)
+            reject(error instanceof Error ? error : new Error('Terminal socket error'))
+          })
+          socket.once('close', () => {
+            clearTimeout(timer)
+          })
+        })
+      } finally {
+        socket.close()
+      }
+
+      expect(outputBuffer).toContain(marker)
+
+      const deleteResponse = await fetch(`${harness.baseUrl}/api/terminal/sessions/${session.id}`, {
+        method: 'DELETE'
+      })
+      expect(deleteResponse.status).toBe(204)
+
+      const finalList = await fetch(`${harness.baseUrl}/api/terminal/sessions`)
+      expect(finalList.status).toBe(200)
+      const finalPayload = await finalList.json()
+      const saved = finalPayload.sessions.find((entry: any) => entry.id === session.id)
+      expect(saved).toBeTruthy()
+      expect(saved.status).toBe('closed')
     } finally {
       await harness.close()
     }

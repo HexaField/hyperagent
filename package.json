@@ -27,6 +27,8 @@
   "license": "MIT",
   "dependencies": {
     "@solidjs/router": "^0.15.4",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "app-root-path": "^3.1.0",
     "axios": "^1.13.2",
     "better-sqlite3": "^12.4.6",
@@ -34,9 +36,11 @@
     "express": "^5.1.0",
     "http-proxy-middleware": "^3.0.5",
     "multer": "^2.0.2",
+    "node-pty": "^1.0.0",
     "ollama": "^0.6.0",
     "pacote": "^21.0.4",
     "solid-js": "^1.9.3",
+    "ws": "^8.18.3",
     "zod": "^4.1.12",
     "zod-to-json-schema": "^3.25.0"
   },
@@ -53,6 +57,7 @@
     "@types/node": "^20.4.2",
     "@types/pacote": "^11.1.8",
     "@types/supertest": "^6.0.3",
+    "@types/ws": "^8.18.1",
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.2",
     "cross-fetch": "^3.1.8",

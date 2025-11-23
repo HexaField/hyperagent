@@ -22,6 +22,7 @@ import {
   type RadicleRegistrationRecord
 } from '../../src/modules/persistence'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
+import { createTerminalModule, type LiveTerminalSession, type TerminalModule } from '../../src/modules/terminal'
 import {
   createWorkflowRuntime,
   type PlannerRun,
@@ -29,6 +30,7 @@ import {
   type WorkflowDetail,
   type WorkflowRuntime
 } from '../../src/modules/workflows'
+import WebSocket, { type RawData, WebSocketServer } from 'ws'
 
 const DEFAULT_PORT = Number(process.env.UI_SERVER_PORT || 5556)
 const CODE_SERVER_HOST = process.env.CODE_SERVER_HOST || '127.0.0.1'
@@ -90,6 +92,7 @@ export type CreateServerOptions = {
   workflowRuntime?: WorkflowRuntime
   workflowPollIntervalMs?: number
   radicleModule?: RadicleModule
+  terminalModule?: TerminalModule
 }
 
 export type ServerInstance = {
@@ -137,6 +140,26 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       tempRootDir: process.env.RADICLE_TEMP_DIR
     })
 
+  const maxTerminalSessionsEnv = process.env.TERMINAL_MAX_SESSIONS ?? process.env.TERMINAL_MAX_SESSIONS_PER_USER
+  const normalizedMaxTerminalSessions = (() => {
+    if (!maxTerminalSessionsEnv) return undefined
+    const parsed = Number(maxTerminalSessionsEnv)
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined
+  })()
+
+  const manageTerminalLifecycle = !options.terminalModule
+  const terminalModule =
+    options.terminalModule ??
+    createTerminalModule({
+      config: {
+        defaultShell: process.env.TERMINAL_DEFAULT_SHELL ?? process.env.SHELL ?? '/bin/bash',
+        defaultCwd: process.env.TERMINAL_DEFAULT_CWD ?? process.cwd(),
+        maxSessionsPerUser: normalizedMaxTerminalSessions,
+        env: process.env
+      },
+      repository: persistence.terminalSessions
+    })
+
   const gitAuthor = detectGitAuthorFromCli()
   const commitAuthor = {
     name: gitAuthor?.name ?? process.env.WORKFLOW_AUTHOR_NAME ?? 'Hyperagent Workflow',
@@ -162,6 +185,37 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   app.use(express.json({ limit: '1mb' }))
 
   const activeCodeServers = new Map<string, CodeServerSession>()
+  const terminalWsServer = new WebSocketServer({ noServer: true })
+  const DEFAULT_TERMINAL_USER_ID = process.env.TERMINAL_DEFAULT_USER_ID ?? 'anonymous'
+  const USER_ID_HEADER_KEYS = ['x-user-id', 'x-user', 'x-hyperagent-user'] as const
+
+  const pickUserIdValue = (value: string | string[] | undefined): string | null => {
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (typeof entry !== 'string') continue
+        const trimmed = entry.trim()
+        if (trimmed.length) return trimmed
+      }
+      return null
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      return trimmed.length ? trimmed : null
+    }
+    return null
+  }
+
+  const resolveUserIdFromHeaders = (headers: IncomingMessage['headers']): string => {
+    for (const key of USER_ID_HEADER_KEYS) {
+      const candidate = pickUserIdValue(headers[key])
+      if (candidate) return candidate
+    }
+    return DEFAULT_TERMINAL_USER_ID
+  }
+
+  const resolveUserIdFromRequest = (req: Request): string => {
+    return resolveUserIdFromHeaders(req.headers)
+  }
 
   function ensureEphemeralProject(sessionId: string, sessionDir: string): ProjectRecord {
     return persistence.projects.upsert({
@@ -391,6 +445,12 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   function extractSessionIdFromUrl(rawUrl: string | undefined): string | null {
     if (!rawUrl) return null
     const match = rawUrl.match(/^\/code-server\/([^/?#]+)/)
+    return match?.[1] ?? null
+  }
+
+  function extractTerminalSessionId(rawUrl: string | undefined): string | null {
+    if (!rawUrl) return null
+    const match = rawUrl.match(/^\/ws\/terminal\/([^/?#]+)/)
     return match?.[1] ?? null
   }
 
@@ -862,6 +922,50 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     res.json({ sessions: persistence.codeServerSessions.listActive() })
   }
 
+  const listTerminalSessionsHandler: RequestHandler = async (req, res) => {
+    try {
+      const userId = resolveUserIdFromRequest(req)
+      const sessions = await terminalModule.listSessions(userId)
+      res.json({ sessions })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to list terminal sessions'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const createTerminalSessionHandler: RequestHandler = async (req, res) => {
+    const userId = resolveUserIdFromRequest(req)
+    const { cwd, shell, projectId } = req.body ?? {}
+    try {
+      const session = await terminalModule.createSession(userId, {
+        cwd: typeof cwd === 'string' && cwd.trim().length ? cwd : undefined,
+        shell: typeof shell === 'string' && shell.trim().length ? shell : undefined,
+        projectId: typeof projectId === 'string' && projectId.trim().length ? projectId : null
+      })
+      res.status(201).json({ session })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create terminal session'
+      const statusCode = /too many active terminal sessions/i.test(message) ? 429 : 500
+      res.status(statusCode).json({ error: message })
+    }
+  }
+
+  const deleteTerminalSessionHandler: RequestHandler = async (req, res) => {
+    const userId = resolveUserIdFromRequest(req)
+    const sessionId = req.params.sessionId
+    if (!sessionId) {
+      res.status(400).json({ error: 'sessionId is required' })
+      return
+    }
+    const record = await terminalModule.getSession(sessionId)
+    if (!record || record.userId !== userId) {
+      res.status(404).json({ error: 'Unknown terminal session' })
+      return
+    }
+    await terminalModule.closeSession(sessionId, userId)
+    res.status(204).end()
+  }
+
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true })
   })
@@ -879,11 +983,108 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   app.get('/api/workflows/:workflowId', workflowDetailHandler)
   app.get('/api/workflows/:workflowId/steps/:stepId/diff', workflowStepDiffHandler)
   app.get('/api/code-server/sessions', listCodeSessionsHandler)
+  app.get('/api/terminal/sessions', listTerminalSessionsHandler)
+  app.post('/api/terminal/sessions', createTerminalSessionHandler)
+  app.delete('/api/terminal/sessions/:sessionId', deleteTerminalSessionHandler)
   app.post('/api/agent/run', agentRunHandler)
+
+  const sendTerminalPayload = (socket: WebSocket, payload: Record<string, unknown>) => {
+    if (socket.readyState !== WebSocket.OPEN) return
+    socket.send(JSON.stringify(payload))
+  }
+
+  const rawDataToString = (raw: RawData): string => {
+    if (typeof raw === 'string') return raw
+    if (Buffer.isBuffer(raw)) return raw.toString('utf8')
+    if (Array.isArray(raw)) {
+      return Buffer.concat(raw.map((item) => (Buffer.isBuffer(item) ? item : Buffer.from(item)))).toString('utf8')
+    }
+    return Buffer.from(raw as ArrayBuffer).toString('utf8')
+  }
+
+  const handleTerminalSocketMessage = (raw: RawData, live: LiveTerminalSession) => {
+    let parsed: any
+    try {
+      parsed = JSON.parse(rawDataToString(raw))
+    } catch {
+      return
+    }
+    if (parsed?.type === 'input' && typeof parsed.data === 'string') {
+      live.pty.write(parsed.data)
+      return
+    }
+    if (parsed?.type === 'resize') {
+      const cols = typeof parsed.cols === 'number' && parsed.cols > 0 ? parsed.cols : undefined
+      const rows = typeof parsed.rows === 'number' && parsed.rows > 0 ? parsed.rows : undefined
+      if (cols || rows) {
+        live.pty.resize(cols ?? live.pty.cols, rows ?? live.pty.rows)
+      }
+      return
+    }
+    if (parsed?.type === 'close') {
+      void terminalModule.closeSession(live.id, live.userId)
+    }
+  }
+
+  terminalWsServer.on('connection', (socket, request) => {
+    const sessionId = extractTerminalSessionId(request.url)
+    if (!sessionId) {
+      socket.close(1008, 'Missing terminal session id')
+      return
+    }
+    const userId = resolveUserIdFromHeaders(request.headers)
+    ;(async () => {
+      try {
+        const live = await terminalModule.attachSession(sessionId, userId)
+        sendTerminalPayload(socket, { type: 'ready', sessionId: live.id })
+        const disposables: Array<() => void> = []
+        const dataSubscription = live.pty.onData((data) => {
+          sendTerminalPayload(socket, { type: 'output', data })
+        })
+        const exitSubscription = live.pty.onExit(({ exitCode, signal }) => {
+          sendTerminalPayload(socket, {
+            type: 'exit',
+            exitCode,
+            signal: typeof signal === 'number' ? signal : null
+          })
+          socket.close(1000)
+        })
+        disposables.push(() => dataSubscription.dispose())
+        disposables.push(() => exitSubscription.dispose())
+
+        const messageHandler = (raw: RawData) => handleTerminalSocketMessage(raw, live)
+        socket.on('message', messageHandler)
+        const cleanup = () => {
+          if (!disposables.length) return
+          while (disposables.length) {
+            const dispose = disposables.pop()
+            try {
+              dispose?.()
+            } catch {
+              // ignore
+            }
+          }
+          socket.off('message', messageHandler)
+        }
+        socket.on('close', cleanup)
+        socket.on('error', cleanup)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to attach terminal session'
+        sendTerminalPayload(socket, { type: 'error', message })
+        socket.close(1011, message.slice(0, 120))
+      }
+    })()
+  })
 
   app.use('/code-server/:sessionId', codeServerProxyHandler)
 
   const handleUpgrade = (req: IncomingMessage, socket: Socket, head: Buffer) => {
+    if (extractTerminalSessionId(req.url)) {
+      terminalWsServer.handleUpgrade(req, socket, head, (ws) => {
+        terminalWsServer.emit('connection', ws, req)
+      })
+      return
+    }
     const sessionIdFromUrl = extractSessionIdFromUrl(req.url)
     if (!sessionIdFromUrl) {
       socket.destroy()
@@ -907,6 +1108,14 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
 
   const shutdownApp = async () => {
     await shutdownAllCodeServers()
+    terminalWsServer.clients.forEach((client) => {
+      try {
+        client.close()
+      } catch {
+        // ignore
+      }
+    })
+    await new Promise<void>((resolve) => terminalWsServer.close(() => resolve()))
     if (manageWorkerLifecycle) {
       await workflowRuntime.stopWorker()
     }
@@ -915,6 +1124,9 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     }
     if (manageRadicleLifecycle) {
       await radicleModule.cleanup()
+    }
+    if (manageTerminalLifecycle) {
+      await terminalModule.cleanup()
     }
   }
 
