@@ -23,6 +23,7 @@ import {
 } from '../../src/modules/database'
 import { listBranchCommits, listGitBranches } from '../../src/modules/git'
 import type { Provider } from '../../src/modules/llm'
+import { createAgentWorkflowExecutor } from '../../src/modules/workflowAgentExecutor'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import { createTerminalModule, type LiveTerminalSession, type TerminalModule } from '../../src/modules/terminal'
 import {
@@ -37,6 +38,24 @@ const DEFAULT_PORT = Number(process.env.UI_SERVER_PORT || 5556)
 const CODE_SERVER_HOST = process.env.CODE_SERVER_HOST || '127.0.0.1'
 const GRAPH_BRANCH_LIMIT = Math.max(Number(process.env.REPO_GRAPH_BRANCH_LIMIT ?? 6) || 6, 1)
 const GRAPH_COMMITS_PER_BRANCH = Math.max(Number(process.env.REPO_GRAPH_COMMITS_PER_BRANCH ?? 25) || 25, 1)
+const WORKFLOW_AGENT_PROVIDER = normalizeWorkflowProvider(process.env.WORKFLOW_AGENT_PROVIDER)
+const WORKFLOW_AGENT_MODEL = process.env.WORKFLOW_AGENT_MODEL
+const WORKFLOW_AGENT_MAX_ROUNDS = parsePositiveInteger(process.env.WORKFLOW_AGENT_MAX_ROUNDS)
+
+function normalizeWorkflowProvider(raw?: string | null): Provider | undefined {
+  if (!raw) return undefined
+  const normalized = raw.trim().toLowerCase()
+  const allowed: Provider[] = ['ollama', 'opencode', 'goose', 'ollama-cli']
+  return allowed.find((entry) => entry === normalized) as Provider | undefined
+}
+
+function parsePositiveInteger(raw?: string | null): number | undefined {
+  if (!raw) return undefined
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) return undefined
+  const rounded = Math.floor(parsed)
+  return rounded > 0 ? rounded : undefined
+}
 
 export type ProxyWithUpgrade = RequestHandler & {
   upgrade?: (req: IncomingMessage, socket: Socket, head: Buffer) => void
@@ -172,6 +191,13 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     email: gitAuthor?.email ?? process.env.WORKFLOW_AUTHOR_EMAIL ?? 'workflow@hyperagent.local'
   }
 
+  const workflowAgentExecutor = createAgentWorkflowExecutor({
+    runLoop,
+    provider: WORKFLOW_AGENT_PROVIDER,
+    model: WORKFLOW_AGENT_MODEL,
+    maxRounds: WORKFLOW_AGENT_MAX_ROUNDS
+  })
+
   const manageWorkerLifecycle = !options.workflowRuntime
   const workflowRuntime =
     options.workflowRuntime ??
@@ -179,7 +205,8 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       persistence,
       pollIntervalMs: options.workflowPollIntervalMs,
       radicle: radicleModule,
-      commitAuthor
+      commitAuthor,
+      agentExecutor: workflowAgentExecutor
     })
   if (manageWorkerLifecycle) {
     workflowRuntime.startWorker()

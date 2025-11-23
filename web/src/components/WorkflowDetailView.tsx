@@ -1,5 +1,5 @@
 import type { JSX } from 'solid-js'
-import { For, Show, createEffect, createResource, createSignal } from 'solid-js'
+import { For, Show, createEffect, createMemo, createResource, createSignal } from 'solid-js'
 import DiffViewer from './DiffViewer'
 import { fetchJson } from '../lib/http'
 
@@ -37,6 +37,60 @@ type DiffPayload = {
   diffText: string
 }
 
+type AgentWorkerTurn = {
+  round: number
+  parsed: {
+    status: string
+    plan: string
+    work: string
+    requests: string
+  }
+}
+
+type AgentVerifierTurn = {
+  round: number
+  parsed: {
+    verdict: string
+    critique: string
+    instructions: string
+    priority: number
+  }
+}
+
+type AgentConversation = {
+  userInstructions: string
+  outcome: 'approved' | 'failed' | 'max-rounds'
+  reason: string
+  bootstrap: AgentVerifierTurn
+  rounds: Array<{
+    worker: AgentWorkerTurn
+    verifier: AgentVerifierTurn
+  }>
+}
+
+type WorkspaceInfo = {
+  workspacePath: string
+  branchName: string
+  baseBranch: string
+}
+
+type CommitInfo = {
+  branch: string
+  commitHash: string
+  message: string
+  changedFiles: string[]
+}
+
+type WorkflowStepResult = {
+  workspace?: WorkspaceInfo
+  commit?: CommitInfo
+  agent?: AgentConversation
+  summary?: string
+  instructions?: string
+  note?: string
+  error?: string
+}
+
 type WorkflowDetailViewProps = {
   workflowId: string | undefined | null
   actions?: JSX.Element
@@ -62,6 +116,33 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
   )
 
   const workflowRecord = () => detail()?.workflow ?? null
+
+  const selectedStep = createMemo<WorkflowStep | null>(() => {
+    const summary = detail()
+    if (!summary) return null
+    const id = selectedStepId()
+    if (!id) return null
+    return summary.steps.find((step) => step.id === id) ?? null
+  })
+
+  const selectedResult = createMemo<WorkflowStepResult | null>(() => {
+    const step = selectedStep()
+    if (!step?.result) return null
+    return step.result as WorkflowStepResult
+  })
+
+  const selectedAgent = createMemo<AgentConversation | null>(() => selectedResult()?.agent ?? null)
+  const selectedCommit = createMemo<CommitInfo | null>(() => selectedResult()?.commit ?? null)
+  const selectedWorkspace = createMemo<WorkspaceInfo | null>(() => selectedResult()?.workspace ?? null)
+  const stepInstructions = createMemo(() => {
+    const resultInstructions = selectedResult()?.instructions
+    if (typeof resultInstructions === 'string' && resultInstructions.trim().length) {
+      return resultInstructions
+    }
+    const step = selectedStep()
+    const raw = step ? (step.data as Record<string, unknown>)['instructions'] : undefined
+    return typeof raw === 'string' && raw.trim().length ? raw : null
+  })
 
   createEffect(() => {
     const summary = detail()
@@ -151,19 +232,111 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
           </Show>
         </section>
 
-        <section class="flex flex-col gap-3">
-          <header>
-            <h2 class="text-lg font-semibold text-[var(--text)]">Diff preview</h2>
-            <Show when={diffError()}>{(message) => <p class="text-xs text-red-500">{message()}</p>}</Show>
-          </header>
-          <DiffViewer diffText={diff()?.diffText ?? null} />
-        </section>
+        <div class="flex flex-col gap-4">
+          <section class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
+            <header class="space-y-1">
+              <div class="flex items-center justify-between gap-2">
+                <h2 class="text-lg font-semibold text-[var(--text)]">Diff preview</h2>
+                <Show when={selectedCommit()}>
+                  {(commit) => (
+                    <span class="text-xs text-[var(--text-muted)]">
+                      {commit().branch} · {shortHash(commit().commitHash)}
+                    </span>
+                  )}
+                </Show>
+              </div>
+              <Show when={diffError()}>{(message) => <p class="text-xs text-red-500">{message()}</p>}</Show>
+            </header>
+            <DiffViewer diffText={diff()?.diffText ?? null} />
+          </section>
+
+          <section class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
+            <header class="space-y-1">
+              <h2 class="text-lg font-semibold text-[var(--text)]">Task brief & agent trace</h2>
+              <Show when={selectedWorkspace()}>
+                {(workspace) => (
+                  <p class="text-xs text-[var(--text-muted)]">
+                    Branch {workspace().branchName} (base {workspace().baseBranch}) · {workspace().workspacePath}
+                  </p>
+                )}
+              </Show>
+            </header>
+            <div class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-3 text-sm text-[var(--text)]">
+              <Show
+                when={stepInstructions()}
+                fallback={<p class="text-[var(--text-muted)]">No explicit instructions provided for this step.</p>}
+              >
+                {(body) => <p class="whitespace-pre-wrap">{body()}</p>}
+              </Show>
+            </div>
+            <div>
+              <Show
+                when={selectedAgent()}
+                fallback={<p class="text-sm text-[var(--text-muted)]">Agent output not available yet.</p>}
+              >
+                {(agent) => (
+                  <div class="flex flex-col gap-3">
+                    <p class="text-sm text-[var(--text)]">
+                      Outcome ·
+                      <span
+                        class="ml-1 font-semibold"
+                        classList={{
+                          'text-green-600': agent().outcome === 'approved',
+                          'text-amber-600': agent().outcome === 'max-rounds',
+                          'text-red-600': agent().outcome === 'failed'
+                        }}
+                      >
+                        {agent().outcome}
+                      </span>{' '}
+                      — {agent().reason}
+                    </p>
+                    <p class="text-xs text-[var(--text-muted)] whitespace-pre-wrap">{agent().userInstructions}</p>
+                    <div class="divide-y divide-[var(--border)] border border-[var(--border)] rounded-2xl">
+                      <div class="space-y-1 p-4">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Verifier bootstrap</p>
+                        <p class="text-sm text-[var(--text)] whitespace-pre-wrap">
+                          {agent().bootstrap.parsed.instructions || agent().bootstrap.parsed.critique}
+                        </p>
+                      </div>
+                      <For each={agent().rounds}>
+                        {(round) => (
+                          <div class="space-y-3 p-4">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                              Round {round.worker.round}
+                            </p>
+                            <div class="space-y-1">
+                              <p class="text-xs font-semibold text-[var(--text-muted)]">Worker plan</p>
+                              <p class="text-sm text-[var(--text)] whitespace-pre-wrap">
+                                {(round.worker.parsed.plan || round.worker.parsed.work || '').trim() || 'No plan returned.'}
+                              </p>
+                            </div>
+                            <div class="space-y-1">
+                              <p class="text-xs font-semibold text-[var(--text-muted)]">Verifier guidance</p>
+                              <p class="text-sm text-[var(--text)] whitespace-pre-wrap">
+                                {round.verifier.parsed.instructions || round.verifier.parsed.critique}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </div>
+                )}
+              </Show>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   )
 }
 
 function hasCommit(step: WorkflowStep): boolean {
-  const commitPayload = (step.result as Record<string, any> | null)?.commit as Record<string, any> | undefined
+  const commitPayload = (step.result as WorkflowStepResult | null)?.commit
   return typeof commitPayload?.commitHash === 'string'
+}
+
+function shortHash(hash: string): string {
+  if (!hash) return ''
+  return hash.length > 10 ? hash.slice(0, 10) : hash
 }
