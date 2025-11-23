@@ -148,11 +148,14 @@ export default function RepositoriesPage() {
   const [folderStatus, setFolderStatus] = createSignal<string | null>(null)
   const [expandedProjects, setExpandedProjects] = createSignal(new Set<string>())
   const [expandedRadRepos, setExpandedRadRepos] = createSignal(new Set<string>())
+  const [newRepoModalOpen, setNewRepoModalOpen] = createSignal(false)
   const [sessionProject, setSessionProject] = createSignal<Project | null>(null)
   const [sessionName, setSessionName] = createSignal('')
   const [sessionDetails, setSessionDetails] = createSignal('')
   const [sessionStatus, setSessionStatus] = createSignal<string | null>(null)
   const [sessionSubmitting, setSessionSubmitting] = createSignal(false)
+  const [radicleConversionPath, setRadicleConversionPath] = createSignal<string | null>(null)
+  const [radicleConversionStatus, setRadicleConversionStatus] = createSignal<string | null>(null)
   let lastKnownBrowserPath: string | undefined
 
   const [projects, { refetch: refetchProjects }] = createResource(async () => {
@@ -281,11 +284,47 @@ export default function RepositoriesPage() {
     })
   }
 
+  const openNewRepoModal = () => {
+    setStatus(null)
+    setNewRepoModalOpen(true)
+  }
+
+  const closeNewRepoModal = () => {
+    setNewRepoModalOpen(false)
+    setStatus(null)
+  }
+
   const openSessionModal = (project: Project) => {
     setSessionProject(project)
     setSessionName(`${project.name} session`)
     setSessionDetails('')
     setSessionStatus(null)
+  }
+
+  const isSyntheticProject = (project: Project) => project.id.startsWith('rad-only-')
+
+  const convertRadicleRepository = async (entry: RadicleRepositoryEntry) => {
+    const repoPath = entry.project.repositoryPath
+    setRadicleConversionPath(repoPath)
+    setRadicleConversionStatus(null)
+    try {
+      await fetchJson<Project>('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: entry.project.name,
+          repositoryPath: repoPath,
+          description: entry.project.description ?? undefined,
+          defaultBranch: entry.radicle?.defaultBranch ?? entry.project.defaultBranch ?? 'main'
+        })
+      })
+      setRadicleConversionStatus(`Converted ${entry.project.name} into a Hyperagent project`)
+      await Promise.all([refreshProjects(), refetchRadicleRepositories()])
+    } catch (error) {
+      setRadicleConversionStatus(error instanceof Error ? error.message : 'Failed to convert repository')
+    } finally {
+      setRadicleConversionPath(null)
+    }
   }
 
   const closeSessionModal = (force = false) => {
@@ -601,65 +640,19 @@ export default function RepositoriesPage() {
         </Show>
       </section>
 
-      <section class="grid gap-6 lg:grid-cols-[360px,1fr]">
-        <form
-          class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4"
-          onSubmit={handleSubmit}
-        >
-          <h2 class="text-lg font-semibold text-[var(--text)]">New repository</h2>
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-name">
-            Name
-          </label>
-          <input
-            id="repo-name"
-            type="text"
-            class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
-            value={form().name}
-            onInput={(event) => setForm((prev) => ({ ...prev, name: event.currentTarget.value }))}
-          />
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-path">
-            Repository path
-          </label>
-          <input
-            id="repo-path"
-            type="text"
-            class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
-            value={form().repositoryPath}
-            onInput={(event) => setForm((prev) => ({ ...prev, repositoryPath: event.currentTarget.value }))}
-          />
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-branch">
-            Default branch
-          </label>
-          <input
-            id="repo-branch"
-            type="text"
-            class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
-            value={form().defaultBranch}
-            onInput={(event) => setForm((prev) => ({ ...prev, defaultBranch: event.currentTarget.value }))}
-          />
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-description">
-            Description (optional)
-          </label>
-          <textarea
-            id="repo-description"
-            rows={3}
-            class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
-            value={form().description}
-            onInput={(event) => setForm((prev) => ({ ...prev, description: event.currentTarget.value }))}
-          />
-          <button class="rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white" type="submit">
-            Save repository
-          </button>
-          <Show when={status()}>{(message) => <p class="text-xs text-[var(--text-muted)]">{message()}</p>}</Show>
-        </form>
-
-        <div class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
-          <div class="mb-3 flex items-center justify-between">
-            <h2 class="text-lg font-semibold text-[var(--text)]">Hyperagent projects</h2>
-            <button class="text-sm text-blue-600" type="button" onClick={refreshProjects}>
+      <section class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 class="text-lg font-semibold text-[var(--text)]">Hyperagent projects</h2>
+          <div class="flex flex-wrap items-center gap-2">
+            <button class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white" type="button" onClick={openNewRepoModal}>
+              New repository
+            </button>
+            <button class="rounded-xl border border-[var(--border)] px-4 py-2 text-sm" type="button" onClick={refreshProjects}>
               Refresh
             </button>
           </div>
+        </div>
+        <div>
           <Show when={projects()} fallback={<p class="text-sm text-[var(--text-muted)]">No repositories yet.</p>}>
             {(list) => (
               <ul class="flex flex-col gap-3">
@@ -779,6 +772,16 @@ export default function RepositoriesPage() {
                       >
                         {expandedRadRepos().has(entry.project.id) ? 'Hide repo info' : 'Show repo info'}
                       </button>
+                      <Show when={isSyntheticProject(entry.project)}>
+                        <button
+                          class="mt-2 rounded-xl bg-green-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
+                          type="button"
+                          disabled={radicleConversionPath() === entry.project.repositoryPath}
+                          onClick={() => void convertRadicleRepository(entry)}
+                        >
+                          {radicleConversionPath() === entry.project.repositoryPath ? 'Converting…' : 'Convert to Hyperagent project'}
+                        </button>
+                      </Show>
                       <Show when={expandedRadRepos().has(entry.project.id)}>
                         <RepoInfoPanel git={entry.git ?? null} path={entry.project.repositoryPath} />
                       </Show>
@@ -788,6 +791,9 @@ export default function RepositoriesPage() {
               </ul>
             </Show>
           )}
+        </Show>
+        <Show when={radicleConversionStatus()}>
+          {(message) => <p class="mt-3 text-xs text-[var(--text-muted)]">{message()}</p>}
         </Show>
       </section>
 
@@ -854,6 +860,76 @@ export default function RepositoriesPage() {
             </form>
           </div>
         )}
+      </Show>
+
+      <Show when={newRepoModalOpen()}>
+        <div
+          class="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={closeNewRepoModal}
+        >
+          <form
+            data-testid="new-repo-form"
+            class="w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={handleSubmit}
+          >
+            <header class="mb-4">
+              <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">New repository</p>
+              <h2 class="text-2xl font-semibold text-[var(--text)]">Register a project</h2>
+            </header>
+            <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-name">
+              Name
+            </label>
+            <input
+              id="repo-name"
+              type="text"
+              class="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
+              value={form().name}
+              onInput={(event) => setForm((prev) => ({ ...prev, name: event.currentTarget.value }))}
+            />
+            <label class="mt-3 block text-xs font-semibold text-[var(--text-muted)]" for="repo-path">
+              Repository path
+            </label>
+            <input
+              id="repo-path"
+              type="text"
+              class="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
+              value={form().repositoryPath}
+              onInput={(event) => setForm((prev) => ({ ...prev, repositoryPath: event.currentTarget.value }))}
+            />
+            <label class="mt-3 block text-xs font-semibold text-[var(--text-muted)]" for="repo-branch">
+              Default branch
+            </label>
+            <input
+              id="repo-branch"
+              type="text"
+              class="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
+              value={form().defaultBranch}
+              onInput={(event) => setForm((prev) => ({ ...prev, defaultBranch: event.currentTarget.value }))}
+            />
+            <label class="mt-3 block text-xs font-semibold text-[var(--text-muted)]" for="repo-description">
+              Description (optional)
+            </label>
+            <textarea
+              id="repo-description"
+              rows={3}
+              class="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
+              value={form().description}
+              onInput={(event) => setForm((prev) => ({ ...prev, description: event.currentTarget.value }))}
+            />
+            <Show when={status()}>{(message) => <p class="mt-2 text-xs text-[var(--text-muted)]">{message()}</p>}</Show>
+            <div class="mt-4 flex justify-end gap-2">
+              <button class="rounded-xl border border-[var(--border)] px-4 py-2 text-sm" type="button" onClick={closeNewRepoModal}>
+                Cancel
+              </button>
+              <button class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white" type="submit">
+                Save repository
+              </button>
+            </div>
+          </form>
+        </div>
       </Show>
     </div>
   )
