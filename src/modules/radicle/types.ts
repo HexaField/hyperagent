@@ -49,6 +49,22 @@ export type RadiclePatch = {
   description: string
 }
 
+export type RadicleRepositoryInfo = {
+  repositoryPath: string
+  radicleProjectId: string | null
+  remoteUrl: string | null
+  defaultBranch: string | null
+  registered: boolean
+}
+
+export type RadicleStatus = {
+  reachable: boolean
+  loggedIn: boolean
+  identity?: string | null
+  alias?: string | null
+  message?: string | null
+}
+
 export type RadicleRepoManager = ReturnType<typeof createRadicleRepoManager>
 export type WorkspaceManager = ReturnType<typeof createWorkspaceManager>
 
@@ -63,4 +79,6 @@ export type RadicleSessionHandle = {
 export type RadicleModule = {
   createSession: (init: RadicleSessionInit) => Promise<RadicleSessionHandle>
   cleanup: () => Promise<void>
+  inspectRepository: (repositoryPath: string) => Promise<RadicleRepositoryInfo>
+  getStatus: () => Promise<RadicleStatus>
 }

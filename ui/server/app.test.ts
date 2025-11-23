@@ -210,6 +210,19 @@ function createFakeRadicleModule (workspaceRoot: string): RadicleModule {
         abort
       }
     },
+    inspectRepository: async (repositoryPath) => ({
+      repositoryPath,
+      radicleProjectId: 'rad:zfake',
+      remoteUrl: 'rad://zfake',
+      defaultBranch: 'main',
+      registered: true
+    }),
+    getStatus: async () => ({
+      reachable: true,
+      loggedIn: true,
+      identity: 'did:key:zFake',
+      alias: 'tester'
+    }),
     cleanup: async () => {}
   }
 }
@@ -383,6 +396,34 @@ describe('createServerApp', () => {
       expect(diffResponse.status).toBe(404)
       const diffPayload = await diffResponse.json()
       expect(diffPayload).toHaveProperty('error')
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('reports Radicle status and repository registrations', async () => {
+    const harness = await createIntegrationHarness()
+    try {
+      const statusResponse = await fetch(`${harness.baseUrl}/api/radicle/status`)
+      expect(statusResponse.status).toBe(200)
+      const statusPayload = await statusResponse.json()
+      expect(statusPayload.status.reachable).toBe(true)
+      expect(statusPayload.status.loggedIn).toBe(true)
+
+      const projectResponse = await fetch(`${harness.baseUrl}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Rad Repo', repositoryPath: '/tmp/rad' })
+      })
+      expect(projectResponse.status).toBe(201)
+
+      const repoResponse = await fetch(`${harness.baseUrl}/api/radicle/repositories`)
+      expect(repoResponse.status).toBe(200)
+      const repoPayload = await repoResponse.json()
+      expect(repoPayload.repositories.length).toBeGreaterThan(0)
+      const firstRepo = repoPayload.repositories[0]
+      expect(firstRepo.radicle).not.toBeNull()
+      expect(firstRepo.radicle.registered).toBe(true)
     } finally {
       await harness.close()
     }

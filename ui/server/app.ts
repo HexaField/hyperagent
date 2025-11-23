@@ -3,7 +3,7 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import express from 'express'
 import fs from 'fs/promises'
 import { createProxyMiddleware } from 'http-proxy-middleware'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import type { Server as HttpServer, IncomingMessage } from 'node:http'
 import { createServer, type AddressInfo, type Socket } from 'node:net'
 import os from 'os'
@@ -115,9 +115,10 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       tempRootDir: process.env.RADICLE_TEMP_DIR
     })
 
+  const gitAuthor = detectGitAuthorFromCli()
   const commitAuthor = {
-    name: process.env.WORKFLOW_AUTHOR_NAME ?? 'Hyperagent Workflow',
-    email: process.env.WORKFLOW_AUTHOR_EMAIL ?? 'workflow@hyperagent.local'
+    name: gitAuthor?.name ?? process.env.WORKFLOW_AUTHOR_NAME ?? 'Hyperagent Workflow',
+    email: gitAuthor?.email ?? process.env.WORKFLOW_AUTHOR_EMAIL ?? 'workflow@hyperagent.local'
   }
 
   const manageWorkerLifecycle = !options.workflowRuntime
@@ -400,6 +401,51 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     session.proxy(req, res, next)
   }
 
+  const radicleStatusHandler: RequestHandler = async (_req, res) => {
+    try {
+      const status = await radicleModule.getStatus()
+      res.json({ status })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to read Radicle status'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const radicleRepositoriesHandler: RequestHandler = async (_req, res) => {
+    try {
+      const projects = persistence.projects.list()
+      const uniquePaths = [...new Set(projects.map(project => path.resolve(project.repositoryPath)))]
+      const inspections = await Promise.all(
+        uniquePaths.map(async repoPath => {
+          try {
+            const info = await radicleModule.inspectRepository(repoPath)
+            return { path: repoPath, info }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Radicle inspection failed'
+            return { path: repoPath, info: null, error: message }
+          }
+        })
+      )
+      const inspectionMap = new Map<string, { info: Awaited<ReturnType<typeof radicleModule.inspectRepository>> | null; error?: string }>()
+      inspections.forEach(entry => {
+        inspectionMap.set(entry.path, { info: entry.info, error: entry.error })
+      })
+      const payload = projects.map(project => {
+        const resolved = path.resolve(project.repositoryPath)
+        const entry = inspectionMap.get(resolved)
+        return {
+          project,
+          radicle: entry?.info ?? null,
+          error: entry?.error ?? null
+        }
+      })
+      res.json({ repositories: payload })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to list Radicle repositories'
+      res.status(500).json({ error: message })
+    }
+  }
+
   const repositoryGraphHandler: RequestHandler = (req, res) => {
     const projectId = req.params.projectId
     if (!projectId) {
@@ -597,6 +643,8 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     res.json({ ok: true })
   })
 
+  app.get('/api/radicle/status', radicleStatusHandler)
+  app.get('/api/radicle/repositories', radicleRepositoriesHandler)
   app.get('/api/projects', listProjectsHandler)
   app.get('/api/projects/:projectId/graph', repositoryGraphHandler)
   app.post('/api/projects', createProjectHandler)
@@ -656,4 +704,35 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       codeServerProxy: codeServerProxyHandler
     }
   }
+}
+
+function detectGitAuthorFromCli (): { name: string; email: string } | null {
+  const name = readGitConfigValue('user.name')
+  const email = readGitConfigValue('user.email')
+  if (name && email) {
+    return { name, email }
+  }
+  return null
+}
+
+function readGitConfigValue (key: string): string | null {
+  const attempts: string[][] = [
+    ['config', '--get', key],
+    ['config', '--global', '--get', key],
+    ['config', '--system', '--get', key]
+  ]
+  for (const args of attempts) {
+    try {
+      const result = spawnSync('git', args, { encoding: 'utf8' })
+      if (result.status === 0) {
+        const value = result.stdout.trim()
+        if (value.length) {
+          return value
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null
 }

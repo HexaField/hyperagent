@@ -11,6 +11,18 @@ type Project = {
   createdAt: string
 }
 
+type RadicleRepositoryEntry = {
+  project: Project
+  radicle: {
+    repositoryPath: string
+    radicleProjectId: string | null
+    remoteUrl: string | null
+    defaultBranch: string | null
+    registered: boolean
+  } | null
+  error?: string | null
+}
+
 export default function RepositoriesPage () {
   const [form, setForm] = createSignal({
     name: '',
@@ -20,9 +32,14 @@ export default function RepositoriesPage () {
   })
   const [status, setStatus] = createSignal<string | null>(null)
 
-  const [projects, { refetch }] = createResource(async () => {
+  const [projects, { refetch: refetchProjects }] = createResource(async () => {
     const payload = await fetchJson<{ projects: Project[] }>('/api/projects')
     return payload.projects
+  })
+
+  const [radicleRepositories, { refetch: refetchRadicleRepositories }] = createResource(async () => {
+    const payload = await fetchJson<{ repositories: RadicleRepositoryEntry[] }>('/api/radicle/repositories')
+    return payload.repositories
   })
 
   const handleSubmit = async (event: SubmitEvent) => {
@@ -44,10 +61,14 @@ export default function RepositoriesPage () {
       })
       setForm({ name: '', repositoryPath: '', description: '', defaultBranch: 'main' })
       setStatus('Project created')
-      await refetch()
+      await Promise.all([refetchProjects(), refetchRadicleRepositories()])
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Failed to create project')
     }
+  }
+
+  const refreshProjects = async () => {
+    await Promise.all([refetchProjects(), refetchRadicleRepositories()])
   }
 
   return (
@@ -103,8 +124,8 @@ export default function RepositoriesPage () {
 
         <div class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
           <div class="mb-3 flex items-center justify-between">
-            <h2 class="text-lg font-semibold text-[var(--text)]">Registered repositories</h2>
-            <button class="text-sm text-blue-600" type="button" onClick={() => refetch()}>
+            <h2 class="text-lg font-semibold text-[var(--text)]">Hyperagent projects</h2>
+            <button class="text-sm text-blue-600" type="button" onClick={refreshProjects}>
               Refresh
             </button>
           </div>
@@ -137,6 +158,56 @@ export default function RepositoriesPage () {
             )}
           </Show>
         </div>
+
+      </section>
+
+      <section class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="text-lg font-semibold text-[var(--text)]">Radicle tracked repositories</h2>
+            <p class="text-sm text-[var(--text-muted)]">Direct from your rad remote, independent of workflow activity.</p>
+          </div>
+          <button class="text-sm text-blue-600" type="button" onClick={() => refetchRadicleRepositories()}>
+            Refresh
+          </button>
+        </div>
+        <Show when={radicleRepositories()} fallback={<p class="text-sm text-[var(--text-muted)]">Loading Radicle repositories…</p>}>
+          {items => (
+            <Show when={items().length} fallback={<p class="text-sm text-[var(--text-muted)]">No Radicle repositories detected yet.</p>}>
+              <ul class="flex flex-col gap-3">
+                <For each={items()}>
+                  {entry => (
+                    <li
+                      class="rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-4"
+                      classList={{ 'border-green-500': entry.radicle?.registered }}
+                    >
+                      <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p class="text-lg font-semibold text-[var(--text)]">{entry.project.name}</p>
+                          <p class="text-xs text-[var(--text-muted)]">{entry.project.repositoryPath}</p>
+                        </div>
+                        <Show when={entry.radicle?.registered} fallback={<span class="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700">Not registered</span>}>
+                          <span class="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">Registered</span>
+                        </Show>
+                      </div>
+                      <div class="mt-3 flex flex-wrap items-center gap-3 text-xs text-[var(--text-muted)]">
+                        <Show when={entry.radicle?.radicleProjectId} fallback={<span>No Radicle project detected</span>}>
+                          {id => <span>Project ID: <code class="rounded bg-[var(--bg-card)] px-1">{id()}</code></span>}
+                        </Show>
+                        <Show when={entry.radicle?.defaultBranch}>
+                          {branch => <span>Default branch: {branch()}</span>}
+                        </Show>
+                        <Show when={entry.error}>
+                          {error => <span class="text-red-600">{error()}</span>}
+                        </Show>
+                      </div>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+          )}
+        </Show>
       </section>
     </div>
   )
