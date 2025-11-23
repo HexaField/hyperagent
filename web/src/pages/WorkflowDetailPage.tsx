@@ -37,15 +37,18 @@ type DiffPayload = {
   diffText: string
 }
 
-export default function WorkflowDetailPage () {
+export default function WorkflowDetailPage() {
   const params = useParams()
   const [selectedStepId, setSelectedStepId] = createSignal<string | null>(null)
   const [diffError, setDiffError] = createSignal<string | null>(null)
 
-  const [detail] = createResource(() => params.workflowId, async (workflowId) => {
-    if (!workflowId) return null
-    return await fetchJson<WorkflowDetail>(`/api/workflows/${workflowId}`)
-  })
+  const [detail] = createResource(
+    () => params.workflowId,
+    async (workflowId) => {
+      if (!workflowId) return null
+      return await fetchJson<WorkflowDetail>(`/api/workflows/${workflowId}`)
+    }
+  )
 
   const workflowRecord = () => detail()?.workflow ?? null
 
@@ -53,7 +56,7 @@ export default function WorkflowDetailPage () {
     const summary = detail()
     if (!summary) return
     if (!selectedStepId()) {
-      const firstWithCommit = summary.steps.find(step => hasCommit(step))
+      const firstWithCommit = summary.steps.find((step) => hasCommit(step))
       setSelectedStepId(firstWithCommit?.id ?? summary.steps[0]?.id ?? null)
     }
   })
@@ -86,22 +89,26 @@ export default function WorkflowDetailPage () {
             {workflowRecord() ? `${workflowRecord()!.kind} workflow` : 'Loading…'}
           </h1>
           <Show when={workflowRecord()}>
-            {workflow => (
-              <p class="text-[var(--text-muted)]">Status · {workflow().status} — started {new Date(workflow().createdAt).toLocaleString()}</p>
+            {(workflow) => (
+              <p class="text-[var(--text-muted)]">
+                Status · {workflow().status} — started {new Date(workflow().createdAt).toLocaleString()}
+              </p>
             )}
           </Show>
         </div>
-        <A href="/workflows" class="text-sm text-blue-600">Back to workflows</A>
+        <A href="/workflows" class="text-sm text-blue-600">
+          Back to workflows
+        </A>
       </header>
 
       <div class="grid gap-6 lg:grid-cols-[320px,1fr]">
         <section class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
           <h2 class="mb-3 text-lg font-semibold text-[var(--text)]">Steps</h2>
           <Show when={detail()} fallback={<p class="text-sm text-[var(--text-muted)]">Loading steps…</p>}>
-            {payload => (
+            {(payload) => (
               <ol class="flex flex-col gap-2">
                 <For each={payload().steps}>
-                  {step => (
+                  {(step) => (
                     <li>
                       <button
                         type="button"
@@ -113,7 +120,11 @@ export default function WorkflowDetailPage () {
                         onClick={() => setSelectedStepId(step.id)}
                       >
                         <div class="flex items-center justify-between gap-3">
-                          <span class="font-semibold">{typeof step.data?.title === 'string' ? (step.data.title as string) : `Step ${step.sequence}`}</span>
+                          <span class="font-semibold">
+                            {typeof step.data?.title === 'string'
+                              ? (step.data.title as string)
+                              : `Step ${step.sequence}`}
+                          </span>
                           <span class="text-xs capitalize">{step.status}</span>
                         </div>
                         <Show when={hasCommit(step)}>
@@ -131,9 +142,7 @@ export default function WorkflowDetailPage () {
         <section class="flex flex-col gap-3">
           <header>
             <h2 class="text-lg font-semibold text-[var(--text)]">Diff preview</h2>
-            <Show when={diffError()}>
-              {message => <p class="text-xs text-red-500">{message()}</p>}
-            </Show>
+            <Show when={diffError()}>{(message) => <p class="text-xs text-red-500">{message()}</p>}</Show>
           </header>
           <DiffViewer diffText={diff()?.diffText ?? null} />
         </section>
@@ -142,7 +151,7 @@ export default function WorkflowDetailPage () {
   )
 }
 
-function hasCommit (step: WorkflowStep): boolean {
+function hasCommit(step: WorkflowStep): boolean {
   const commitPayload = (step.result as Record<string, any> | null)?.commit as Record<string, any> | undefined
   return typeof commitPayload?.commitHash === 'string'
 }

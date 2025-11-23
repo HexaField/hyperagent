@@ -1,11 +1,11 @@
+import type { ChildProcess } from 'child_process'
+import { spawn } from 'child_process'
+import { EventEmitter } from 'events'
 import fs from 'fs'
 import os from 'os'
-import path from 'path'
-import { EventEmitter } from 'events'
-import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import pacote from 'pacote'
-import { spawn } from 'child_process'
-import type { ChildProcess } from 'child_process'
+import path from 'path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   ClassContract,
@@ -153,11 +153,7 @@ describe('invokeLibraryContract', () => {
     try {
       await fsp.writeFile(path.join(workDir, 'package.json'), JSON.stringify({ name: 'worker-app', version: '0.0.0' }))
       const entryPath = path.join(workDir, 'adder.js')
-      await fsp.writeFile(
-        entryPath,
-        'module.exports = { async add(a, b) { return Promise.resolve(a + b) } }',
-        'utf-8'
-      )
+      await fsp.writeFile(entryPath, 'module.exports = { async add(a, b) { return Promise.resolve(a + b) } }', 'utf-8')
 
       const contract: FunctionContract = {
         kind: 'function',

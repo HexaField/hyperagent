@@ -105,14 +105,14 @@ const runCliCommand = async (command: string, args: string[], options: { cwd?: s
     })
     let stdout = ''
     let stderr = ''
-    child.stdout.on('data', data => {
+    child.stdout.on('data', (data) => {
       stdout += data.toString()
     })
-    child.stderr.on('data', data => {
+    child.stderr.on('data', (data) => {
       stderr += data.toString()
     })
     child.once('error', reject)
-    child.once('close', code => {
+    child.once('close', (code) => {
       if (code === 0) {
         resolve(stdout.trim())
       } else {
@@ -173,11 +173,13 @@ const readCurrentBranch = async (repoPath: string): Promise<string | null> => {
 
 const listLocalBranches = async (repoPath: string): Promise<string[]> => {
   try {
-    const raw = await runCliCommand('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads'], { cwd: repoPath })
+    const raw = await runCliCommand('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads'], {
+      cwd: repoPath
+    })
     return raw
       .split('\n')
-      .map(entry => entry.trim())
-      .filter(entry => entry.length)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length)
   } catch {
     return []
   }
@@ -215,13 +217,17 @@ const ensureInitialCommitExists = async (repoPath: string) => {
   const hasCommits = await repositoryHasCommits(repoPath)
   if (hasCommits) return
   if (await hasStagedChanges(repoPath)) {
-    throw new Error('Repository has staged changes but no commits. Commit or unstage them before registering with Radicle.')
+    throw new Error(
+      'Repository has staged changes but no commits. Commit or unstage them before registering with Radicle.'
+    )
   }
   const branchName = (await readHeadBranchName(repoPath)) ?? 'main'
   if (!branchName || branchName === 'HEAD') {
     await runCliCommand('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: repoPath })
   }
-  await runCliCommand('git', ['commit', '--allow-empty', '-m', 'Initial commit for Radicle registration'], { cwd: repoPath })
+  await runCliCommand('git', ['commit', '--allow-empty', '-m', 'Initial commit for Radicle registration'], {
+    cwd: repoPath
+  })
 }
 
 const readHeadBranchName = async (repoPath: string): Promise<string | null> => {
@@ -256,7 +262,9 @@ const resolveDefaultBranch = async (repoPath: string): Promise<string> => {
     if (resolved) return resolved
   }
 
-  throw new Error('Unable to determine a Git branch with commits. Create a branch with at least one commit before registering with Radicle.')
+  throw new Error(
+    'Unable to determine a Git branch with commits. Create a branch with at least one commit before registering with Radicle.'
+  )
 }
 
 const hasRadicleProject = async (repoPath: string): Promise<boolean> => {
@@ -322,7 +330,12 @@ const checkRadicleNode = async (): Promise<{ reachable: boolean; message?: strin
   }
 }
 
-const fetchRadicleIdentity = async (): Promise<{ loggedIn: boolean; identity?: string | null; alias?: string | null; message?: string | null }> => {
+const fetchRadicleIdentity = async (): Promise<{
+  loggedIn: boolean
+  identity?: string | null
+  alias?: string | null
+  message?: string | null
+}> => {
   try {
     const raw = await runCliCommand('rad', ['self', '--json'])
     const parsed = JSON.parse(raw)
@@ -340,7 +353,12 @@ const fetchRadicleIdentity = async (): Promise<{ loggedIn: boolean; identity?: s
         alias: null
       }
     } catch (fallbackError) {
-      const message = fallbackError instanceof Error ? fallbackError.message : error instanceof Error ? error.message : 'Radicle identity unavailable'
+      const message =
+        fallbackError instanceof Error
+          ? fallbackError.message
+          : error instanceof Error
+            ? error.message
+            : 'Radicle identity unavailable'
       return {
         loggedIn: false,
         identity: null,

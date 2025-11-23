@@ -149,7 +149,10 @@ describe('LLM CLI integrations', () => {
 
     const sessionName = `itest-session-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     const create = spawnSync('opencode', ['session', 'create', sessionName])
-    expect(create.status, `Unable to create opencode session '${sessionName}': ${create.stderr?.toString?.() || ''}`).toBe(0)
+    expect(
+      create.status,
+      `Unable to create opencode session '${sessionName}': ${create.stderr?.toString?.() || ''}`
+    ).toBe(0)
 
     const sessionDir = path.join(os.tmpdir(), '.test', `opencode-session-${Date.now()}`)
     fs.mkdirSync(sessionDir, { recursive: true })

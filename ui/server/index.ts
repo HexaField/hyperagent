@@ -1,6 +1,6 @@
 import { createServerApp } from './app'
 
-async function startServer () {
+async function startServer() {
   const serverInstance = createServerApp()
   serverInstance.start()
 
@@ -23,7 +23,7 @@ async function startServer () {
   })
 }
 
-startServer().catch(error => {
+startServer().catch((error) => {
   console.error('Failed to start UI server', error)
   process.exit(1)
 })

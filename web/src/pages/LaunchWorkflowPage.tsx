@@ -9,7 +9,7 @@ type Project = {
   repositoryPath: string
 }
 
-export default function LaunchWorkflowPage () {
+export default function LaunchWorkflowPage() {
   const [status, setStatus] = createSignal<string | null>(null)
   const [form, setForm] = createSignal({
     projectId: '',
@@ -26,7 +26,7 @@ export default function LaunchWorkflowPage () {
   createEffect(() => {
     const list = projects()
     if (list && list.length && !form().projectId) {
-      setForm(prev => ({ ...prev, projectId: list[0].id }))
+      setForm((prev) => ({ ...prev, projectId: list[0].id }))
     }
   })
 
@@ -52,7 +52,7 @@ export default function LaunchWorkflowPage () {
           autoStart: form().autoStart
         })
       })
-      setForm(prev => ({ ...prev, tasksInput: '' }))
+      setForm((prev) => ({ ...prev, tasksInput: '' }))
       setStatus('Workflow queued')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Failed to queue workflow')
@@ -65,66 +65,75 @@ export default function LaunchWorkflowPage () {
         <div>
           <p class="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">Launchpad</p>
           <h1 class="text-3xl font-semibold text-[var(--text)]">Queue workflows & run the agent</h1>
-          <p class="text-[var(--text-muted)]">Craft a workflow plan on the left, and keep the autonomous coding agent handy for exploratory runs.</p>
+          <p class="text-[var(--text-muted)]">
+            Craft a workflow plan on the left, and keep the autonomous coding agent handy for exploratory runs.
+          </p>
         </div>
-        <button class="rounded-xl border border-[var(--border)] px-4 py-2 text-sm text-[var(--text)]" type="button" onClick={() => refetch()}>
+        <button
+          class="rounded-xl border border-[var(--border)] px-4 py-2 text-sm text-[var(--text)]"
+          type="button"
+          onClick={() => refetch()}
+        >
           Refresh projects
         </button>
       </header>
 
       <div class="grid gap-6 lg:grid-cols-2">
-        <form class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4" onSubmit={handleSubmit}>
+        <form
+          class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4"
+          onSubmit={handleSubmit}
+        >
           <h2 class="text-lg font-semibold text-[var(--text)]">Workflow blueprint</h2>
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="workflow-project">Project</label>
+          <label class="text-xs font-semibold text-[var(--text-muted)]" for="workflow-project">
+            Project
+          </label>
           <select
             id="workflow-project"
             class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
             value={form().projectId}
-            onChange={event => setForm(prev => ({ ...prev, projectId: event.currentTarget.value }))}
+            onChange={(event) => setForm((prev) => ({ ...prev, projectId: event.currentTarget.value }))}
           >
             <Show when={projects()} fallback={<option value="">Loading projects…</option>}>
-              {list => (
+              {(list) => (
                 <>
-                  <For each={list()}>
-                    {project => (
-                      <option value={project.id}>{project.name}</option>
-                    )}
-                  </For>
+                  <For each={list()}>{(project) => <option value={project.id}>{project.name}</option>}</For>
                 </>
               )}
             </Show>
           </select>
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="workflow-kind">Kind</label>
+          <label class="text-xs font-semibold text-[var(--text-muted)]" for="workflow-kind">
+            Kind
+          </label>
           <input
             id="workflow-kind"
             type="text"
             class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
             value={form().kind}
-            onInput={event => setForm(prev => ({ ...prev, kind: event.currentTarget.value }))}
+            onInput={(event) => setForm((prev) => ({ ...prev, kind: event.currentTarget.value }))}
           />
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="workflow-tasks">Tasks (one per line)</label>
+          <label class="text-xs font-semibold text-[var(--text-muted)]" for="workflow-tasks">
+            Tasks (one per line)
+          </label>
           <textarea
             id="workflow-tasks"
             rows={6}
             class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
             value={form().tasksInput}
-            onInput={event => setForm(prev => ({ ...prev, tasksInput: event.currentTarget.value }))}
+            onInput={(event) => setForm((prev) => ({ ...prev, tasksInput: event.currentTarget.value }))}
             placeholder="Design landing page\nWire up API"
           />
           <label class="flex items-center gap-2 text-sm text-[var(--text)]">
             <input
               type="checkbox"
               checked={form().autoStart}
-              onChange={event => setForm(prev => ({ ...prev, autoStart: event.currentTarget.checked }))}
+              onChange={(event) => setForm((prev) => ({ ...prev, autoStart: event.currentTarget.checked }))}
             />
             Auto start once queued
           </label>
           <button class="rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white" type="submit">
             Queue workflow
           </button>
-          <Show when={status()}>
-            {message => <p class="text-xs text-[var(--text-muted)]">{message()}</p>}
-          </Show>
+          <Show when={status()}>{(message) => <p class="text-xs text-[var(--text-muted)]">{message()}</p>}</Show>
         </form>
 
         <Agent />

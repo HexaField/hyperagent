@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
+import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
-import crypto from 'crypto'
 
 export type Timestamp = string
 
@@ -191,7 +191,7 @@ export type Persistence = {
 
 const DEFAULT_DB_PATH = path.join(process.cwd(), 'data', 'hyperagent.db')
 
-export function createPersistence (options: PersistenceOptions = {}): Persistence {
+export function createPersistence(options: PersistenceOptions = {}): Persistence {
   const file = options.file ?? DEFAULT_DB_PATH
   ensureParentDir(file)
   const db = new Database(file)
@@ -255,7 +255,11 @@ export function createPersistence (options: PersistenceOptions = {}): Persistenc
       return mapWorkflow(row)
     },
     updateStatus: (id, status) => {
-      db.prepare('UPDATE workflows SET status = ?, updated_at = ? WHERE id = ?').run(status, new Date().toISOString(), id)
+      db.prepare('UPDATE workflows SET status = ?, updated_at = ? WHERE id = ?').run(
+        status,
+        new Date().toISOString(),
+        id
+      )
     },
     getById: (id) => {
       const row = db.prepare('SELECT * FROM workflows WHERE id = ?').get(id)
@@ -314,7 +318,7 @@ export function createPersistence (options: PersistenceOptions = {}): Persistenc
         )
         .all()
       const steps = (rows as Array<Record<string, unknown> & { workflow_status: WorkflowStatus }>)
-        .filter(row => row.workflow_status === 'running')
+        .filter((row) => row.workflow_status === 'running')
         .map(mapWorkflowStep)
       const ready: WorkflowStepRecord[] = []
       for (const step of steps) {
@@ -329,7 +333,7 @@ export function createPersistence (options: PersistenceOptions = {}): Persistenc
             `SELECT id, status FROM workflow_steps WHERE workflow_id = ? AND id IN (${deps.map(() => '?').join(',')})`
           )
           .all(step.workflowId, ...deps) as Array<{ status: WorkflowStepStatus }>
-        const satisfied = depStatuses.every(dep => dep.status === 'completed')
+        const satisfied = depStatuses.every((dep) => dep.status === 'completed')
         if (satisfied) {
           ready.push(step)
         }
@@ -386,7 +390,12 @@ export function createPersistence (options: PersistenceOptions = {}): Persistenc
         `UPDATE agent_runs
          SET status = ?, finished_at = ?, logs_path = ?
          WHERE id = ?`
-      ).run(patch.status ?? record.status, patch.finishedAt ?? record.finished_at, patch.logsPath ?? record.logs_path, id)
+      ).run(
+        patch.status ?? record.status,
+        patch.finishedAt ?? record.finished_at,
+        patch.logsPath ?? record.logs_path,
+        id
+      )
     },
     listByWorkflow: (workflowId) => {
       const rows = db
@@ -504,14 +513,14 @@ export function createPersistence (options: PersistenceOptions = {}): Persistenc
   }
 }
 
-function ensureParentDir (file: string): void {
+function ensureParentDir(file: string): void {
   const dir = path.dirname(file)
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true })
   }
 }
 
-function applyMigrations (db: Database.Database): void {
+function applyMigrations(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY,
@@ -582,7 +591,7 @@ function applyMigrations (db: Database.Database): void {
   `)
 }
 
-function mapProject (row: any): ProjectRecord {
+function mapProject(row: any): ProjectRecord {
   return {
     id: row.id,
     name: row.name,
@@ -594,7 +603,7 @@ function mapProject (row: any): ProjectRecord {
   }
 }
 
-function mapWorkflow (row: any): WorkflowRecord {
+function mapWorkflow(row: any): WorkflowRecord {
   return {
     id: row.id,
     projectId: row.project_id,
@@ -607,7 +616,7 @@ function mapWorkflow (row: any): WorkflowRecord {
   }
 }
 
-function mapWorkflowStep (row: any): WorkflowStepRecord {
+function mapWorkflowStep(row: any): WorkflowStepRecord {
   return {
     id: row.id,
     workflowId: row.workflow_id,
@@ -621,7 +630,7 @@ function mapWorkflowStep (row: any): WorkflowStepRecord {
   }
 }
 
-function mapAgentRun (row: any): AgentRunRecord {
+function mapAgentRun(row: any): AgentRunRecord {
   return {
     id: row.id,
     workflowStepId: row.workflow_step_id ?? null,
@@ -635,7 +644,7 @@ function mapAgentRun (row: any): AgentRunRecord {
   }
 }
 
-function mapCodeServerSession (row: any): CodeServerSessionRecord {
+function mapCodeServerSession(row: any): CodeServerSessionRecord {
   return {
     id: row.id,
     projectId: row.project_id,
@@ -650,7 +659,7 @@ function mapCodeServerSession (row: any): CodeServerSessionRecord {
   }
 }
 
-function mapRadicleRegistration (row: any): RadicleRegistrationRecord {
+function mapRadicleRegistration(row: any): RadicleRegistrationRecord {
   return {
     repositoryPath: row.repository_path,
     name: row.name ?? null,
@@ -661,7 +670,7 @@ function mapRadicleRegistration (row: any): RadicleRegistrationRecord {
   }
 }
 
-function parseJsonField<T = any> (value: string | null): T {
+function parseJsonField<T = any>(value: string | null): T {
   if (!value) return {} as T
   try {
     return JSON.parse(value)

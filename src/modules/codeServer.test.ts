@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events'
-import { describe, expect, it, beforeEach, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCodeServerController } from './codeServer'
 
 const spawnMock = vi.hoisted(() => vi.fn())
@@ -18,7 +18,7 @@ type MockChild = MockChildProcess & {
   stdout: EventEmitter & { emit: (event: 'data', chunk: string) => boolean }
 }
 
-function createMockChild () {
+function createMockChild() {
   const child = new MockChildProcess() as MockChild
   spawnMock.mockImplementationOnce(() => child as any)
   return child
@@ -50,14 +50,7 @@ describe('createCodeServerController', () => {
     expect(spawnMock).toHaveBeenCalledTimes(1)
     expect(spawnMock).toHaveBeenCalledWith(
       'custom-code-server',
-      [
-        '--bind-addr',
-        '0.0.0.0:9000',
-        '--auth',
-        'none',
-        '--disable-update-check',
-        '/tmp/repo'
-      ],
+      ['--bind-addr', '0.0.0.0:9000', '--auth', 'none', '--disable-update-check', '/tmp/repo'],
       expect.objectContaining({ cwd: '/tmp/repo' })
     )
   })

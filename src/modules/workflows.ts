@@ -76,7 +76,7 @@ export type WorkflowRuntime = {
   stopWorker: () => Promise<void>
 }
 
-export function createWorkflowRuntime (options: WorkflowRuntimeOptions): WorkflowRuntime {
+export function createWorkflowRuntime(options: WorkflowRuntimeOptions): WorkflowRuntime {
   const persistence = options.persistence
   const agentExecutor = options.agentExecutor ?? createDefaultExecutor()
   const pollInterval = options.pollIntervalMs ?? 1000
@@ -150,17 +150,14 @@ export function createWorkflowRuntime (options: WorkflowRuntimeOptions): Workflo
 
   const listWorkflows = (projectId?: string) => persistence.workflows.list(projectId)
 
-  async function runWorkerLoop () {
+  async function runWorkerLoop() {
     while (workerRunning) {
       await processReadySteps(persistence.workflowSteps, agentExecutor)
       await delay(pollInterval)
     }
   }
 
-  async function processReadySteps (
-    stepsRepo: WorkflowStepsRepository,
-    executor: AgentExecutor
-  ): Promise<void> {
+  async function processReadySteps(stepsRepo: WorkflowStepsRepository, executor: AgentExecutor): Promise<void> {
     const readySteps = stepsRepo.findReady()
     for (const step of readySteps) {
       const claimed = stepsRepo.claim(step.id)
@@ -169,7 +166,7 @@ export function createWorkflowRuntime (options: WorkflowRuntimeOptions): Workflo
     }
   }
 
-  async function executeStep (step: WorkflowStepRecord, executor: AgentExecutor): Promise<void> {
+  async function executeStep(step: WorkflowStepRecord, executor: AgentExecutor): Promise<void> {
     const workflow = persistence.workflows.getById(step.workflowId)
     if (!workflow) return
     if (workflow.status !== 'running') return
@@ -264,24 +261,24 @@ export function createWorkflowRuntime (options: WorkflowRuntimeOptions): Workflo
   }
 }
 
-function refreshWorkflowStatus (
+function refreshWorkflowStatus(
   workflowId: string,
   stepsRepo: WorkflowStepsRepository,
   workflowRepo: Persistence['workflows']
 ): void {
   const steps = stepsRepo.listByWorkflow(workflowId)
   if (!steps.length) return
-  if (steps.every(step => step.status === 'completed')) {
+  if (steps.every((step) => step.status === 'completed')) {
     workflowRepo.updateStatus(workflowId, 'completed')
     return
   }
-  if (steps.some(step => step.status === 'failed')) {
+  if (steps.some((step) => step.status === 'failed')) {
     workflowRepo.updateStatus(workflowId, 'failed')
     return
   }
 }
 
-function createDefaultExecutor (): AgentExecutor {
+function createDefaultExecutor(): AgentExecutor {
   return async ({ step, workspace }) => {
     await delay(250)
     return {
@@ -295,16 +292,18 @@ function createDefaultExecutor (): AgentExecutor {
   }
 }
 
-function buildBranchInfo (
+function buildBranchInfo(
   project: ProjectRecord,
   workflow: WorkflowRecord,
   step: WorkflowStepRecord
 ): { name: string; baseBranch: string } {
   const explicitStepBranch = typeof step.data.branch === 'string' && step.data.branch.length ? step.data.branch : null
-  const workflowBranch = typeof workflow.data.branch === 'string' && workflow.data.branch.length ? (workflow.data.branch as string) : null
-  const baseBranch = typeof workflow.data.baseBranch === 'string' && workflow.data.baseBranch.length
-    ? (workflow.data.baseBranch as string)
-    : project.defaultBranch
+  const workflowBranch =
+    typeof workflow.data.branch === 'string' && workflow.data.branch.length ? (workflow.data.branch as string) : null
+  const baseBranch =
+    typeof workflow.data.baseBranch === 'string' && workflow.data.baseBranch.length
+      ? (workflow.data.baseBranch as string)
+      : project.defaultBranch
   const fallback = `wf-${slugify(workflow.id)}-${step.sequence}`
   return {
     name: explicitStepBranch ?? workflowBranch ?? fallback,
@@ -312,20 +311,22 @@ function buildBranchInfo (
   }
 }
 
-function defaultCommitMessage (workflow: WorkflowRecord, step: WorkflowStepRecord): string {
+function defaultCommitMessage(workflow: WorkflowRecord, step: WorkflowStepRecord): string {
   const workflowLabel = workflow.kind ?? 'workflow'
   const stepLabel = (step.data.title as string) ?? step.id
   return `${workflowLabel}: ${stepLabel}`
 }
 
-function slugify (value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48) || 'branch'
+function slugify(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48) || 'branch'
+  )
 }
 
-function delay (ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }

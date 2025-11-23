@@ -73,11 +73,11 @@ const RepoInfoPanel = (props: { git: GitInfo | null; path: string }) => {
           <div>
             <p class="text-xs font-semibold text-[var(--text-muted)]">Current commit</p>
             <Show when={commit()} fallback={<p>Unavailable</p>}>
-              {current => (
+              {(current) => (
                 <p>
                   <span class="font-mono">{shortHash()}</span>
                   <Show when={current().message}>
-                    {message => <span class="ml-2 text-[var(--text-muted)]">{message()}</span>}
+                    {(message) => <span class="ml-2 text-[var(--text-muted)]">{message()}</span>}
                   </Show>
                 </p>
               )}
@@ -89,9 +89,11 @@ const RepoInfoPanel = (props: { git: GitInfo | null; path: string }) => {
           <Show when={(props.git?.remotes?.length ?? 0) > 0} fallback={<p>No remotes configured.</p>}>
             <ul class="mt-1 flex flex-col gap-1">
               <For each={props.git?.remotes ?? []}>
-                {remote => (
+                {(remote) => (
                   <li class="flex flex-wrap items-center gap-2">
-                    <span class="rounded-full bg-[var(--bg-muted)] px-2 py-0.5 text-xs font-semibold">{remote.name}</span>
+                    <span class="rounded-full bg-[var(--bg-muted)] px-2 py-0.5 text-xs font-semibold">
+                      {remote.name}
+                    </span>
                     <code class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap rounded bg-[var(--bg-muted)] px-2 py-0.5 text-xs">
                       {remote.url}
                     </code>
@@ -120,7 +122,7 @@ const normalizeFsPath = (input: string | undefined | null) => {
   return trimmed.length ? trimmed : replaced
 }
 
-export default function RepositoriesPage () {
+export default function RepositoriesPage() {
   const [form, setForm] = createSignal({
     name: '',
     repositoryPath: '',
@@ -154,7 +156,7 @@ export default function RepositoriesPage () {
     const entries = radicleRepositories()
     if (!entries) return new Set<string>()
     const registered = new Set<string>()
-    entries.forEach(entry => {
+    entries.forEach((entry) => {
       if (!entry.radicle?.registered) return
       const repoPath = entry.radicle.repositoryPath
       if (repoPath) {
@@ -213,7 +215,11 @@ export default function RepositoriesPage () {
       const message = error instanceof Error ? error.message : 'Failed to browse filesystem'
       setBrowserError(message)
       const normalized = message.toLowerCase()
-      const invalid = normalized.includes('no such file') || normalized.includes('enoent') || normalized.includes('not a directory') || normalized.includes('path is not a directory')
+      const invalid =
+        normalized.includes('no such file') ||
+        normalized.includes('enoent') ||
+        normalized.includes('not a directory') ||
+        normalized.includes('path is not a directory')
       setBrowserPathInvalid(invalid)
     } finally {
       setBrowserLoading(false)
@@ -247,8 +253,11 @@ export default function RepositoriesPage () {
     }
   }
 
-  const toggleExpanded = (setCollection: (value: Set<string> | ((prev: Set<string>) => Set<string>)) => void, id: string) => {
-    setCollection(prev => {
+  const toggleExpanded = (
+    setCollection: (value: Set<string> | ((prev: Set<string>) => Set<string>)) => void,
+    id: string
+  ) => {
+    setCollection((prev) => {
       const next = new Set(prev)
       if (next.has(id)) {
         next.delete(id)
@@ -291,7 +300,7 @@ export default function RepositoriesPage () {
 
   createEffect(() => {
     const maxPage = totalPages()
-    setBrowserPage(prev => (prev > maxPage ? maxPage : prev))
+    setBrowserPage((prev) => (prev > maxPage ? maxPage : prev))
   })
 
   createEffect(() => {
@@ -322,11 +331,11 @@ export default function RepositoriesPage () {
   }
 
   const goToPreviousPage = () => {
-    setBrowserPage(prev => Math.max(1, prev - 1))
+    setBrowserPage((prev) => Math.max(1, prev - 1))
   }
 
   const goToNextPage = () => {
-    setBrowserPage(prev => Math.min(totalPages(), prev + 1))
+    setBrowserPage((prev) => Math.min(totalPages(), prev + 1))
   }
 
   return (
@@ -334,14 +343,16 @@ export default function RepositoriesPage () {
       <header>
         <p class="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">Repositories</p>
         <h1 class="text-3xl font-semibold text-[var(--text)]">Projects</h1>
-        <p class="text-[var(--text-muted)]">Register repositories to unlock workflow orchestration, commit graphs, and diffs.</p>
+        <p class="text-[var(--text-muted)]">
+          Register repositories to unlock workflow orchestration, commit graphs, and diffs.
+        </p>
       </header>
 
       <section class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)]">
         <button
           class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
           type="button"
-          onClick={() => setBrowserExpanded(prev => !prev)}
+          onClick={() => setBrowserExpanded((prev) => !prev)}
         >
           <div>
             <p class="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">Local folders</p>
@@ -365,23 +376,33 @@ export default function RepositoriesPage () {
                   disabled={!browser()?.parent}
                   onClick={() => void browseToParent()}
                 >
-                  <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <svg
+                    aria-hidden="true"
+                    class="h-5 w-5"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
                     <path d="M12 5v14" />
                     <path d="M6 11l6-6 6 6" />
                   </svg>
                 </button>
                 <input
                   type="text"
-                  class={`flex-1 rounded-2xl border bg-[var(--bg-muted)] p-3 text-sm text-[var(--text)] focus:outline-none focus:ring-2 ${browserPathInvalid()
-                    ? 'border-red-500 focus:ring-red-500'
-                    : 'border-[var(--border)] focus:ring-blue-500'
+                  class={`flex-1 rounded-2xl border bg-[var(--bg-muted)] p-3 text-sm text-[var(--text)] focus:outline-none focus:ring-2 ${
+                    browserPathInvalid()
+                      ? 'border-red-500 focus:ring-red-500'
+                      : 'border-[var(--border)] focus:ring-blue-500'
                   }`}
                   value={browserPathInput()}
-                  onInput={event => {
+                  onInput={(event) => {
                     setBrowserPathInput(event.currentTarget.value)
                     if (browserPathInvalid()) setBrowserPathInvalid(false)
                   }}
-                  onKeyDown={event => {
+                  onKeyDown={(event) => {
                     if (event.key === 'Enter') {
                       event.preventDefault()
                       void loadDirectory(browserPathInput())
@@ -395,24 +416,39 @@ export default function RepositoriesPage () {
                   aria-label="Open folder"
                   onClick={() => void loadDirectory(browserPathInput())}
                 >
-                  <svg aria-hidden="true" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <svg
+                    aria-hidden="true"
+                    class="h-5 w-5"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
                     <path d="M5 12h14" />
                     <path d="M13 6l6 6-6 6" />
                   </svg>
                 </button>
               </div>
-              <Show when={browserError()}>
-                {message => <p class="text-xs text-red-600">{message()}</p>}
-              </Show>
+              <Show when={browserError()}>{(message) => <p class="text-xs text-red-600">{message()}</p>}</Show>
               <div class="flex flex-col gap-2 rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-3">
-                <Show when={!browserLoading()} fallback={<p class="text-sm text-[var(--text-muted)]">Loading folders…</p>}>
-                  <Show when={(browser()?.entries.length ?? 0) > 0} fallback={<p class="text-sm text-[var(--text-muted)]">No subfolders here.</p>}>
+                <Show
+                  when={!browserLoading()}
+                  fallback={<p class="text-sm text-[var(--text-muted)]">Loading folders…</p>}
+                >
+                  <Show
+                    when={(browser()?.entries.length ?? 0) > 0}
+                    fallback={<p class="text-sm text-[var(--text-muted)]">No subfolders here.</p>}
+                  >
                     <ul class="flex flex-col divide-y divide-[var(--border)]">
                       <For each={paginatedEntries()}>
-                        {entry => {
-                          const entryIsRegistered = () => isPathRegisteredWithRadicle(entry.path, entry.radicleRegistered)
+                        {(entry) => {
+                          const entryIsRegistered = () =>
+                            isPathRegisteredWithRadicle(entry.path, entry.radicleRegistered)
                           const registrationReason = () => entry.radicleRegistrationReason
-                          const canRegister = () => entry.isGitRepository && !entryIsRegistered() && !registrationReason()
+                          const canRegister = () =>
+                            entry.isGitRepository && !entryIsRegistered() && !registrationReason()
                           return (
                             <li class="flex flex-wrap items-center justify-between gap-3 py-2">
                               <div>
@@ -430,7 +466,7 @@ export default function RepositoriesPage () {
                                 <button
                                   class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs"
                                   type="button"
-                                  onClick={() => setForm(prev => ({ ...prev, repositoryPath: entry.path }))}
+                                  onClick={() => setForm((prev) => ({ ...prev, repositoryPath: entry.path }))}
                                 >
                                   Use in form
                                 </button>
@@ -444,7 +480,7 @@ export default function RepositoriesPage () {
                                     when={canRegister()}
                                     fallback={
                                       <Show when={registrationReason()}>
-                                        {reason => (
+                                        {(reason) => (
                                           <span
                                             class="rounded-xl bg-red-600 px-3 py-1 text-xs font-semibold text-white"
                                             title={reason()}
@@ -497,7 +533,7 @@ export default function RepositoriesPage () {
                 </Show>
               </div>
               <Show when={folderStatus()}>
-                {message => <p class="text-xs text-[var(--text-muted)]">{message()}</p>}
+                {(message) => <p class="text-xs text-[var(--text-muted)]">{message()}</p>}
               </Show>
             </div>
           </div>
@@ -505,46 +541,55 @@ export default function RepositoriesPage () {
       </section>
 
       <section class="grid gap-6 lg:grid-cols-[360px,1fr]">
-        <form class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4" onSubmit={handleSubmit}>
+        <form
+          class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4"
+          onSubmit={handleSubmit}
+        >
           <h2 class="text-lg font-semibold text-[var(--text)]">New repository</h2>
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-name">Name</label>
+          <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-name">
+            Name
+          </label>
           <input
             id="repo-name"
             type="text"
             class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
             value={form().name}
-            onInput={event => setForm(prev => ({ ...prev, name: event.currentTarget.value }))}
+            onInput={(event) => setForm((prev) => ({ ...prev, name: event.currentTarget.value }))}
           />
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-path">Repository path</label>
+          <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-path">
+            Repository path
+          </label>
           <input
             id="repo-path"
             type="text"
             class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
             value={form().repositoryPath}
-            onInput={event => setForm(prev => ({ ...prev, repositoryPath: event.currentTarget.value }))}
+            onInput={(event) => setForm((prev) => ({ ...prev, repositoryPath: event.currentTarget.value }))}
           />
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-branch">Default branch</label>
+          <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-branch">
+            Default branch
+          </label>
           <input
             id="repo-branch"
             type="text"
             class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
             value={form().defaultBranch}
-            onInput={event => setForm(prev => ({ ...prev, defaultBranch: event.currentTarget.value }))}
+            onInput={(event) => setForm((prev) => ({ ...prev, defaultBranch: event.currentTarget.value }))}
           />
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-description">Description (optional)</label>
+          <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-description">
+            Description (optional)
+          </label>
           <textarea
             id="repo-description"
             rows={3}
             class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
             value={form().description}
-            onInput={event => setForm(prev => ({ ...prev, description: event.currentTarget.value }))}
+            onInput={(event) => setForm((prev) => ({ ...prev, description: event.currentTarget.value }))}
           />
           <button class="rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white" type="submit">
             Save repository
           </button>
-          <Show when={status()}>
-            {message => <p class="text-xs text-[var(--text-muted)]">{message()}</p>}
-          </Show>
+          <Show when={status()}>{(message) => <p class="text-xs text-[var(--text-muted)]">{message()}</p>}</Show>
         </form>
 
         <div class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
@@ -555,10 +600,10 @@ export default function RepositoriesPage () {
             </button>
           </div>
           <Show when={projects()} fallback={<p class="text-sm text-[var(--text-muted)]">No repositories yet.</p>}>
-            {list => (
+            {(list) => (
               <ul class="flex flex-col gap-3">
                 <For each={list()}>
-                  {project => (
+                  {(project) => (
                     <li class="rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-4">
                       <div class="flex items-center justify-between gap-4">
                         <div>
@@ -593,25 +638,32 @@ export default function RepositoriesPage () {
             )}
           </Show>
         </div>
-
       </section>
 
       <section class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
         <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 class="text-lg font-semibold text-[var(--text)]">Radicle tracked repositories</h2>
-            <p class="text-sm text-[var(--text-muted)]">Direct from your rad remote, independent of workflow activity.</p>
+            <p class="text-sm text-[var(--text-muted)]">
+              Direct from your rad remote, independent of workflow activity.
+            </p>
           </div>
           <button class="text-sm text-blue-600" type="button" onClick={() => refetchRadicleRepositories()}>
             Refresh
           </button>
         </div>
-        <Show when={radicleRepositories()} fallback={<p class="text-sm text-[var(--text-muted)]">Loading Radicle repositories…</p>}>
-          {items => (
-            <Show when={items().length} fallback={<p class="text-sm text-[var(--text-muted)]">No Radicle repositories detected yet.</p>}>
+        <Show
+          when={radicleRepositories()}
+          fallback={<p class="text-sm text-[var(--text-muted)]">Loading Radicle repositories…</p>}
+        >
+          {(items) => (
+            <Show
+              when={items().length}
+              fallback={<p class="text-sm text-[var(--text-muted)]">No Radicle repositories detected yet.</p>}
+            >
               <ul class="flex flex-col gap-3">
                 <For each={items()}>
-                  {entry => (
+                  {(entry) => (
                     <li
                       class="rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-4"
                       classList={{ 'border-green-500': entry.radicle?.registered }}
@@ -621,20 +673,34 @@ export default function RepositoriesPage () {
                           <p class="text-lg font-semibold text-[var(--text)]">{entry.project.name}</p>
                           <p class="text-xs text-[var(--text-muted)]">{entry.project.repositoryPath}</p>
                         </div>
-                        <Show when={entry.radicle?.registered} fallback={<span class="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700">Not registered</span>}>
-                          <span class="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">Registered</span>
+                        <Show
+                          when={entry.radicle?.registered}
+                          fallback={
+                            <span class="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700">
+                              Not registered
+                            </span>
+                          }
+                        >
+                          <span class="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+                            Registered
+                          </span>
                         </Show>
                       </div>
                       <div class="mt-3 flex flex-wrap items-center gap-3 text-xs text-[var(--text-muted)]">
-                        <Show when={entry.radicle?.radicleProjectId} fallback={<span>No Radicle project detected</span>}>
-                          {id => <span>Project ID: <code class="rounded bg-[var(--bg-card)] px-1">{id()}</code></span>}
+                        <Show
+                          when={entry.radicle?.radicleProjectId}
+                          fallback={<span>No Radicle project detected</span>}
+                        >
+                          {(id) => (
+                            <span>
+                              Project ID: <code class="rounded bg-[var(--bg-card)] px-1">{id()}</code>
+                            </span>
+                          )}
                         </Show>
                         <Show when={entry.radicle?.defaultBranch}>
-                          {branch => <span>Default branch: {branch()}</span>}
+                          {(branch) => <span>Default branch: {branch()}</span>}
                         </Show>
-                        <Show when={entry.error}>
-                          {error => <span class="text-red-600">{error()}</span>}
-                        </Show>
+                        <Show when={entry.error}>{(error) => <span class="text-red-600">{error()}</span>}</Show>
                       </div>
                       <button
                         class="mt-3 text-xs font-semibold text-blue-600"

@@ -35,7 +35,7 @@ type AgentChunkPayload = {
 
 const DEFAULT_PROMPT = `Draft a quick project overview for a habit-tracking app.`
 
-export default function Agent () {
+export default function Agent() {
   const [prompt, setPrompt] = createSignal(DEFAULT_PROMPT)
   const [isRunning, setIsRunning] = createSignal(false)
   const [logs, setLogs] = createSignal<AgentLogEntry[]>([])
@@ -165,9 +165,9 @@ export default function Agent () {
 
   const updateLog = (payload?: AgentChunkPayload) => {
     if (!payload?.chunk) return
-    setLogs(current => {
+    setLogs((current) => {
       const next = [...current]
-      const existingIndex = next.findIndex(entry => entry.role === payload.role && entry.round === payload.round)
+      const existingIndex = next.findIndex((entry) => entry.role === payload.role && entry.round === payload.round)
       if (existingIndex >= 0) {
         next[existingIndex] = {
           ...next[existingIndex],
@@ -240,7 +240,7 @@ export default function Agent () {
               class="min-h-[120px] rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-4 text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-blue-500"
               rows={4}
               value={prompt()}
-              onInput={event => setPrompt(event.currentTarget.value)}
+              onInput={(event) => setPrompt(event.currentTarget.value)}
               placeholder="Describe the task you want the agent to tackle"
             />
           </div>
@@ -250,7 +250,7 @@ export default function Agent () {
               <p class="font-semibold text-red-600">{error()}</p>
             </Show>
             <Show when={result()}>
-              {run => (
+              {(run) => (
                 <p>
                   Outcome: <strong>{run().outcome}</strong> — {run().reason}
                 </p>
@@ -260,7 +260,7 @@ export default function Agent () {
 
           <div class="flex h-[420px] flex-col gap-3 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-4">
             <For each={orderedLogs()}>
-              {entry => (
+              {(entry) => (
                 <article
                   class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 text-sm shadow-[0_6px_20px_rgba(15,23,42,0.08)]"
                   classList={{
@@ -273,7 +273,7 @@ export default function Agent () {
                       {entry.role} · round {entry.round}
                     </span>
                     <span class="italic">
-                      {(entry.provider || 'unknown')} · attempt {entry.attempt ?? 0}
+                      {entry.provider || 'unknown'} · attempt {entry.attempt ?? 0}
                     </span>
                   </header>
                   <p class="text-[var(--text)]">{entry.text}</p>
@@ -296,7 +296,7 @@ export default function Agent () {
                 when={sessionDir()}
                 fallback={<p class="text-xs text-[var(--text-muted)]">Run the agent to allocate a workspace folder.</p>}
               >
-                {dir => (
+                {(dir) => (
                   <code
                     class="max-w-full truncate rounded bg-[var(--bg-muted)] px-2 py-1 text-xs text-[var(--text)]"
                     title={dir()}
@@ -320,7 +320,7 @@ export default function Agent () {
               </div>
             }
           >
-            {url => (
+            {(url) => (
               <iframe
                 src={url()}
                 class="min-h-[360px] w-full flex-1 rounded-2xl border border-[var(--border)] bg-[#0f172a]"

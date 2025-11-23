@@ -55,7 +55,7 @@ const checkoutBranchFromBase = async (repoPath: string, branchName: string, base
   await runGit(['fetch', '--all'], repoPath).catch(() => undefined)
   await runGit(['branch', branchName, baseBranch], repoPath)
 }
- 
+
 export const createRadicleRepoManager = ({ repoPath, remote }: { repoPath: string; remote?: string }) => {
   const resolvedRepo = path.resolve(repoPath)
   const remoteName = remote ?? 'origin'

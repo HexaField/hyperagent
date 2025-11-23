@@ -9,25 +9,24 @@ type DiffLine = {
   type: 'header' | 'hunk' | 'addition' | 'deletion' | 'context'
 }
 
-export default function DiffViewer (props: DiffViewerProps) {
+export default function DiffViewer(props: DiffViewerProps) {
   const lines = createMemo<DiffLine[]>(() => parseDiff(props.diffText ?? ''))
 
   return (
     <div class="diff-viewer rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)]">
-      <Show when={props.diffText} fallback={<p class="p-4 text-sm text-[var(--text-muted)]">Select a step with commits to preview the diff.</p>}>
+      <Show
+        when={props.diffText}
+        fallback={<p class="p-4 text-sm text-[var(--text-muted)]">Select a step with commits to preview the diff.</p>}
+      >
         <pre class="diff-pre">
-          <For each={lines()}>
-            {line => (
-              <code classList={lineClass(line.type)}>{line.content}</code>
-            )}
-          </For>
+          <For each={lines()}>{(line) => <code classList={lineClass(line.type)}>{line.content}</code>}</For>
         </pre>
       </Show>
     </div>
   )
 }
 
-function parseDiff (raw: string): DiffLine[] {
+function parseDiff(raw: string): DiffLine[] {
   if (!raw.trim()) return []
   return raw.split('\n').map((line) => {
     if (line.startsWith('diff --git')) {
@@ -46,7 +45,7 @@ function parseDiff (raw: string): DiffLine[] {
   })
 }
 
-function lineClass (type: DiffLine['type']) {
+function lineClass(type: DiffLine['type']) {
   return {
     'diff-line': true,
     'diff-line-header': type === 'header',

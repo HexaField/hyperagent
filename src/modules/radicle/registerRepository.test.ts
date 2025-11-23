@@ -27,11 +27,7 @@ const readStubLogEntries = async (logFile?: string): Promise<StubLogEntry[]> => 
   }
 }
 
-const countCommandForRepo = async (
-  logFile: string | undefined,
-  command: string,
-  repoDir: string
-): Promise<number> => {
+const countCommandForRepo = async (logFile: string | undefined, command: string, repoDir: string): Promise<number> => {
   const entries = await readStubLogEntries(logFile)
   return entries.filter((entry) => entry.command === command && entry.cwd === repoDir).length
 }

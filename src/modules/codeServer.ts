@@ -1,5 +1,5 @@
-import { spawn } from 'child_process'
 import type { ChildProcessWithoutNullStreams } from 'child_process'
+import { spawn } from 'child_process'
 import path from 'path'
 
 export type CodeServerOptions = {
@@ -27,7 +27,7 @@ const DEFAULT_PORT = 13337
 const DEFAULT_BINARY = 'code-server'
 const DEFAULT_PUBLIC_BASE = '/code-server'
 
-export function createCodeServerController (rawOptions: CodeServerOptions = {}): CodeServerController {
+export function createCodeServerController(rawOptions: CodeServerOptions = {}): CodeServerController {
   const options = normalizeOptions(rawOptions)
   let codeServerPromise: Promise<CodeServerHandle | null> | null = null
 
@@ -35,7 +35,7 @@ export function createCodeServerController (rawOptions: CodeServerOptions = {}):
     if (!codeServerPromise) {
       codeServerPromise = startCodeServer(options, () => {
         codeServerPromise = null
-      }).catch(error => {
+      }).catch((error) => {
         console.warn('Unable to launch code-server:', error.message)
         codeServerPromise = null
         return null
@@ -54,7 +54,7 @@ export function createCodeServerController (rawOptions: CodeServerOptions = {}):
   return { ensure, shutdown }
 }
 
-function normalizeOptions (options: CodeServerOptions): Required<CodeServerOptions> {
+function normalizeOptions(options: CodeServerOptions): Required<CodeServerOptions> {
   const host = options.host || process.env.CODE_SERVER_HOST || DEFAULT_HOST
   const port = options.port || Number(process.env.CODE_SERVER_PORT || DEFAULT_PORT)
   const repoRoot = options.repoRoot || process.env.CODE_SERVER_ROOT || path.resolve(process.cwd())
@@ -64,10 +64,7 @@ function normalizeOptions (options: CodeServerOptions): Required<CodeServerOptio
   return { host, port, repoRoot, binary, env, publicBasePath }
 }
 
-function startCodeServer (
-  options: Required<CodeServerOptions>,
-  onExit: () => void
-): Promise<CodeServerHandle> {
+function startCodeServer(options: Required<CodeServerOptions>, onExit: () => void): Promise<CodeServerHandle> {
   return new Promise((resolve, reject) => {
     const args = [
       '--bind-addr',
@@ -95,7 +92,7 @@ function startCodeServer (
       })
     }
 
-    child.stdout.on('data', data => {
+    child.stdout.on('data', (data) => {
       const text = data.toString()
       process.stdout.write(`[code-server] ${text}`)
       if (text.includes('HTTP server listening')) {
@@ -103,18 +100,18 @@ function startCodeServer (
       }
     })
 
-    child.stderr.on('data', data => {
+    child.stderr.on('data', (data) => {
       const text = data.toString()
       process.stderr.write(`[code-server] ${text}`)
     })
 
-    child.on('error', error => {
+    child.on('error', (error) => {
       if (resolved) return
       resolved = true
       reject(error)
     })
 
-    child.on('exit', code => {
+    child.on('exit', (code) => {
       if (!resolved) {
         reject(new Error(`code-server exited with code ${code}`))
       }
@@ -129,7 +126,7 @@ function startCodeServer (
   })
 }
 
-function buildPublicUrl (basePath: string, repoRoot: string): string {
+function buildPublicUrl(basePath: string, repoRoot: string): string {
   const normalized = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath
   return `${normalized}/?folder=${encodeURIComponent(repoRoot)}`
 }

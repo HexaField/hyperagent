@@ -1,20 +1,16 @@
+import fs from 'fs/promises'
 import { execFileSync } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer as createHttpServer } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { TextDecoder } from 'node:util'
-import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../../src/modules/agent'
-import type {
-  CodeServerController,
-  CodeServerHandle,
-  CodeServerOptions
-} from '../../src/modules/codeServer'
-import { createServerApp } from './app'
+import type { CodeServerController, CodeServerHandle, CodeServerOptions } from '../../src/modules/codeServer'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
+import { createServerApp } from './app'
 
 const mockResult: AgentLoopResult = {
   outcome: 'approved',
@@ -40,7 +36,7 @@ type FakeCodeServer = {
   close: () => Promise<void>
 }
 
-async function startFakeCodeServer (): Promise<FakeCodeServer> {
+async function startFakeCodeServer(): Promise<FakeCodeServer> {
   const requests: string[] = []
   const server = createHttpServer((req, res) => {
     requests.push(req.url ?? '/')
@@ -50,9 +46,7 @@ async function startFakeCodeServer (): Promise<FakeCodeServer> {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address() as AddressInfo | null
   if (!address) {
-    await new Promise<void>((resolve, reject) =>
-      server.close(err => (err ? reject(err) : resolve()))
-    )
+    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())))
     throw new Error('Failed to start fake code-server')
   }
   let closed = false
@@ -62,14 +56,12 @@ async function startFakeCodeServer (): Promise<FakeCodeServer> {
     close: async () => {
       if (closed) return
       closed = true
-      await new Promise<void>((resolve, reject) =>
-        server.close(err => (err ? reject(err) : resolve()))
-      )
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())))
     }
   }
 }
 
-async function streamSseFrames (
+async function streamSseFrames(
   response: Response,
   onFrame: (frame: StreamPacket) => Promise<void> | void
 ): Promise<void> {
@@ -96,8 +88,8 @@ async function streamSseFrames (
       buffer = buffer.slice(boundary + 2)
       const dataLines = chunk
         .split('\n')
-        .filter(line => line.startsWith('data:'))
-        .map(line => line.slice(5).trimStart())
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart())
       if (dataLines.length) {
         const payload = dataLines.join('\n')
         const frame = JSON.parse(payload) as StreamPacket
@@ -112,7 +104,7 @@ async function streamSseFrames (
   }
 }
 
-async function createIntegrationHarness (options?: { radicleModule?: RadicleModule }) {
+async function createIntegrationHarness(options?: { radicleModule?: RadicleModule }) {
   const tmpBase = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-ui-server-tests-'))
   const dbFile = path.join(tmpBase, 'runtime.db')
   const fakeCodeServer = await startFakeCodeServer()
@@ -129,17 +121,19 @@ async function createIntegrationHarness (options?: { radicleModule?: RadicleModu
       attempt: 1
     }
     options.onStream?.(chunk)
-    await new Promise(resolve => setTimeout(resolve, 10))
+    await new Promise((resolve) => setTimeout(resolve, 10))
     return mockResult
   })
 
   const controllerFactory = vi.fn<[CodeServerOptions], CodeServerController>((options) => {
     expect(options.port).toBe(fakeCodeServer.port)
-    const ensure = vi.fn(async (): Promise<CodeServerHandle> => ({
-      child: { kill: vi.fn() } as any,
-      running: true,
-      publicUrl: `${options.publicBasePath}/?folder=${encodeURIComponent(options.repoRoot ?? '')}`
-    }))
+    const ensure = vi.fn(
+      async (): Promise<CodeServerHandle> => ({
+        child: { kill: vi.fn() } as any,
+        running: true,
+        publicUrl: `${options.publicBasePath}/?folder=${encodeURIComponent(options.repoRoot ?? '')}`
+      })
+    )
     const shutdown = vi.fn(async () => {})
     return { ensure, shutdown }
   }) as Mock<[CodeServerOptions], CodeServerController>
@@ -166,7 +160,7 @@ async function createIntegrationHarness (options?: { radicleModule?: RadicleModu
     controllerFactory,
     fakeCodeServer,
     close: async () => {
-      await new Promise<void>(resolve => httpServer.close(() => resolve()))
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()))
       await appServer.shutdown()
       await radicleModule.cleanup()
       await fakeCodeServer.close()
@@ -175,7 +169,7 @@ async function createIntegrationHarness (options?: { radicleModule?: RadicleModu
   }
 }
 
-function createFakeRadicleModule (workspaceRoot: string): RadicleModule {
+function createFakeRadicleModule(workspaceRoot: string): RadicleModule {
   return {
     createSession: async (init) => {
       let workspace: { workspacePath: string; branchName: string; baseBranch: string } | null = null
@@ -240,7 +234,7 @@ function createFakeRadicleModule (workspaceRoot: string): RadicleModule {
 
 const RAD_REAL_STUB_ID = 'ztestrid1234'
 
-async function createGitTestRepo (branch = 'main') {
+async function createGitTestRepo(branch = 'main') {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-rad-real-'))
   execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' })
   execFileSync('git', ['checkout', '-B', branch], { cwd: dir, stdio: 'ignore' })
@@ -252,7 +246,7 @@ async function createGitTestRepo (branch = 'main') {
   return dir
 }
 
-async function writeRadCliStub () {
+async function writeRadCliStub() {
   const binDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-rad-stub-'))
   const scriptPath = path.join(binDir, 'rad')
   const script = `#!/usr/bin/env node
@@ -311,7 +305,7 @@ fail('Unsupported command ' + command)
   return { binDir }
 }
 
-async function setupRadStubEnv () {
+async function setupRadStubEnv() {
   const stub = await writeRadCliStub()
   const originalPath = process.env.PATH
   process.env.PATH = `${stub.binDir}${path.delimiter}${process.env.PATH ?? ''}`
@@ -360,7 +354,7 @@ describe('createServerApp', () => {
       })
 
       expect(codeServerVerified).toBe(true)
-      expect(frames.map(frame => frame.type)).toEqual(['session', 'chunk', 'result', 'end'])
+      expect(frames.map((frame) => frame.type)).toEqual(['session', 'chunk', 'result', 'end'])
       expect(harness.runLoop).toHaveBeenCalledTimes(1)
       expect(harness.controllerFactory).toHaveBeenCalledTimes(1)
     } finally {
@@ -436,13 +430,11 @@ describe('createServerApp', () => {
           expect(detail.steps.every((step: any) => step.status === 'completed')).toBe(true)
           break
         }
-        await new Promise(resolve => setTimeout(resolve, 200))
+        await new Promise((resolve) => setTimeout(resolve, 200))
       }
       expect(finalStatus).toBe('completed')
 
-      const listResponse = await fetch(
-        `${harness.baseUrl}/api/workflows?projectId=${encodeURIComponent(project.id)}`
-      )
+      const listResponse = await fetch(`${harness.baseUrl}/api/workflows?projectId=${encodeURIComponent(project.id)}`)
       expect(listResponse.status).toBe(200)
       const listPayload = await listResponse.json()
       expect(listPayload.workflows.length).toBeGreaterThan(0)
@@ -486,9 +478,7 @@ describe('createServerApp', () => {
       const detail = await detailResponse.json()
       const firstStep = detail.steps[0]
       expect(firstStep).toBeTruthy()
-      const diffResponse = await fetch(
-        `${harness.baseUrl}/api/workflows/${workflowId}/steps/${firstStep.id}/diff`
-      )
+      const diffResponse = await fetch(`${harness.baseUrl}/api/workflows/${workflowId}/steps/${firstStep.id}/diff`)
       expect(diffResponse.status).toBe(404)
       const diffPayload = await diffResponse.json()
       expect(diffPayload).toHaveProperty('error')
@@ -571,7 +561,9 @@ describe('createServerApp', () => {
       const repoResponse = await fetch(`${harness.baseUrl}/api/radicle/repositories`)
       expect(repoResponse.status).toBe(200)
       const repoPayload = await repoResponse.json()
-      const match = repoPayload.repositories.find((entry: any) => entry.project.repositoryPath === path.resolve('/tmp/rad-solo'))
+      const match = repoPayload.repositories.find(
+        (entry: any) => entry.project.repositoryPath === path.resolve('/tmp/rad-solo')
+      )
       expect(match).toBeTruthy()
       expect(match.radicle).not.toBeNull()
       expect(match.project.id).toContain('rad-only')

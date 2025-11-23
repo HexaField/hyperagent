@@ -23,6 +23,7 @@ This module turns any npm package into a machine-orchestratable asset. It can:
 4. **Invoke**: `await invokeLibraryContract({ cwd, packageSpecifier: 'lodash', contract, args: [...] })`.
 
 The returned contracts ship with:
+
 - `tsType` string for quick inspection.
 - `recipe` (internal ADT) -> `zod` expression -> JSON Schema for machine-readable IO.
 - `isAsync` on callable exports plus `promise` recipe nodes so downstream planners can await flows correctly.

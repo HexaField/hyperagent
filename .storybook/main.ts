@@ -1,5 +1,5 @@
-import path from 'path'
 import type { StorybookConfig } from '@storybook/html-vite'
+import path from 'path'
 import solid from 'vite-plugin-solid'
 
 const config: StorybookConfig = {

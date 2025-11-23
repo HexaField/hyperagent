@@ -39,28 +39,34 @@ const clamp = (value: number, min: number, max: number) => Math.min(Math.max(val
 
 const uid = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 9)}`
 
-const duplicateNodes = (nodes: GraphNode[]) => nodes.map(node => ({ ...node }))
-const duplicateEdges = (edges: GraphEdge[]) => edges.map(edge => ({ ...edge }))
+const duplicateNodes = (nodes: GraphNode[]) => nodes.map((node) => ({ ...node }))
+const duplicateEdges = (edges: GraphEdge[]) => edges.map((edge) => ({ ...edge }))
 
 const HANDLE_DIRECTIONS = ['top', 'right', 'bottom', 'left'] as const
 const NODE_SNAP_RADIUS = 96
 
 const ui = {
   section: 'flex flex-col gap-6 w-full box-border p-8',
-  panel: 'flex flex-col gap-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)]',
+  panel:
+    'flex flex-col gap-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)]',
   panelHeader: 'flex flex-wrap items-center justify-between gap-4',
   panelTitle: 'text-2xl font-semibold text-[var(--text)]',
   panelSubtitle: 'mt-1 text-sm text-[var(--text-muted)]',
-  resetButton: 'rounded-full border border-[var(--border)] bg-[var(--bg-muted)] px-4 py-1 text-sm font-medium text-[var(--text)] transition hover:bg-[var(--border)]',
+  resetButton:
+    'rounded-full border border-[var(--border)] bg-[var(--bg-muted)] px-4 py-1 text-sm font-medium text-[var(--text)] transition hover:bg-[var(--border)]',
   controls: 'flex flex-wrap gap-3',
-  input: 'flex-1 min-w-[220px] rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-4 py-2 text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-blue-500',
-  primaryButton: 'rounded-xl bg-blue-600 px-5 py-2 font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45',
-  learn: 'rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg-muted)] p-4 text-sm text-[var(--text-muted)]',
+  input:
+    'flex-1 min-w-[220px] rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-4 py-2 text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-blue-500',
+  primaryButton:
+    'rounded-xl bg-blue-600 px-5 py-2 font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45',
+  learn:
+    'rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg-muted)] p-4 text-sm text-[var(--text-muted)]',
   learnHint: 'mt-2 font-semibold text-[var(--text)]',
   surface: 'rounded-[1.25rem] border border-[var(--border)] bg-[var(--bg-card)] p-4 shadow-inner overflow-auto',
   canvas: 'relative min-h-[320px]',
   edges: 'absolute inset-0 h-full w-full pointer-events-none',
-  footer: 'flex flex-wrap gap-6 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)]',
+  footer:
+    'flex flex-wrap gap-6 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)]',
   footerTitle: 'mb-2 text-sm font-semibold uppercase tracking-wide text-[var(--text-muted)]',
   footerList: 'flex flex-wrap gap-2',
   tag: 'rounded-full border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-1 text-sm text-[var(--text)]'
@@ -70,13 +76,14 @@ const nodeButtonBaseClass =
   'absolute -translate-x-1/2 -translate-y-1/2 min-w-[110px] rounded-[0.85rem] border border-transparent bg-gradient-to-r from-blue-700 to-purple-600 px-4 py-2 text-center font-semibold text-white shadow-[0_15px_30px_rgba(37,99,235,0.25)] transition select-none cursor-grab active:cursor-grabbing flex flex-col items-center gap-2'
 const nodeButtonSelectedClass = 'border-yellow-300 shadow-[0_20px_35px_rgba(251,191,36,0.45)]'
 const nodeLabelClass = 'pointer-events-none'
-const nodeInputClass = 'w-full rounded-lg border-none bg-white/20 px-2 py-1 text-center font-semibold text-white placeholder:text-white/70 focus:outline-none'
+const nodeInputClass =
+  'w-full rounded-lg border-none bg-white/20 px-2 py-1 text-center font-semibold text-white placeholder:text-white/70 focus:outline-none'
 const nodeHandleBaseClass =
   'absolute h-3 w-3 rounded-full border-2 border-[rgba(15,23,42,0.3)] bg-white/85 shadow-[0_2px_6px_rgba(15,23,42,0.25)] transition duration-150 ease-out pointer-events-auto cursor-crosshair hover:scale-125 active:scale-95'
 const edgeLabelClass =
   'absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-[rgba(15,23,42,0.75)] px-2 py-0.5 text-xs text-white cursor-context-menu'
 
-function hintPositionClass (direction: (typeof HANDLE_DIRECTIONS)[number]): string {
+function hintPositionClass(direction: (typeof HANDLE_DIRECTIONS)[number]): string {
   switch (direction) {
     case 'top':
       return '-top-[22px] left-1/2 -translate-x-1/2'
@@ -91,16 +98,12 @@ function hintPositionClass (direction: (typeof HANDLE_DIRECTIONS)[number]): stri
   }
 }
 
-export function NodeGraph (props: NodeGraphProps) {
+export function NodeGraph(props: NodeGraphProps) {
   const width = () => props.width ?? DEFAULT_WIDTH
   const height = () => props.height ?? DEFAULT_HEIGHT
 
-  const [nodes, setNodes] = createSignal<GraphNode[]>(
-    duplicateNodes(props.initialNodes ?? DEFAULT_NODES)
-  )
-  const [edges, setEdges] = createSignal<GraphEdge[]>(
-    duplicateEdges(props.initialEdges ?? DEFAULT_EDGES)
-  )
+  const [nodes, setNodes] = createSignal<GraphNode[]>(duplicateNodes(props.initialNodes ?? DEFAULT_NODES))
+  const [edges, setEdges] = createSignal<GraphEdge[]>(duplicateEdges(props.initialEdges ?? DEFAULT_EDGES))
   const [selection, setSelection] = createSignal<string[]>([])
   const [nodeLabel, setNodeLabel] = createSignal('')
   const [editingNodeId, setEditingNodeId] = createSignal<string | null>(null)
@@ -123,7 +126,7 @@ export function NodeGraph (props: NodeGraphProps) {
   const resolvedEdges = createMemo(() => {
     const map = nodeMap()
     return edges()
-      .map(edge => {
+      .map((edge) => {
         const from = map.get(edge.from)
         const to = map.get(edge.to)
         if (!from || !to) return null
@@ -139,9 +142,9 @@ export function NodeGraph (props: NodeGraphProps) {
 
   const addEdge = (from: string, to: string) => {
     if (from === to) return false
-    const exists = edges().some(edge => edge.from === from && edge.to === to)
+    const exists = edges().some((edge) => edge.from === from && edge.to === to)
     if (exists) return false
-    setEdges(prev => [...prev, { id: uid('edge'), from, to }])
+    setEdges((prev) => [...prev, { id: uid('edge'), from, to }])
     return true
   }
 
@@ -161,9 +164,9 @@ export function NodeGraph (props: NodeGraphProps) {
 
   const toggleNodeSelection = (nodeId: string) => {
     if (editingNodeId()) return
-    setSelection(prev => {
+    setSelection((prev) => {
       if (prev.includes(nodeId)) {
-        return prev.filter(id => id !== nodeId)
+        return prev.filter((id) => id !== nodeId)
       }
       const next = [...prev.slice(-1), nodeId]
       return next
@@ -181,7 +184,7 @@ export function NodeGraph (props: NodeGraphProps) {
       x: clamp(x, 36, width() - 36),
       y: clamp(y, 36, height() - 36)
     }
-    setNodes(prev => [...prev, newNode])
+    setNodes((prev) => [...prev, newNode])
     if (sourceId) {
       addEdge(sourceId, newNode.id)
     }
@@ -228,7 +231,7 @@ export function NodeGraph (props: NodeGraphProps) {
     const handleMove = (moveEvent: PointerEvent) => {
       const nextX = clamp(moveEvent.clientX - rect.left + offsetX, 36, width() - 36)
       const nextY = clamp(moveEvent.clientY - rect.top + offsetY, 36, height() - 36)
-      setNodes(prev => prev.map(entry => (entry.id === nodeId ? { ...entry, x: nextX, y: nextY } : entry)))
+      setNodes((prev) => prev.map((entry) => (entry.id === nodeId ? { ...entry, x: nextX, y: nextY } : entry)))
     }
 
     const handleUp = () => {
@@ -310,10 +313,11 @@ export function NodeGraph (props: NodeGraphProps) {
         const relX = clamp(upEvent.clientX - rect.left, 36, width() - 36)
         const relY = clamp(upEvent.clientY - rect.top, 36, height() - 36)
         const dropElement = document.elementFromPoint(upEvent.clientX, upEvent.clientY) ?? upEvent.target
-        const hintedNodeId = (dropElement as HTMLElement | null)?.closest('[data-node-id]')?.getAttribute('data-node-id')
-        const targetNode = hintedNodeId && hintedNodeId !== nodeId
-          ? nodeMap().get(hintedNodeId)
-          : findNodeNear(relX, relY, nodeId)
+        const hintedNodeId = (dropElement as HTMLElement | null)
+          ?.closest('[data-node-id]')
+          ?.getAttribute('data-node-id')
+        const targetNode =
+          hintedNodeId && hintedNodeId !== nodeId ? nodeMap().get(hintedNodeId) : findNodeNear(relX, relY, nodeId)
         const distance = Math.hypot(relX - node.x, relY - node.y)
         if (targetNode) {
           addEdge(nodeId, targetNode.id)
@@ -351,13 +355,11 @@ export function NodeGraph (props: NodeGraphProps) {
 
   const handleEdgeContextMenu = (event: MouseEvent, edgeId: string) => {
     event.preventDefault()
-    const existing = edges().find(edge => edge.id === edgeId)
+    const existing = edges().find((edge) => edge.id === edgeId)
     const next = window.prompt('Edge label', existing?.label ?? '')
     if (next === null) return
     const trimmed = next.trim()
-    setEdges(prev =>
-      prev.map(edge => (edge.id === edgeId ? { ...edge, label: trimmed || undefined } : edge))
-    )
+    setEdges((prev) => prev.map((edge) => (edge.id === edgeId ? { ...edge, label: trimmed || undefined } : edge)))
   }
 
   const beginNodeEdit = (nodeId: string) => {
@@ -372,7 +374,7 @@ export function NodeGraph (props: NodeGraphProps) {
     if (!nodeId) return
     const nextLabel = editingValue().trim()
     if (nextLabel.length) {
-      setNodes(prev => prev.map(node => (node.id === nodeId ? { ...node, label: nextLabel } : node)))
+      setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, label: nextLabel } : node)))
     }
     setEditingNodeId(null)
     setEditingValue('')
@@ -401,17 +403,12 @@ export function NodeGraph (props: NodeGraphProps) {
             class={ui.input}
             placeholder="Node label"
             value={nodeLabel()}
-            onInput={event => setNodeLabel(event.currentTarget.value)}
+            onInput={(event) => setNodeLabel(event.currentTarget.value)}
           />
           <button class={ui.primaryButton} type="button" onClick={addNode}>
             Add node
           </button>
-          <button
-            class={ui.primaryButton}
-            type="button"
-            disabled={selectedCount() < 2}
-            onClick={connectNodes}
-          >
+          <button class={ui.primaryButton} type="button" disabled={selectedCount() < 2} onClick={connectNodes}>
             Connect selection
           </button>
         </div>
@@ -425,7 +422,7 @@ export function NodeGraph (props: NodeGraphProps) {
       <div class={ui.surface} onContextMenu={handleCanvasContextMenu}>
         <div
           class={ui.canvas}
-          ref={canvas => {
+          ref={(canvas) => {
             canvasRef = canvas
           }}
           style={{ width: `${width()}px`, height: `${height()}px` }}
@@ -438,7 +435,7 @@ export function NodeGraph (props: NodeGraphProps) {
             preserveAspectRatio="none"
           >
             <For each={resolvedEdges()}>
-              {entry => (
+              {(entry) => (
                 <line
                   class="cursor-context-menu"
                   stroke="var(--muted)"
@@ -448,13 +445,13 @@ export function NodeGraph (props: NodeGraphProps) {
                   x2={entry.to.x}
                   y2={entry.to.y}
                   marker-end={`url(#${markerId})`}
-                  onContextMenu={event => handleEdgeContextMenu(event, entry.edge.id)}
+                  onContextMenu={(event) => handleEdgeContextMenu(event, entry.edge.id)}
                   style={{ 'pointer-events': 'stroke' } as any}
                 />
               )}
             </For>
             <Show when={linkDraft()}>
-              {draftAccessor => {
+              {(draftAccessor) => {
                 const draft = draftAccessor()
                 if (!draft) return null
                 const source = nodeMap().get(draft.sourceId)
@@ -482,7 +479,7 @@ export function NodeGraph (props: NodeGraphProps) {
           </svg>
 
           <For each={nodes()}>
-            {node => (
+            {(node) => (
               <button
                 type="button"
                 class={nodeButtonBaseClass}
@@ -490,9 +487,9 @@ export function NodeGraph (props: NodeGraphProps) {
                 style={{ left: `${node.x}px`, top: `${node.y}px` }}
                 data-node="true"
                 data-node-id={node.id}
-                onPointerDown={event => handleNodePointerDown(node.id, event)}
+                onPointerDown={(event) => handleNodePointerDown(node.id, event)}
                 onClick={() => toggleNodeSelection(node.id)}
-                onDblClick={event => {
+                onDblClick={(event) => {
                   event.preventDefault()
                   event.stopPropagation()
                   beginNodeEdit(node.id)
@@ -502,8 +499,8 @@ export function NodeGraph (props: NodeGraphProps) {
                   <input
                     class={nodeInputClass}
                     value={editingValue()}
-                    onInput={event => setEditingValue(event.currentTarget.value)}
-                    onKeyDown={event => {
+                    onInput={(event) => setEditingValue(event.currentTarget.value)}
+                    onKeyDown={(event) => {
                       if (event.key === 'Enter') {
                         event.preventDefault()
                         commitNodeEdit()
@@ -514,7 +511,7 @@ export function NodeGraph (props: NodeGraphProps) {
                       }
                     }}
                     onBlur={commitNodeEdit}
-                    ref={el => {
+                    ref={(el) => {
                       requestAnimationFrame(() => {
                         el.focus()
                         el.select()
@@ -523,11 +520,8 @@ export function NodeGraph (props: NodeGraphProps) {
                   />
                 </Show>
                 <For each={HANDLE_DIRECTIONS}>
-                  {direction => (
-                    <span
-                      data-node-hint="true"
-                      class={`${nodeHandleBaseClass} ${hintPositionClass(direction)}`}
-                    />
+                  {(direction) => (
+                    <span data-node-hint="true" class={`${nodeHandleBaseClass} ${hintPositionClass(direction)}`} />
                   )}
                 </For>
               </button>
@@ -535,13 +529,13 @@ export function NodeGraph (props: NodeGraphProps) {
           </For>
 
           <For each={resolvedEdges()}>
-            {entry => (
+            {(entry) => (
               <Show when={entry.edge.label}>
                 <div
                   data-edge-label="true"
                   class={edgeLabelClass}
                   style={{ left: `${entry.centerX}px`, top: `${entry.centerY}px` }}
-                  onContextMenu={event => handleEdgeContextMenu(event, entry.edge.id)}
+                  onContextMenu={(event) => handleEdgeContextMenu(event, entry.edge.id)}
                 >
                   {entry.edge.label}
                 </div>
@@ -556,7 +550,7 @@ export function NodeGraph (props: NodeGraphProps) {
           <p class={ui.footerTitle}>Nodes</p>
           <div class={ui.footerList}>
             <For each={nodes()}>
-              {node => (
+              {(node) => (
                 <div class={ui.tag}>
                   <span>{node.label}</span>
                 </div>
@@ -569,7 +563,7 @@ export function NodeGraph (props: NodeGraphProps) {
             <p class={ui.footerTitle}>Edges</p>
             <div class={ui.footerList}>
               <For each={edges()}>
-                {edge => {
+                {(edge) => {
                   const from = nodeMap().get(edge.from)
                   const to = nodeMap().get(edge.to)
                   if (!from || !to) return null

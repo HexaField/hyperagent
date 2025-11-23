@@ -14,10 +14,21 @@ import {
   type CodeServerController,
   type CodeServerOptions
 } from '../../src/modules/codeServer'
-import { createPersistence, type Persistence, type ProjectRecord, type RadicleRegistrationRecord } from '../../src/modules/persistence'
-import { createWorkflowRuntime, type PlannerRun, type PlannerTask, type WorkflowDetail, type WorkflowRuntime } from '../../src/modules/workflows'
-import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import type { Provider } from '../../src/modules/llm'
+import {
+  createPersistence,
+  type Persistence,
+  type ProjectRecord,
+  type RadicleRegistrationRecord
+} from '../../src/modules/persistence'
+import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
+import {
+  createWorkflowRuntime,
+  type PlannerRun,
+  type PlannerTask,
+  type WorkflowDetail,
+  type WorkflowRuntime
+} from '../../src/modules/workflows'
 
 const DEFAULT_PORT = Number(process.env.UI_SERVER_PORT || 5556)
 const CODE_SERVER_HOST = process.env.CODE_SERVER_HOST || '127.0.0.1'
@@ -152,7 +163,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
 
   const activeCodeServers = new Map<string, CodeServerSession>()
 
-  function ensureEphemeralProject (sessionId: string, sessionDir: string): ProjectRecord {
+  function ensureEphemeralProject(sessionId: string, sessionDir: string): ProjectRecord {
     return persistence.projects.upsert({
       id: `session-${sessionId}`,
       name: `Session ${sessionId}`,
@@ -161,7 +172,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     })
   }
 
-  function normalizePlannerTasks (raw: unknown): PlannerTask[] {
+  function normalizePlannerTasks(raw: unknown): PlannerTask[] {
     if (!Array.isArray(raw)) return []
     const tasks: PlannerTask[] = []
     raw.forEach((candidate, index) => {
@@ -170,14 +181,15 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       const instructions = typeof candidate.instructions === 'string' ? candidate.instructions.trim() : ''
       if (!title || !instructions) return
       const dependsOn = Array.isArray(candidate.dependsOn)
-        ? candidate.dependsOn.filter(dep => typeof dep === 'string' && dep.length)
+        ? candidate.dependsOn.filter((dep) => typeof dep === 'string' && dep.length)
         : []
       const metadata = isPlainObject(candidate.metadata) ? candidate.metadata : undefined
       tasks.push({
         id: typeof candidate.id === 'string' && candidate.id.length ? candidate.id : `task-${index + 1}`,
         title,
         instructions,
-        agentType: typeof candidate.agentType === 'string' && candidate.agentType.length ? candidate.agentType : 'coding',
+        agentType:
+          typeof candidate.agentType === 'string' && candidate.agentType.length ? candidate.agentType : 'coding',
         dependsOn,
         metadata
       })
@@ -185,7 +197,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     return tasks
   }
 
-  function isPlainObject (value: unknown): value is Record<string, unknown> {
+  function isPlainObject(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value)
   }
 
@@ -278,9 +290,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
 
   const collectGitMetadata = async (paths: string[]): Promise<Map<string, GitMetadata | null>> => {
     const unique = [...new Set(paths.map((entry) => path.resolve(entry)))]
-    const results = await Promise.all(
-      unique.map(async (entry) => ({ path: entry, git: await readGitMetadata(entry) }))
-    )
+    const results = await Promise.all(unique.map(async (entry) => ({ path: entry, git: await readGitMetadata(entry) })))
     const map = new Map<string, GitMetadata | null>()
     results.forEach((item) => {
       map.set(item.path, item.git)
@@ -297,7 +307,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     }
   }
 
-  function extractCommitFromStep (
+  function extractCommitFromStep(
     step: WorkflowDetail['steps'][number]
   ): { commitHash: string; branch: string; message: string } | null {
     if (!step.result) return null
@@ -305,7 +315,8 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     if (!commitPayload?.commitHash) {
       return null
     }
-    const branch = typeof commitPayload.branch === 'string' && commitPayload.branch.length ? commitPayload.branch : 'unknown'
+    const branch =
+      typeof commitPayload.branch === 'string' && commitPayload.branch.length ? commitPayload.branch : 'unknown'
     const message = typeof commitPayload.message === 'string' ? commitPayload.message : ''
     return {
       commitHash: String(commitPayload.commitHash),
@@ -504,8 +515,8 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     try {
       const projects = persistence.projects.list()
       const radicleRegistrations = persistence.radicleRegistrations.list()
-      const projectMap = new Map(projects.map(project => [path.resolve(project.repositoryPath), project]))
-      const registrationMap = new Map(radicleRegistrations.map(entry => [path.resolve(entry.repositoryPath), entry]))
+      const projectMap = new Map(projects.map((project) => [path.resolve(project.repositoryPath), project]))
+      const registrationMap = new Map(radicleRegistrations.map((entry) => [path.resolve(entry.repositoryPath), entry]))
       const uniquePaths = [...new Set([...projectMap.keys(), ...registrationMap.keys()])]
       if (!uniquePaths.length) {
         res.json({ repositories: [] })
@@ -513,7 +524,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       }
       const gitMetadata = await collectGitMetadata(uniquePaths)
       const inspections = await Promise.all(
-        uniquePaths.map(async repoPath => {
+        uniquePaths.map(async (repoPath) => {
           try {
             const info = await radicleModule.inspectRepository(repoPath)
             if (info.registered) {
@@ -534,12 +545,16 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
           }
         })
       )
-      const inspectionMap = new Map<string, { info: Awaited<ReturnType<typeof radicleModule.inspectRepository>> | null; error?: string }>()
-      inspections.forEach(entry => {
+      const inspectionMap = new Map<
+        string,
+        { info: Awaited<ReturnType<typeof radicleModule.inspectRepository>> | null; error?: string }
+      >()
+      inspections.forEach((entry) => {
         inspectionMap.set(entry.path, entry)
       })
-      const payload = uniquePaths.map(repoPath => {
-        const project = projectMap.get(repoPath) ?? createSyntheticProjectRecord(repoPath, registrationMap.get(repoPath) ?? null)
+      const payload = uniquePaths.map((repoPath) => {
+        const project =
+          projectMap.get(repoPath) ?? createSyntheticProjectRecord(repoPath, registrationMap.get(repoPath) ?? null)
         const inspection = inspectionMap.get(repoPath)
         return {
           project,
@@ -579,9 +594,10 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
         if (seenCommits.has(commit.commitHash)) return
         seenCommits.add(commit.commitHash)
         const branchName = commit.branch === 'unknown' ? project.defaultBranch : commit.branch
-        const label = typeof step.data?.title === 'string' && step.data.title.length
-          ? (step.data.title as string)
-          : `Step ${step.sequence}`
+        const label =
+          typeof step.data?.title === 'string' && step.data.title.length
+            ? (step.data.title as string)
+            : `Step ${step.sequence}`
         const node: GraphCommitNode = {
           id: commit.commitHash,
           commitHash: commit.commitHash,
@@ -629,7 +645,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       res.status(404).json({ error: 'Unknown project' })
       return
     }
-    const step = detail.steps.find(item => item.id === stepId)
+    const step = detail.steps.find((item) => item.id === stepId)
     if (!step) {
       res.status(404).json({ error: 'Unknown workflow step' })
       return
@@ -660,8 +676,8 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   const listProjectsHandler: RequestHandler = async (_req, res) => {
     try {
       const projects = persistence.projects.list()
-      const gitMap = await collectGitMetadata(projects.map(project => project.repositoryPath))
-      const payload = projects.map(project => ({
+      const gitMap = await collectGitMetadata(projects.map((project) => project.repositoryPath))
+      const payload = projects.map((project) => ({
         ...project,
         git: gitMap.get(path.resolve(project.repositoryPath)) ?? null
       }))
@@ -776,7 +792,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   const listWorkflowsHandler: RequestHandler = (req, res) => {
     const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined
     const workflows = workflowRuntime.listWorkflows(projectId)
-    const payload = workflows.map(workflow => ({
+    const payload = workflows.map((workflow) => ({
       workflow,
       steps: persistence.workflowSteps.listByWorkflow(workflow.id)
     }))
@@ -915,7 +931,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   }
 }
 
-function detectGitAuthorFromCli (): { name: string; email: string } | null {
+function detectGitAuthorFromCli(): { name: string; email: string } | null {
   const name = readGitConfigValue('user.name')
   const email = readGitConfigValue('user.email')
   if (name && email) {
@@ -929,10 +945,7 @@ const sanitizeRepoIdComponent = (repoPath: string): string => {
   return normalized.length ? normalized : 'radicle-repo'
 }
 
-function createSyntheticProjectRecord (
-  repoPath: string,
-  registration: RadicleRegistrationRecord | null
-): ProjectRecord {
+function createSyntheticProjectRecord(repoPath: string, registration: RadicleRegistrationRecord | null): ProjectRecord {
   return {
     id: `rad-only-${sanitizeRepoIdComponent(repoPath)}`,
     name: registration?.name ?? (path.basename(repoPath) || repoPath),
@@ -944,7 +957,7 @@ function createSyntheticProjectRecord (
   }
 }
 
-function readGitConfigValue (key: string): string | null {
+function readGitConfigValue(key: string): string | null {
   const attempts: string[][] = [
     ['config', '--get', key],
     ['config', '--global', '--get', key],

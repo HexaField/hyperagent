@@ -1,8 +1,8 @@
 import { spawn } from 'child_process'
 import fs from 'fs'
 import os from 'os'
-import path from 'path'
 import pacote from 'pacote'
+import path from 'path'
 import ts from 'typescript'
 import { Worker } from 'worker_threads'
 import { z } from 'zod'
@@ -280,7 +280,8 @@ export async function invokeLibraryContract(options: InvokeContractOptions): Pro
     throw new Error('Object contracts are descriptive only and cannot be invoked')
   }
 
-  const methodContract = method && contract.kind === 'class' ? contract.methods.find((m) => m.name === method) : undefined
+  const methodContract =
+    method && contract.kind === 'class' ? contract.methods.find((m) => m.name === method) : undefined
   if (method && !methodContract) {
     throw new Error(`Method ${method} not found on contract ${contract.exportName}`)
   }
@@ -301,7 +302,11 @@ export async function invokeLibraryContract(options: InvokeContractOptions): Pro
           `${contract.exportName} constructor`
         )
       }
-      classInvokeArgs = buildArgumentArray(methodContract.parameters, options.args, `${contract.exportName}.${methodContract.name}`)
+      classInvokeArgs = buildArgumentArray(
+        methodContract.parameters,
+        options.args,
+        `${contract.exportName}.${methodContract.name}`
+      )
     } else {
       classConstructorArgs = buildArgumentArray(
         contract.constructor?.parameters,
@@ -392,15 +397,7 @@ export async function invokeLibraryContract(options: InvokeContractOptions): Pro
 function resolveEntryCandidate(manifest: ModuleManifest): string {
   const candidates: string[] = []
   const exportsCandidates = collectExports(manifest.exports)
-  ;[
-    manifest.types,
-    manifest.typings,
-    ...exportsCandidates,
-    manifest.module,
-    manifest.main,
-    'index.ts',
-    'index.js'
-  ]
+  ;[manifest.types, manifest.typings, ...exportsCandidates, manifest.module, manifest.main, 'index.ts', 'index.js']
     .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
     .forEach((value) => candidates.push(value))
   return candidates[0] ?? 'index.js'
@@ -455,7 +452,9 @@ function buildEntryCandidates(base: string): string[] {
 }
 
 function buildIndexCandidates(dir: string): string[] {
-  return ['index.ts', 'index.tsx', 'index.d.ts', 'index.js', 'index.mjs', 'index.cjs'].map((file) => path.join(dir, file))
+  return ['index.ts', 'index.tsx', 'index.d.ts', 'index.js', 'index.mjs', 'index.cjs'].map((file) =>
+    path.join(dir, file)
+  )
 }
 
 function extractContracts(moduleSymbol: ts.Symbol, checker: ts.TypeChecker, root: string): PackageContract[] {
@@ -585,7 +584,8 @@ function buildParameters(signature: ts.Signature, checker: ts.TypeChecker): Cont
       (declaration as ts.Declaration | undefined) ??
       (param.valueDeclaration as ts.Declaration | undefined) ??
       (signature.declaration as ts.Declaration | undefined) ??
-      ((param.declarations?.[0] as ts.Declaration) ?? undefined)
+      (param.declarations?.[0] as ts.Declaration) ??
+      undefined
 
     let schema: SchemaDescriptor
     if (location) {
@@ -633,8 +633,10 @@ function typeToRecipe(type: ts.Type, checker: ts.TypeChecker, depth = 0, stack =
   if (flags & ts.TypeFlags.Unknown) return finish({ kind: 'unknown' })
   if (flags & ts.TypeFlags.Never) return finish({ kind: 'never' })
 
-  if (flags & ts.TypeFlags.StringLiteral) return finish({ kind: 'literal', value: (type as ts.StringLiteralType).value })
-  if (flags & ts.TypeFlags.NumberLiteral) return finish({ kind: 'literal', value: (type as ts.NumberLiteralType).value })
+  if (flags & ts.TypeFlags.StringLiteral)
+    return finish({ kind: 'literal', value: (type as ts.StringLiteralType).value })
+  if (flags & ts.TypeFlags.NumberLiteral)
+    return finish({ kind: 'literal', value: (type as ts.NumberLiteralType).value })
   if (flags & ts.TypeFlags.BooleanLiteral) {
     const intrinsic = (type as ts.Type & { intrinsicName?: string }).intrinsicName
     return finish({ kind: 'literal', value: intrinsic === 'true' })
@@ -655,7 +657,9 @@ function typeToRecipe(type: ts.Type, checker: ts.TypeChecker, depth = 0, stack =
 
   if (flags & ts.TypeFlags.Union) {
     const union = type as ts.UnionType
-    const hasUndefined = union.types.some((t) => Boolean(t.flags & ts.TypeFlags.Undefined || t.flags & ts.TypeFlags.Void))
+    const hasUndefined = union.types.some((t) =>
+      Boolean(t.flags & ts.TypeFlags.Undefined || t.flags & ts.TypeFlags.Void)
+    )
     const hasNull = union.types.some((t) => Boolean(t.flags & ts.TypeFlags.Null))
     const filteredTypes = union.types.filter(
       (t) => !(t.flags & ts.TypeFlags.Undefined) && !(t.flags & ts.TypeFlags.Void) && !(t.flags & ts.TypeFlags.Null)
@@ -827,7 +831,10 @@ function recipeToString(recipe: ZodRecipe): string {
       return `z.tuple([${recipe.items.map((item) => recipeToString(item)).join(', ')}])`
     case 'object':
       return `z.object({${Object.entries(recipe.entries)
-        .map(([key, value]) => `${JSON.stringify(key)}: ${recipeToString(value.schema)}${value.optional ? '.optional()' : ''}`)
+        .map(
+          ([key, value]) =>
+            `${JSON.stringify(key)}: ${recipeToString(value.schema)}${value.optional ? '.optional()' : ''}`
+        )
         .join(', ')}})`
     case 'union':
       return `z.union([${recipe.anyOf.map((item) => recipeToString(item)).join(', ')}])`
@@ -862,7 +869,11 @@ function recipeToJsonSchema(recipe: ZodRecipe, label: string): JsonSchema {
   return JSON.parse(JSON.stringify(definition))
 }
 
-async function runNpmCommand(command: 'install' | 'uninstall', packages: string[], options: DependencyCommandOptions): Promise<void> {
+async function runNpmCommand(
+  command: 'install' | 'uninstall',
+  packages: string[],
+  options: DependencyCommandOptions
+): Promise<void> {
   if (!options?.cwd) throw new Error('cwd is required to run npm commands')
   if (packages.length === 0) return
   await ensureDirectory(options.cwd)
@@ -948,11 +959,7 @@ function isClassLikeDeclaration(node: ts.Declaration): node is ClassLikeDeclarat
   return ts.isClassDeclaration(node) || ts.isClassExpression(node)
 }
 
-function buildArgumentArray(
-  definition: ContractParameter[] | undefined,
-  input: ArgsInput,
-  label: string
-): unknown[] {
+function buildArgumentArray(definition: ContractParameter[] | undefined, input: ArgsInput, label: string): unknown[] {
   if (!definition) {
     if (Array.isArray(input)) return input
     if (input && typeof input === 'object') return Object.values(input)
@@ -982,10 +989,7 @@ function buildArgumentArray(
   return definition.map((param) => parsed.data[param.name])
 }
 
-function normalizeArgumentRecord(
-  definition: ContractParameter[],
-  input: ArgsInput
-): Record<string, unknown> {
+function normalizeArgumentRecord(definition: ContractParameter[], input: ArgsInput): Record<string, unknown> {
   if (Array.isArray(input)) {
     const record: Record<string, unknown> = {}
     definition.forEach((param, index) => {

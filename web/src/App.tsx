@@ -1,12 +1,12 @@
-import { A, Navigate, Route, Router } from '@solidjs/router'
 import type { RouteSectionProps } from '@solidjs/router'
+import { A, Navigate, Route, Router } from '@solidjs/router'
 import { Show, createResource } from 'solid-js'
+import { fetchJson } from './lib/http'
 import LaunchWorkflowPage from './pages/LaunchWorkflowPage'
 import RepositoriesPage from './pages/RepositoriesPage'
 import RepositoryGraphPage from './pages/RepositoryGraphPage'
 import WorkflowDetailPage from './pages/WorkflowDetailPage'
 import WorkflowsPage from './pages/WorkflowsPage'
-import { fetchJson } from './lib/http'
 
 type RadicleStatus = {
   reachable: boolean
@@ -31,13 +31,11 @@ const AppShell = (props: RouteSectionProps) => (
         <NavLink href="/launch">Launch</NavLink>
       </nav>
     </header>
-    <section class="flex-1">
-      {props.children}
-    </section>
+    <section class="flex-1">{props.children}</section>
   </main>
 )
 
-export default function App () {
+export default function App() {
   const [radicleStatus, { refetch: refetchRadicleStatus }] = createResource(fetchRadicleStatus)
 
   const isReady = () => {
@@ -46,10 +44,7 @@ export default function App () {
   }
 
   return (
-    <Show
-      when={isReady()}
-      fallback={<RadicleGate status={radicleStatus()} onRetry={() => refetchRadicleStatus()} />}
-    >
+    <Show when={isReady()} fallback={<RadicleGate status={radicleStatus()} onRetry={() => refetchRadicleStatus()} />}>
       <Router root={AppShell}>
         <Route path="/" component={RedirectHome} />
         <Route path="/repositories" component={RepositoriesPage} />
@@ -67,7 +62,7 @@ type NavLinkProps = {
   children: string
 }
 
-function NavLink (props: NavLinkProps) {
+function NavLink(props: NavLinkProps) {
   return (
     <A
       href={props.href}
@@ -85,7 +80,7 @@ type RadicleGateProps = {
   onRetry: () => void
 }
 
-function RadicleGate (props: RadicleGateProps) {
+function RadicleGate(props: RadicleGateProps) {
   const message = () => {
     if (!props.status) return 'Checking Radicle node status…'
     if (!props.status.reachable) {
@@ -114,7 +109,7 @@ function RadicleGate (props: RadicleGateProps) {
   )
 }
 
-async function fetchRadicleStatus (): Promise<RadicleStatus> {
+async function fetchRadicleStatus(): Promise<RadicleStatus> {
   try {
     const payload = await fetchJson<{ status: RadicleStatus }>('/api/radicle/status')
     return payload.status
