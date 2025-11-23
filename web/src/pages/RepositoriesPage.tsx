@@ -1,5 +1,5 @@
 import { A } from '@solidjs/router'
-import { For, Show, createEffect, createResource, createSignal, onMount } from 'solid-js'
+import { For, Show, createEffect, createMemo, createResource, createSignal, onMount } from 'solid-js'
 import { fetchJson } from '../lib/http'
 
 const BROWSER_PAGE_SIZE = 10
@@ -43,6 +43,7 @@ type DirectoryEntry = {
   name: string
   path: string
   isGitRepository: boolean
+  radicleRegistered: boolean
 }
 
 type DirectoryListing = {
@@ -110,6 +111,14 @@ const toBasename = (input: string) => {
   return parts[parts.length - 1] || normalized
 }
 
+const normalizeFsPath = (input: string | undefined | null) => {
+  if (!input) return ''
+  const replaced = input.replace(/\\/g, '/')
+  if (replaced === '/') return replaced
+  const trimmed = replaced.replace(/\/+$/, '')
+  return trimmed.length ? trimmed : replaced
+}
+
 export default function RepositoriesPage () {
   const [form, setForm] = createSignal({
     name: '',
@@ -139,6 +148,25 @@ export default function RepositoriesPage () {
     const payload = await fetchJson<{ repositories: RadicleRepositoryEntry[] }>('/api/radicle/repositories')
     return payload.repositories
   })
+
+  const registeredRadiclePaths = createMemo(() => {
+    const entries = radicleRepositories()
+    if (!entries) return new Set<string>()
+    const registered = new Set<string>()
+    entries.forEach(entry => {
+      if (!entry.radicle?.registered) return
+      const repoPath = entry.radicle.repositoryPath
+      if (repoPath) {
+        registered.add(normalizeFsPath(repoPath))
+      }
+    })
+    return registered
+  })
+
+  const isPathRegisteredWithRadicle = (repoPath: string, precomputed?: boolean) => {
+    if (precomputed) return true
+    return registeredRadiclePaths().has(normalizeFsPath(repoPath))
+  }
 
   const handleSubmit = async (event: SubmitEvent) => {
     event.preventDefault()
@@ -203,7 +231,12 @@ export default function RepositoriesPage () {
       await fetchJson('/api/radicle/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repositoryPath: repoPath, name: toBasename(repoPath) })
+        body: JSON.stringify({
+          repositoryPath: repoPath,
+          name: toBasename(repoPath),
+          description: 'Registered via Hyperagent',
+          visibility: 'private'
+        })
       })
       setFolderStatus('Repository registered with Radicle')
       await Promise.all([refreshProjects(), loadDirectory(browserPathInput())])
@@ -397,13 +430,22 @@ export default function RepositoriesPage () {
                                 Use in form
                               </button>
                               <Show when={entry.isGitRepository}>
-                                <button
-                                  class="rounded-xl bg-blue-600 px-3 py-1 text-xs font-semibold text-white"
-                                  type="button"
-                                  onClick={() => void registerRadicleRepo(entry.path)}
+                                <Show
+                                  when={isPathRegisteredWithRadicle(entry.path, entry.radicleRegistered)}
+                                  fallback={
+                                    <button
+                                      class="rounded-xl bg-blue-600 px-3 py-1 text-xs font-semibold text-white"
+                                      type="button"
+                                      onClick={() => void registerRadicleRepo(entry.path)}
+                                    >
+                                      Register via Radicle
+                                    </button>
+                                  }
                                 >
-                                  Register via Radicle
-                                </button>
+                                  <span class="rounded-xl bg-green-600 px-3 py-1 text-xs font-semibold text-white">
+                                    Registered via Radicle
+                                  </span>
+                                </Show>
                               </Show>
                             </div>
                           </li>

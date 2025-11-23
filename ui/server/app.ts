@@ -654,7 +654,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   }
 
   const registerRadicleRepositoryHandler: RequestHandler = async (req, res) => {
-    const { repositoryPath, name, description } = req.body ?? {}
+    const { repositoryPath, name, description, visibility } = req.body ?? {}
     if (!repositoryPath || typeof repositoryPath !== 'string') {
       res.status(400).json({ error: 'repositoryPath is required' })
       return
@@ -663,7 +663,8 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       const repository = await radicleModule.registerRepository({
         repositoryPath,
         name: typeof name === 'string' && name.length ? name : undefined,
-        description: typeof description === 'string' && description.length ? description : undefined
+        description: typeof description === 'string' && description.length ? description : undefined,
+        visibility: visibility === 'public' || visibility === 'private' ? visibility : undefined
       })
       res.json({ repository })
     } catch (error) {
@@ -686,10 +687,21 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       const payload = await Promise.all(
         directories.map(async (entry) => {
           const absolute = path.join(resolved, entry.name)
+          const gitRepo = await isGitRepository(absolute)
+          let radicleRegistered = false
+          if (gitRepo) {
+            try {
+              const info = await radicleModule.inspectRepository(absolute)
+              radicleRegistered = info.registered
+            } catch {
+              radicleRegistered = false
+            }
+          }
           return {
             name: entry.name,
             path: absolute,
-            isGitRepository: await isGitRepository(absolute)
+            isGitRepository: gitRepo,
+            radicleRegistered
           }
         })
       )

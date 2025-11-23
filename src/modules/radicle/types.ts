@@ -61,6 +61,7 @@ export type RadicleRegisterOptions = {
   repositoryPath: string
   name?: string
   description?: string
+  visibility?: 'public' | 'private'
 }
 
 export type RadicleStatus = {

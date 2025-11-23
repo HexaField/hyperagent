@@ -48,8 +48,18 @@ export const createRadicleModule = (config: RadicleConfig): RadicleModule => {
 
   const registerRepository = async (options: RadicleRegisterOptions): Promise<RadicleRepositoryInfo> => {
     const resolved = path.resolve(options.repositoryPath)
+    const normalizedName = options.name && options.name.trim().length ? options.name.trim() : path.basename(resolved)
+    const normalizedDescription = options.description ?? ''
+    const visibility = options.visibility ?? 'private'
     await ensureGitRepository(resolved)
-    await ensureRadicleProject(resolved, options)
+    await ensureInitialCommitExists(resolved)
+    const defaultBranch = await resolveDefaultBranch(resolved)
+    await ensureRadicleProject(resolved, {
+      name: normalizedName,
+      description: normalizedDescription,
+      defaultBranch,
+      visibility
+    })
     await ensureRadRemote(resolved)
     return await inspectRepository(resolved)
   }
@@ -126,17 +136,127 @@ const ensureGitRepository = async (repoPath: string) => {
   await runCliCommand('git', ['rev-parse', '--is-inside-work-tree'], { cwd: repoPath })
 }
 
-const ensureRadicleProject = async (repoPath: string, options: RadicleRegisterOptions) => {
+const ensureRadicleProject = async (
+  repoPath: string,
+  options: { name: string; description?: string; defaultBranch: string; visibility: 'public' | 'private' }
+) => {
   const alreadyInitialized = await hasRadicleProject(repoPath)
   if (alreadyInitialized) return
   const args = ['init']
-  if (options.name) {
-    args.push('--name', options.name)
-  }
-  if (options.description) {
+  args.push('--name', options.name)
+  args.push('--default-branch', options.defaultBranch)
+  args.push(options.visibility === 'public' ? '--public' : '--private')
+  args.push('--no-confirm')
+  if (options.description !== undefined) {
     args.push('--description', options.description)
   }
   await runCliCommand('rad', args, { cwd: repoPath })
+}
+
+const readCurrentBranch = async (repoPath: string): Promise<string | null> => {
+  for (const args of [
+    ['symbolic-ref', '--short', 'HEAD'],
+    ['rev-parse', '--abbrev-ref', 'HEAD'],
+    ['branch', '--show-current']
+  ]) {
+    try {
+      const branch = await runCliCommand('git', args, { cwd: repoPath })
+      if (branch && branch !== 'HEAD') {
+        return branch
+      }
+    } catch {
+      // ignore and try the next strategy
+    }
+  }
+  return null
+}
+
+const listLocalBranches = async (repoPath: string): Promise<string[]> => {
+  try {
+    const raw = await runCliCommand('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads'], { cwd: repoPath })
+    return raw
+      .split('\n')
+      .map(entry => entry.trim())
+      .filter(entry => entry.length)
+  } catch {
+    return []
+  }
+}
+
+const branchHasCommits = async (repoPath: string, branch: string | null): Promise<boolean> => {
+  if (!branch) return false
+  try {
+    await runCliCommand('git', ['rev-parse', '--verify', `refs/heads/${branch}`], { cwd: repoPath })
+    return true
+  } catch {
+    return false
+  }
+}
+
+const repositoryHasCommits = async (repoPath: string): Promise<boolean> => {
+  try {
+    await runCliCommand('git', ['rev-parse', '--verify', 'HEAD'], { cwd: repoPath })
+    return true
+  } catch {
+    return false
+  }
+}
+
+const hasStagedChanges = async (repoPath: string): Promise<boolean> => {
+  try {
+    await runCliCommand('git', ['diff', '--cached', '--quiet'], { cwd: repoPath })
+    return false
+  } catch {
+    return true
+  }
+}
+
+const ensureInitialCommitExists = async (repoPath: string) => {
+  const hasCommits = await repositoryHasCommits(repoPath)
+  if (hasCommits) return
+  if (await hasStagedChanges(repoPath)) {
+    throw new Error('Repository has staged changes but no commits. Commit or unstage them before registering with Radicle.')
+  }
+  const branchName = (await readHeadBranchName(repoPath)) ?? 'main'
+  if (!branchName || branchName === 'HEAD') {
+    await runCliCommand('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: repoPath })
+  }
+  await runCliCommand('git', ['commit', '--allow-empty', '-m', 'Initial commit for Radicle registration'], { cwd: repoPath })
+}
+
+const readHeadBranchName = async (repoPath: string): Promise<string | null> => {
+  try {
+    const name = await runCliCommand('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: repoPath })
+    return name.length ? name : null
+  } catch {
+    return null
+  }
+}
+
+const resolveDefaultBranch = async (repoPath: string): Promise<string> => {
+  const tested = new Set<string>()
+  const tryBranch = async (candidate: string | null | undefined): Promise<string | null> => {
+    if (!candidate) return null
+    if (tested.has(candidate)) return null
+    tested.add(candidate)
+    return (await branchHasCommits(repoPath, candidate)) ? candidate : null
+  }
+
+  const current = await tryBranch(await readCurrentBranch(repoPath))
+  if (current) return current
+
+  for (const fallback of ['main', 'master']) {
+    const branch = await tryBranch(fallback)
+    if (branch) return branch
+  }
+
+  const localBranches = await listLocalBranches(repoPath)
+  for (const branchName of localBranches) {
+    const resolved = await tryBranch(branchName)
+    if (resolved) return resolved
+  }
+
+  throw new Error('Unable to determine a Git branch with commits. Create a branch with at least one commit before registering with Radicle.')
 }
 
 const hasRadicleProject = async (repoPath: string): Promise<boolean> => {
