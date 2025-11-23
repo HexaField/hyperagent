@@ -44,6 +44,7 @@ type DirectoryEntry = {
   path: string
   isGitRepository: boolean
   radicleRegistered: boolean
+  radicleRegistrationReason: string | null
 }
 
 type DirectoryListing = {
@@ -408,31 +409,52 @@ export default function RepositoriesPage () {
                   <Show when={(browser()?.entries.length ?? 0) > 0} fallback={<p class="text-sm text-[var(--text-muted)]">No subfolders here.</p>}>
                     <ul class="flex flex-col divide-y divide-[var(--border)]">
                       <For each={paginatedEntries()}>
-                        {entry => (
-                          <li class="flex flex-wrap items-center justify-between gap-3 py-2">
-                            <div>
-                              <p class="font-semibold text-[var(--text)]">{entry.name}</p>
-                              <p class="text-xs text-[var(--text-muted)]">{entry.path}</p>
-                            </div>
-                            <div class="flex flex-wrap items-center gap-2">
-                              <button
-                                class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs font-semibold"
-                                type="button"
-                                onClick={() => void loadDirectory(entry.path)}
-                              >
-                                Open
-                              </button>
-                              <button
-                                class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs"
-                                type="button"
-                                onClick={() => setForm(prev => ({ ...prev, repositoryPath: entry.path }))}
-                              >
-                                Use in form
-                              </button>
-                              <Show when={entry.isGitRepository}>
-                                <Show
-                                  when={isPathRegisteredWithRadicle(entry.path, entry.radicleRegistered)}
-                                  fallback={
+                        {entry => {
+                          const entryIsRegistered = () => isPathRegisteredWithRadicle(entry.path, entry.radicleRegistered)
+                          const registrationReason = () => entry.radicleRegistrationReason
+                          const canRegister = () => entry.isGitRepository && !entryIsRegistered() && !registrationReason()
+                          return (
+                            <li class="flex flex-wrap items-center justify-between gap-3 py-2">
+                              <div>
+                                <p class="font-semibold text-[var(--text)]">{entry.name}</p>
+                                <p class="text-xs text-[var(--text-muted)]">{entry.path}</p>
+                              </div>
+                              <div class="flex flex-wrap items-center gap-2">
+                                <button
+                                  class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs font-semibold"
+                                  type="button"
+                                  onClick={() => void loadDirectory(entry.path)}
+                                >
+                                  Open
+                                </button>
+                                <button
+                                  class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs"
+                                  type="button"
+                                  onClick={() => setForm(prev => ({ ...prev, repositoryPath: entry.path }))}
+                                >
+                                  Use in form
+                                </button>
+                                <Show when={entryIsRegistered()}>
+                                  <span class="rounded-xl bg-green-600 px-3 py-1 text-xs font-semibold text-white">
+                                    Registered via Radicle
+                                  </span>
+                                </Show>
+                                <Show when={!entryIsRegistered()}>
+                                  <Show
+                                    when={canRegister()}
+                                    fallback={
+                                      <Show when={registrationReason()}>
+                                        {reason => (
+                                          <span
+                                            class="rounded-xl bg-red-600 px-3 py-1 text-xs font-semibold text-white"
+                                            title={reason()}
+                                          >
+                                            Cannot register
+                                          </span>
+                                        )}
+                                      </Show>
+                                    }
+                                  >
                                     <button
                                       class="rounded-xl bg-blue-600 px-3 py-1 text-xs font-semibold text-white"
                                       type="button"
@@ -440,16 +462,12 @@ export default function RepositoriesPage () {
                                     >
                                       Register via Radicle
                                     </button>
-                                  }
-                                >
-                                  <span class="rounded-xl bg-green-600 px-3 py-1 text-xs font-semibold text-white">
-                                    Registered via Radicle
-                                  </span>
+                                  </Show>
                                 </Show>
-                              </Show>
-                            </div>
-                          </li>
-                        )}
+                              </div>
+                            </li>
+                          )
+                        }}
                       </For>
                     </ul>
                     <div class="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-[var(--text-muted)]">

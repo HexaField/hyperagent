@@ -14,7 +14,7 @@ import {
   type CodeServerController,
   type CodeServerOptions
 } from '../../src/modules/codeServer'
-import { createPersistence, type Persistence, type ProjectRecord } from '../../src/modules/persistence'
+import { createPersistence, type Persistence, type ProjectRecord, type RadicleRegistrationRecord } from '../../src/modules/persistence'
 import { createWorkflowRuntime, type PlannerRun, type PlannerTask, type WorkflowDetail, type WorkflowRuntime } from '../../src/modules/workflows'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import type { Provider } from '../../src/modules/llm'
@@ -503,12 +503,30 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   const radicleRepositoriesHandler: RequestHandler = async (_req, res) => {
     try {
       const projects = persistence.projects.list()
-      const uniquePaths = [...new Set(projects.map(project => path.resolve(project.repositoryPath)))]
+      const radicleRegistrations = persistence.radicleRegistrations.list()
+      const projectMap = new Map(projects.map(project => [path.resolve(project.repositoryPath), project]))
+      const registrationMap = new Map(radicleRegistrations.map(entry => [path.resolve(entry.repositoryPath), entry]))
+      const uniquePaths = [...new Set([...projectMap.keys(), ...registrationMap.keys()])]
+      if (!uniquePaths.length) {
+        res.json({ repositories: [] })
+        return
+      }
       const gitMetadata = await collectGitMetadata(uniquePaths)
       const inspections = await Promise.all(
         uniquePaths.map(async repoPath => {
           try {
             const info = await radicleModule.inspectRepository(repoPath)
+            if (info.registered) {
+              const existingRegistration = registrationMap.get(repoPath)
+              const stored = persistence.radicleRegistrations.upsert({
+                repositoryPath: repoPath,
+                name: existingRegistration?.name ?? projectMap.get(repoPath)?.name ?? path.basename(repoPath),
+                description: existingRegistration?.description ?? undefined,
+                visibility: existingRegistration?.visibility ?? undefined,
+                defaultBranch: info.defaultBranch ?? existingRegistration?.defaultBranch ?? undefined
+              })
+              registrationMap.set(repoPath, stored)
+            }
             return { path: repoPath, info }
           } catch (error) {
             const message = error instanceof Error ? error.message : 'Radicle inspection failed'
@@ -518,18 +536,19 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       )
       const inspectionMap = new Map<string, { info: Awaited<ReturnType<typeof radicleModule.inspectRepository>> | null; error?: string }>()
       inspections.forEach(entry => {
-        inspectionMap.set(entry.path, { info: entry.info, error: entry.error })
+        inspectionMap.set(entry.path, entry)
       })
-      const payload = projects.map(project => {
-        const resolved = path.resolve(project.repositoryPath)
-        const entry = inspectionMap.get(resolved)
+      const payload = uniquePaths.map(repoPath => {
+        const project = projectMap.get(repoPath) ?? createSyntheticProjectRecord(repoPath, registrationMap.get(repoPath) ?? null)
+        const inspection = inspectionMap.get(repoPath)
         return {
           project,
-          radicle: entry?.info ?? null,
-          git: gitMetadata.get(resolved) ?? null,
-          error: entry?.error ?? null
+          radicle: inspection?.info ?? null,
+          git: gitMetadata.get(repoPath) ?? null,
+          error: inspection?.error ?? null
         }
       })
+      payload.sort((a, b) => a.project.name.localeCompare(b.project.name))
       res.json({ repositories: payload })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to list Radicle repositories'
@@ -660,11 +679,19 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       return
     }
     try {
+      const resolvedPath = path.resolve(repositoryPath.trim())
       const repository = await radicleModule.registerRepository({
-        repositoryPath,
+        repositoryPath: resolvedPath,
         name: typeof name === 'string' && name.length ? name : undefined,
         description: typeof description === 'string' && description.length ? description : undefined,
         visibility: visibility === 'public' || visibility === 'private' ? visibility : undefined
+      })
+      persistence.radicleRegistrations.upsert({
+        repositoryPath: resolvedPath,
+        name: typeof name === 'string' && name.length ? name : undefined,
+        description: typeof description === 'string' && description.length ? description : undefined,
+        visibility: visibility === 'public' || visibility === 'private' ? visibility : undefined,
+        defaultBranch: repository.defaultBranch ?? undefined
       })
       res.json({ repository })
     } catch (error) {
@@ -689,19 +716,31 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
           const absolute = path.join(resolved, entry.name)
           const gitRepo = await isGitRepository(absolute)
           let radicleRegistered = false
-          if (gitRepo) {
+          let radicleRegistrationReason: string | null = null
+          if (!gitRepo) {
+            radicleRegistrationReason = 'Not a Git repository'
+          } else {
             try {
               const info = await radicleModule.inspectRepository(absolute)
               radicleRegistered = info.registered
-            } catch {
-              radicleRegistered = false
+              if (radicleRegistered) {
+                persistence.radicleRegistrations.upsert({
+                  repositoryPath: absolute,
+                  name: entry.name,
+                  defaultBranch: info.defaultBranch ?? undefined
+                })
+              }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'Failed to inspect repository for Radicle'
+              radicleRegistrationReason = message
             }
           }
           return {
             name: entry.name,
             path: absolute,
             isGitRepository: gitRepo,
-            radicleRegistered
+            radicleRegistered,
+            radicleRegistrationReason
           }
         })
       )
@@ -883,6 +922,26 @@ function detectGitAuthorFromCli (): { name: string; email: string } | null {
     return { name, email }
   }
   return null
+}
+
+const sanitizeRepoIdComponent = (repoPath: string): string => {
+  const normalized = repoPath.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  return normalized.length ? normalized : 'radicle-repo'
+}
+
+function createSyntheticProjectRecord (
+  repoPath: string,
+  registration: RadicleRegistrationRecord | null
+): ProjectRecord {
+  return {
+    id: `rad-only-${sanitizeRepoIdComponent(repoPath)}`,
+    name: registration?.name ?? (path.basename(repoPath) || repoPath),
+    description: registration?.description ?? null,
+    repositoryPath: repoPath,
+    repositoryProvider: 'radicle',
+    defaultBranch: registration?.defaultBranch ?? 'main',
+    createdAt: registration?.registeredAt ?? new Date().toISOString()
+  }
 }
 
 function readGitConfigValue (key: string): string | null {

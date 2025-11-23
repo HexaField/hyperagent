@@ -72,6 +72,15 @@ export type CodeServerSessionRecord = {
   stoppedAt: Timestamp | null
 }
 
+export type RadicleRegistrationRecord = {
+  repositoryPath: string
+  name: string | null
+  description: string | null
+  visibility: 'public' | 'private' | null
+  defaultBranch: string | null
+  registeredAt: Timestamp
+}
+
 export type ProjectInput = {
   id?: string
   name: string
@@ -118,6 +127,14 @@ export type CodeServerSessionInput = {
   processId?: number | null
 }
 
+export type RadicleRegistrationInput = {
+  repositoryPath: string
+  name?: string | null
+  description?: string | null
+  visibility?: 'public' | 'private' | null
+  defaultBranch?: string | null
+}
+
 export type PersistenceOptions = {
   file?: string
 }
@@ -157,6 +174,11 @@ export type CodeServerSessionsRepository = {
   resetAllRunning: () => void
 }
 
+export type RadicleRegistrationsRepository = {
+  upsert: (input: RadicleRegistrationInput) => RadicleRegistrationRecord
+  list: () => RadicleRegistrationRecord[]
+}
+
 export type Persistence = {
   db: Database.Database
   projects: ProjectsRepository
@@ -164,6 +186,7 @@ export type Persistence = {
   workflowSteps: WorkflowStepsRepository
   agentRuns: AgentRunsRepository
   codeServerSessions: CodeServerSessionsRepository
+  radicleRegistrations: RadicleRegistrationsRepository
 }
 
 const DEFAULT_DB_PATH = path.join(process.cwd(), 'data', 'hyperagent.db')
@@ -440,13 +463,44 @@ export function createPersistence (options: PersistenceOptions = {}): Persistenc
     }
   }
 
+  const radicleRegistrations: RadicleRegistrationsRepository = {
+    upsert: (input) => {
+      const now = new Date().toISOString()
+      const resolvedPath = path.resolve(input.repositoryPath)
+      db.prepare(
+        `INSERT INTO radicle_registrations (repository_path, name, description, visibility, default_branch, registered_at)
+         VALUES (@repositoryPath, @name, @description, @visibility, @defaultBranch, @registeredAt)
+         ON CONFLICT(repository_path) DO UPDATE SET
+           name = excluded.name,
+           description = excluded.description,
+           visibility = excluded.visibility,
+           default_branch = excluded.default_branch,
+           registered_at = excluded.registered_at`
+      ).run({
+        repositoryPath: resolvedPath,
+        name: input.name ?? null,
+        description: input.description ?? null,
+        visibility: input.visibility ?? null,
+        defaultBranch: input.defaultBranch ?? null,
+        registeredAt: now
+      })
+      const row = db.prepare('SELECT * FROM radicle_registrations WHERE repository_path = ?').get(resolvedPath)
+      return mapRadicleRegistration(row)
+    },
+    list: () => {
+      const rows = db.prepare('SELECT * FROM radicle_registrations ORDER BY registered_at DESC').all()
+      return rows.map(mapRadicleRegistration)
+    }
+  }
+
   return {
     db,
     projects,
     workflows,
     workflowSteps,
     agentRuns,
-    codeServerSessions
+    codeServerSessions,
+    radicleRegistrations
   }
 }
 
@@ -516,6 +570,15 @@ function applyMigrations (db: Database.Database): void {
       started_at TEXT NOT NULL,
       stopped_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS radicle_registrations (
+      repository_path TEXT PRIMARY KEY,
+      name TEXT,
+      description TEXT,
+      visibility TEXT,
+      default_branch TEXT,
+      registered_at TEXT NOT NULL
+    );
   `)
 }
 
@@ -584,6 +647,17 @@ function mapCodeServerSession (row: any): CodeServerSessionRecord {
     status: row.status,
     startedAt: row.started_at,
     stoppedAt: row.stopped_at ?? null
+  }
+}
+
+function mapRadicleRegistration (row: any): RadicleRegistrationRecord {
+  return {
+    repositoryPath: row.repository_path,
+    name: row.name ?? null,
+    description: row.description ?? null,
+    visibility: row.visibility === 'public' || row.visibility === 'private' ? row.visibility : null,
+    defaultBranch: row.default_branch ?? null,
+    registeredAt: row.registered_at
   }
 }
 
