@@ -8,6 +8,12 @@ import type {
   WorkflowStepRecord,
   WorkflowStepsRepository
 } from './persistence'
+import type {
+  CommitResult,
+  RadicleModule,
+  RadicleSessionHandle,
+  WorkspaceInfo as RadicleWorkspaceInfo
+} from './radicle/types'
 
 export type PlannerTask = {
   id: string
@@ -35,11 +41,15 @@ export type AgentExecutorArgs = {
   project: ProjectRecord
   workflow: WorkflowRecord
   step: WorkflowStepRecord
+  workspace?: RadicleWorkspaceInfo
+  radicleSession?: RadicleSessionHandle
 }
 
 export type AgentExecutorResult = {
   stepResult?: Record<string, unknown>
   logsPath?: string | null
+  commitMessage?: string
+  skipCommit?: boolean
 }
 
 export type AgentExecutor = (args: AgentExecutorArgs) => Promise<AgentExecutorResult>
@@ -48,6 +58,11 @@ export type WorkflowRuntimeOptions = {
   persistence: Persistence
   agentExecutor?: AgentExecutor
   pollIntervalMs?: number
+  radicle?: RadicleModule
+  commitAuthor?: {
+    name: string
+    email: string
+  }
 }
 
 export type WorkflowRuntime = {
@@ -65,6 +80,11 @@ export function createWorkflowRuntime (options: WorkflowRuntimeOptions): Workflo
   const persistence = options.persistence
   const agentExecutor = options.agentExecutor ?? createDefaultExecutor()
   const pollInterval = options.pollIntervalMs ?? 1000
+  const radicle = options.radicle
+  const commitAuthor = options.commitAuthor ?? {
+    name: 'Hyperagent Workflow',
+    email: 'workflow@hyperagent.local'
+  }
 
   let workerRunning = false
   let workerPromise: Promise<void> | null = null
@@ -164,13 +184,49 @@ export function createWorkflowRuntime (options: WorkflowRuntimeOptions): Workflo
       type: (step.data.agentType as string) ?? 'coding'
     })
 
+    let workspace: RadicleWorkspaceInfo | undefined
+    let radicleSession: RadicleSessionHandle | undefined
+    let commitResult: CommitResult | null = null
+
     try {
-      const result = await executor({ project, workflow, step })
+      if (radicle) {
+        const branchInfo = buildBranchInfo(project, workflow, step)
+        radicleSession = await radicle.createSession({
+          taskId: step.id,
+          branchInfo,
+          repositoryPath: project.repositoryPath,
+          author: commitAuthor,
+          metadata: {
+            workflowId: workflow.id,
+            projectId: project.id,
+            stepId: step.id
+          }
+        })
+        workspace = await radicleSession.start()
+      }
+
+      const result = await executor({ project, workflow, step, workspace, radicleSession })
+
+      if (radicleSession) {
+        if (result.skipCommit) {
+          await radicleSession.abort()
+        } else {
+          const message = result.commitMessage ?? defaultCommitMessage(workflow, step)
+          commitResult = await radicleSession.finish(message)
+        }
+      }
+
+      const baseResult = result.stepResult ?? {
+        note: 'No stepResult returned'
+      }
+      const enrichedResult = {
+        ...baseResult,
+        ...(workspace ? { workspace } : {}),
+        ...(commitResult ? { commit: commitResult } : {})
+      }
       persistence.workflowSteps.update(step.id, {
         status: 'completed',
-        result: result.stepResult ?? {
-          note: 'No stepResult returned'
-        }
+        result: enrichedResult
       })
       persistence.agentRuns.update(agentRun.id, {
         status: 'succeeded',
@@ -178,6 +234,9 @@ export function createWorkflowRuntime (options: WorkflowRuntimeOptions): Workflo
         logsPath: result.logsPath ?? null
       })
     } catch (error) {
+      if (radicleSession) {
+        await radicleSession.abort().catch(() => undefined)
+      }
       persistence.workflowSteps.update(step.id, {
         status: 'failed',
         result: {
@@ -223,15 +282,48 @@ function refreshWorkflowStatus (
 }
 
 function createDefaultExecutor (): AgentExecutor {
-  return async ({ step }) => {
+  return async ({ step, workspace }) => {
     await delay(250)
     return {
       stepResult: {
-        summary: `Auto-completed step "${step.data.title ?? step.id}"`,
-        instructions: step.data.instructions
-      }
+        summary: `Prepared workspace for "${step.data.title ?? step.id}"`,
+        instructions: step.data.instructions,
+        workspacePath: workspace?.workspacePath
+      },
+      skipCommit: true
     }
   }
+}
+
+function buildBranchInfo (
+  project: ProjectRecord,
+  workflow: WorkflowRecord,
+  step: WorkflowStepRecord
+): { name: string; baseBranch: string } {
+  const explicitStepBranch = typeof step.data.branch === 'string' && step.data.branch.length ? step.data.branch : null
+  const workflowBranch = typeof workflow.data.branch === 'string' && workflow.data.branch.length ? (workflow.data.branch as string) : null
+  const baseBranch = typeof workflow.data.baseBranch === 'string' && workflow.data.baseBranch.length
+    ? (workflow.data.baseBranch as string)
+    : project.defaultBranch
+  const fallback = `wf-${slugify(workflow.id)}-${step.sequence}`
+  return {
+    name: explicitStepBranch ?? workflowBranch ?? fallback,
+    baseBranch
+  }
+}
+
+function defaultCommitMessage (workflow: WorkflowRecord, step: WorkflowStepRecord): string {
+  const workflowLabel = workflow.kind ?? 'workflow'
+  const stepLabel = (step.data.title as string) ?? step.id
+  return `${workflowLabel}: ${stepLabel}`
+}
+
+function slugify (value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'branch'
 }
 
 function delay (ms: number): Promise<void> {

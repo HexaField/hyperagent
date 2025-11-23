@@ -3,6 +3,7 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import express from 'express'
 import fs from 'fs/promises'
 import { createProxyMiddleware } from 'http-proxy-middleware'
+import { spawn } from 'node:child_process'
 import type { Server as HttpServer, IncomingMessage } from 'node:http'
 import { createServer, type AddressInfo, type Socket } from 'node:net'
 import os from 'os'
@@ -14,7 +15,8 @@ import {
   type CodeServerOptions
 } from '../../src/modules/codeServer'
 import { createPersistence, type Persistence, type ProjectRecord } from '../../src/modules/persistence'
-import { createWorkflowRuntime, type PlannerRun, type PlannerTask, type WorkflowRuntime } from '../../src/modules/workflows'
+import { createWorkflowRuntime, type PlannerRun, type PlannerTask, type WorkflowDetail, type WorkflowRuntime } from '../../src/modules/workflows'
+import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import type { Provider } from '../../src/modules/llm'
 
 const DEFAULT_PORT = Number(process.env.UI_SERVER_PORT || 5556)
@@ -39,6 +41,22 @@ type RunLoop = typeof runVerifierWorkerLoop
 
 type ControllerFactory = (options: CodeServerOptions) => CodeServerController
 
+type GraphCommitNode = {
+  id: string
+  commitHash: string
+  branch: string
+  message: string
+  label: string
+  workflowId: string
+  stepId: string
+  timestamp: string
+}
+
+type GraphEdge = {
+  from: string
+  to: string
+}
+
 export type CreateServerOptions = {
   runLoop?: RunLoop
   controllerFactory?: ControllerFactory
@@ -49,6 +67,7 @@ export type CreateServerOptions = {
   persistenceFile?: string
   workflowRuntime?: WorkflowRuntime
   workflowPollIntervalMs?: number
+  radicleModule?: RadicleModule
 }
 
 export type ServerInstance = {
@@ -87,10 +106,29 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
 
   const managePersistenceLifecycle = !options.persistence
   const persistence = options.persistence ?? createPersistence({ file: options.persistenceFile })
+
+  const manageRadicleLifecycle = !options.radicleModule
+  const radicleModule =
+    options.radicleModule ??
+    createRadicleModule({
+      defaultRemote: process.env.RADICLE_REMOTE ?? 'origin',
+      tempRootDir: process.env.RADICLE_TEMP_DIR
+    })
+
+  const commitAuthor = {
+    name: process.env.WORKFLOW_AUTHOR_NAME ?? 'Hyperagent Workflow',
+    email: process.env.WORKFLOW_AUTHOR_EMAIL ?? 'workflow@hyperagent.local'
+  }
+
   const manageWorkerLifecycle = !options.workflowRuntime
   const workflowRuntime =
     options.workflowRuntime ??
-    createWorkflowRuntime({ persistence, pollIntervalMs: options.workflowPollIntervalMs })
+    createWorkflowRuntime({
+      persistence,
+      pollIntervalMs: options.workflowPollIntervalMs,
+      radicle: radicleModule,
+      commitAuthor
+    })
   if (manageWorkerLifecycle) {
     workflowRuntime.startWorker()
   }
@@ -144,6 +182,46 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     if (!pathName.startsWith(prefix)) return pathName
     const trimmed = pathName.slice(prefix.length)
     return trimmed.length ? trimmed : '/'
+  }
+
+  async function runGitCommand(args: string[], cwd: string): Promise<string> {
+    return await new Promise((resolve, reject) => {
+      const child = spawn('git', args, { cwd })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (data) => {
+        stdout += data.toString()
+      })
+      child.stderr.on('data', (data) => {
+        stderr += data.toString()
+      })
+      child.once('error', reject)
+      child.once('close', (code) => {
+        if (code === 0) {
+          resolve(stdout)
+        } else {
+          const message = stderr.trim() || stdout.trim() || `git ${args.join(' ')} failed with code ${code}`
+          reject(new Error(message))
+        }
+      })
+    })
+  }
+
+  function extractCommitFromStep (
+    step: WorkflowDetail['steps'][number]
+  ): { commitHash: string; branch: string; message: string } | null {
+    if (!step.result) return null
+    const commitPayload = (step.result as Record<string, any>).commit as Record<string, any> | undefined
+    if (!commitPayload?.commitHash) {
+      return null
+    }
+    const branch = typeof commitPayload.branch === 'string' && commitPayload.branch.length ? commitPayload.branch : 'unknown'
+    const message = typeof commitPayload.message === 'string' ? commitPayload.message : ''
+    return {
+      commitHash: String(commitPayload.commitHash),
+      branch,
+      message
+    }
   }
 
   async function startCodeServerForSession(sessionId: string, sessionDir: string): Promise<CodeServerSession | null> {
@@ -322,6 +400,107 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     session.proxy(req, res, next)
   }
 
+  const repositoryGraphHandler: RequestHandler = (req, res) => {
+    const projectId = req.params.projectId
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' })
+      return
+    }
+    const project = persistence.projects.getById(projectId)
+    if (!project) {
+      res.status(404).json({ error: 'Unknown project' })
+      return
+    }
+    const workflows = workflowRuntime.listWorkflows(projectId)
+    const branchMap = new Map<string, GraphCommitNode[]>()
+    const seenCommits = new Set<string>()
+
+    workflows.forEach((workflow) => {
+      const steps = persistence.workflowSteps.listByWorkflow(workflow.id)
+      steps.forEach((step) => {
+        const commit = extractCommitFromStep(step)
+        if (!commit) return
+        if (seenCommits.has(commit.commitHash)) return
+        seenCommits.add(commit.commitHash)
+        const branchName = commit.branch === 'unknown' ? project.defaultBranch : commit.branch
+        const label = typeof step.data?.title === 'string' && step.data.title.length
+          ? (step.data.title as string)
+          : `Step ${step.sequence}`
+        const node: GraphCommitNode = {
+          id: commit.commitHash,
+          commitHash: commit.commitHash,
+          branch: branchName,
+          message: commit.message,
+          label,
+          workflowId: workflow.id,
+          stepId: step.id,
+          timestamp: step.updatedAt
+        }
+        const list = branchMap.get(branchName) ?? []
+        list.push(node)
+        branchMap.set(branchName, list)
+      })
+    })
+
+    const branches = [...branchMap.entries()].map(([name, commits]) => ({
+      name,
+      commits: commits.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+    }))
+
+    const edges: GraphEdge[] = []
+    branches.forEach((branch) => {
+      for (let index = 1; index < branch.commits.length; index++) {
+        edges.push({ from: branch.commits[index - 1].id, to: branch.commits[index].id })
+      }
+    })
+
+    res.json({ project, branches, edges })
+  }
+
+  const workflowStepDiffHandler: RequestHandler = async (req, res) => {
+    const { workflowId, stepId } = req.params
+    if (!workflowId || !stepId) {
+      res.status(400).json({ error: 'workflowId and stepId are required' })
+      return
+    }
+    const detail = workflowRuntime.getWorkflowDetail(workflowId)
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown workflow' })
+      return
+    }
+    const project = persistence.projects.getById(detail.workflow.projectId)
+    if (!project) {
+      res.status(404).json({ error: 'Unknown project' })
+      return
+    }
+    const step = detail.steps.find(item => item.id === stepId)
+    if (!step) {
+      res.status(404).json({ error: 'Unknown workflow step' })
+      return
+    }
+    const commit = extractCommitFromStep(step)
+    if (!commit) {
+      res.status(404).json({ error: 'No commit for this step' })
+      return
+    }
+    try {
+      const diffText = await runGitCommand(
+        ['show', commit.commitHash, '--stat', '--patch', '--unified=200'],
+        project.repositoryPath
+      )
+      res.json({
+        workflowId,
+        stepId,
+        commitHash: commit.commitHash,
+        branch: commit.branch === 'unknown' ? project.defaultBranch : commit.branch,
+        message: commit.message,
+        diffText
+      })
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to read diff' })
+    }
+  }
+
   const listProjectsHandler: RequestHandler = (_req, res) => {
     res.json({ projects: persistence.projects.list() })
   }
@@ -419,11 +598,13 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   })
 
   app.get('/api/projects', listProjectsHandler)
+  app.get('/api/projects/:projectId/graph', repositoryGraphHandler)
   app.post('/api/projects', createProjectHandler)
   app.get('/api/workflows', listWorkflowsHandler)
   app.post('/api/workflows', createWorkflowHandler)
   app.post('/api/workflows/:workflowId/start', startWorkflowHandler)
   app.get('/api/workflows/:workflowId', workflowDetailHandler)
+  app.get('/api/workflows/:workflowId/steps/:stepId/diff', workflowStepDiffHandler)
   app.get('/api/code-server/sessions', listCodeSessionsHandler)
   app.post('/api/agent/run', agentRunHandler)
 
@@ -458,6 +639,9 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     }
     if (managePersistenceLifecycle) {
       persistence.db.close()
+    }
+    if (manageRadicleLifecycle) {
+      await radicleModule.cleanup()
     }
   }
 

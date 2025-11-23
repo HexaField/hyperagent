@@ -9,26 +9,25 @@ Below is an architecture plan you can implement as a `Radicle` module, consisten
 Responsibilities:
 
 1. Manage ephemeral workspaces:
+   - Create temporary working directories for tasks.
+   - Clone/fetch the Radicle tracking branch into the temp dir.
+   - Clean up temp dirs deterministically after use.
 
-   * Create temporary working directories for tasks.
-   * Clone/fetch the Radicle tracking branch into the temp dir.
-   * Clean up temp dirs deterministically after use.
 2. Abstract git + Radicle:
+   - Ensure a single persistent Radicle/git repo exists on disk.
+   - Use branches for work; no extra duplicated clones on disk.
+   - Hide git commands behind a simple interface (status, commit, diff, branch).
 
-   * Ensure a single persistent Radicle/git repo exists on disk.
-   * Use branches for work; no extra duplicated clones on disk.
-   * Hide git commands behind a simple interface (status, commit, diff, branch).
 3. Provide a “PR-like” flow:
+   - Start a feature branch for a task or set of tasks.
+   - Apply changes in temp workspace.
+   - Commit & push to Radicle.
+   - Optionally create/annotate a Radicle “patch/merge request”-like record.
 
-   * Start a feature branch for a task or set of tasks.
-   * Apply changes in temp workspace.
-   * Commit & push to Radicle.
-   * Optionally create/annotate a Radicle “patch/merge request”-like record.
 4. Integrate with multi-agent task execution:
-
-   * Given a task, prepare a workspace and context for coding agents.
-   * On success, commit and push.
-   * On failure, collect diffs/logs and discard workspace.
+   - Given a task, prepare a workspace and context for coding agents.
+   - On success, commit and push.
+   - On failure, collect diffs/logs and discard workspace.
 
 ---
 
@@ -36,10 +35,10 @@ Responsibilities:
 
 Create something like `src/modules/radicle.ts` with these main concepts:
 
-* `RadicleRepoManager` – manages the single persistent Radicle-backed repo and branches.
-* `WorkspaceManager` – handles creation and cleanup of ephemeral working dirs.
-* `RadicleSession` – one logical unit of work for a task or task group, bound to a branch and a workspace.
-* `RadiclePatchFlow` – optional helper for “PR-like” patch flow on Radicle.
+- `RadicleRepoManager` – manages the single persistent Radicle-backed repo and branches.
+- `WorkspaceManager` – handles creation and cleanup of ephemeral working dirs.
+- `RadicleSession` – one logical unit of work for a task or task group, bound to a branch and a workspace.
+- `RadiclePatchFlow` – optional helper for “PR-like” patch flow on Radicle.
 
 Directory-level:
 
@@ -62,53 +61,53 @@ src/
 ```ts
 // types.ts
 export interface RadicleConfig {
-  persistentRepoPath: string; // path to the single persistent repo
-  radicleProjectId: string;   // Radicle project identifier
-  defaultRemote?: string;     // e.g. "rad"
-  tempRootDir?: string;       // base for temp dirs; system temp if omitted
+  persistentRepoPath: string // path to the single persistent repo
+  radicleProjectId: string // Radicle project identifier
+  defaultRemote?: string // e.g. "rad"
+  tempRootDir?: string // base for temp dirs; system temp if omitted
 }
 
 export interface RadicleBranchInfo {
-  name: string;
-  baseBranch: string;     // e.g. "main"
-  description?: string;
+  name: string
+  baseBranch: string // e.g. "main"
+  description?: string
 }
 
 export interface RadicleSessionInit {
-  taskId: string;
-  branchInfo: RadicleBranchInfo;
+  taskId: string
+  branchInfo: RadicleBranchInfo
   author: {
-    name: string;
-    email: string;
-  };
+    name: string
+    email: string
+  }
   // optional: metadata to embed in commit messages or patch notes
-  metadata?: Record<string, string>;
+  metadata?: Record<string, string>
 }
 
 export interface WorkspaceInfo {
-  workspacePath: string;
-  branchName: string;
-  baseBranch: string;
+  workspacePath: string
+  branchName: string
+  baseBranch: string
 }
 
 export interface CommitResult {
-  branch: string;
-  commitHash: string;
-  message: string;
-  changedFiles: string[];
+  branch: string
+  commitHash: string
+  message: string
+  changedFiles: string[]
 }
 
 export interface DiffResult {
-  branch: string;
-  diffText: string;
+  branch: string
+  diffText: string
 }
 
 export interface RadiclePatch {
-  patchId: string;
-  branch: string;
-  baseBranch: string;
-  title: string;
-  description: string;
+  patchId: string
+  branch: string
+  baseBranch: string
+  title: string
+  description: string
 }
 ```
 
@@ -120,15 +119,14 @@ This component owns the persistent Radicle/git repo instance and provides branch
 
 Responsibilities:
 
-* Ensure persistent repo exists and is initialised with Radicle.
-* Manage branches:
+- Ensure persistent repo exists and is initialised with Radicle.
+- Manage branches:
+  - Create feature branches from base branch.
+  - Fetch/pull updates from Radicle remote.
 
-  * Create feature branches from base branch.
-  * Fetch/pull updates from Radicle remote.
-* Provide snapshot and sync primitives for workspaces:
-
-  * Export current branch state to an ephemeral workspace.
-  * Import changes back from workspace to persistent repo (commit & push).
+- Provide snapshot and sync primitives for workspaces:
+  - Export current branch state to an ephemeral workspace.
+  - Import changes back from workspace to persistent repo (commit & push).
 
 Key methods (pseudo-API):
 
@@ -155,7 +153,7 @@ export class RadicleRepoManager {
     workspacePath: string,
     branchName: string,
     commitMessage: string,
-    author: { name: string; email: string; },
+    author: { name: string; email: string },
     metadata?: Record<string, string>
   ): Promise<CommitResult> {
     // copy changed files from workspacePath back into persistent repo
@@ -174,24 +172,22 @@ export class RadicleRepoManager {
 
 Implementation choices:
 
-* For “only one instance of the repo”:
+- For “only one instance of the repo”:
+  - Use the persistent repo as the only clone.
+  - For workspaces you can:
+    - Option A: `git worktree` from the persistent repo into ephemeral dirs. No extra clones, still using same .git.
+    - Option B: tar/rsync tree from `.git` to workspace; but this duplicates.
 
-  * Use the persistent repo as the only clone.
-  * For workspaces you can:
-
-    * Option A: `git worktree` from the persistent repo into ephemeral dirs. No extra clones, still using same .git.
-    * Option B: tar/rsync tree from `.git` to workspace; but this duplicates.
-  * Prefer `git worktree` as it is lightweight and respects your “single repo” requirement.
+  - Prefer `git worktree` as it is lightweight and respects your “single repo” requirement.
 
 If using worktrees:
 
-* `exportBranchToPath`:
+- `exportBranchToPath`:
+  - `git worktree add <workspacePath> <branchName>`
 
-  * `git worktree add <workspacePath> <branchName>`
-* `importChangesFromPath`:
-
-  * Worktree already uses same `.git`. Just commit in worktree then push from persistent repo or directly from worktree.
-  * On cleanup, `git worktree remove <workspacePath>` from persistent repo, then delete the directory.
+- `importChangesFromPath`:
+  - Worktree already uses same `.git`. Just commit in worktree then push from persistent repo or directly from worktree.
+  - On cleanup, `git worktree remove <workspacePath>` from persistent repo, then delete the directory.
 
 ---
 
@@ -201,12 +197,11 @@ Responsible for creating, tracking, and cleaning up temporary directories used a
 
 Responsibilities:
 
-* Create a new temp workspace (possibly as a git worktree target).
-* Track mapping `sessionId → workspacePath`.
-* Provide safe cleanup that:
-
-  * Removes worktree (if used).
-  * Deletes workspace directory, even after failures.
+- Create a new temp workspace (possibly as a git worktree target).
+- Track mapping `sessionId → workspacePath`.
+- Provide safe cleanup that:
+  - Removes worktree (if used).
+  - Deletes workspace directory, even after failures.
 
 Key methods:
 
@@ -227,8 +222,8 @@ export class WorkspaceManager {
 
 You can also add:
 
-* `listActiveWorkspaces()`
-* `cleanupAll()` for emergency teardown.
+- `listActiveWorkspaces()`
+- `cleanupAll()` for emergency teardown.
 
 ---
 
@@ -236,50 +231,45 @@ You can also add:
 
 This is the object your orchestrator will use per task or task group. It binds together:
 
-* A branch (`RadicleBranchInfo`).
-* A workspace directory.
-* The persistent repo (via `RadicleRepoManager`).
-* Lifetime: created for a task, used while agents edit files, then finalised (commit & push) and disposed.
+- A branch (`RadicleBranchInfo`).
+- A workspace directory.
+- The persistent repo (via `RadicleRepoManager`).
+- Lifetime: created for a task, used while agents edit files, then finalised (commit & push) and disposed.
 
 Lifecycle:
 
 1. `start()`:
-
-   * Ensure base repo exists (`repoManager.initIfNeeded`).
-   * Ensure branch exists (`repoManager.ensureBranch`).
-   * Create workspace (`workspaceManager.createWorkspace`).
-   * Export branch into workspace (`repoManager.exportBranchToPath`).
-   * Return `WorkspaceInfo` to caller so agents know where to read/write files.
+   - Ensure base repo exists (`repoManager.initIfNeeded`).
+   - Ensure branch exists (`repoManager.ensureBranch`).
+   - Create workspace (`workspaceManager.createWorkspace`).
+   - Export branch into workspace (`repoManager.exportBranchToPath`).
+   - Return `WorkspaceInfo` to caller so agents know where to read/write files.
 
 2. Agents run:
-
-   * Coding agents operate in `workspacePath`, modifying files.
-   * They never touch `persistentRepoPath` directly.
+   - Coding agents operate in `workspacePath`, modifying files.
+   - They never touch `persistentRepoPath` directly.
 
 3. `commitAndPush()`:
+   - Run git status/diff in workspace to see if anything changed.
+   - If changes exist:
+     - Commit changes with message that includes taskId and metadata.
+     - Push branch to Radicle remote.
 
-   * Run git status/diff in workspace to see if anything changed.
-   * If changes exist:
-
-     * Commit changes with message that includes taskId and metadata.
-     * Push branch to Radicle remote.
-   * Return `CommitResult`.
+   - Return `CommitResult`.
 
 4. `abort()`:
-
-   * No commit/push.
-   * Clean up workspace (remove worktree + delete dir).
+   - No commit/push.
+   - Clean up workspace (remove worktree + delete dir).
 
 5. `finish()`:
-
-   * Wrap `commitAndPush()` + cleanup.
+   - Wrap `commitAndPush()` + cleanup.
 
 API sketch:
 
 ```ts
 export class RadicleSession {
-  private workspace?: WorkspaceInfo;
-  private committed = false;
+  private workspace?: WorkspaceInfo
+  private committed = false
 
   constructor(
     private repoManager: RadicleRepoManager,
@@ -288,29 +278,29 @@ export class RadicleSession {
   ) {}
 
   async start(): Promise<WorkspaceInfo> {
-    await this.repoManager.initIfNeeded();
-    await this.repoManager.ensureBranch(this.init.branchInfo);
+    await this.repoManager.initIfNeeded()
+    await this.repoManager.ensureBranch(this.init.branchInfo)
 
-    const workspacePath = await this.workspaceManager.createWorkspace(this.init.taskId);
-    await this.repoManager.exportBranchToPath(this.init.branchInfo.name, workspacePath);
+    const workspacePath = await this.workspaceManager.createWorkspace(this.init.taskId)
+    await this.repoManager.exportBranchToPath(this.init.branchInfo.name, workspacePath)
 
     this.workspace = {
       workspacePath,
       branchName: this.init.branchInfo.name,
-      baseBranch: this.init.branchInfo.baseBranch,
-    };
-    return this.workspace;
+      baseBranch: this.init.branchInfo.baseBranch
+    }
+    return this.workspace
   }
 
   getWorkspace(): WorkspaceInfo {
     if (!this.workspace) {
-      throw new Error("Session not started");
+      throw new Error('Session not started')
     }
-    return this.workspace;
+    return this.workspace
   }
 
   async commitAndPush(commitMessage: string): Promise<CommitResult> {
-    if (!this.workspace) throw new Error("Session not started");
+    if (!this.workspace) throw new Error('Session not started')
 
     const result = await this.repoManager.importChangesFromPath(
       this.workspace.workspacePath,
@@ -318,30 +308,30 @@ export class RadicleSession {
       commitMessage,
       this.init.author,
       this.init.metadata
-    );
+    )
 
-    await this.repoManager.pushToRadicle(this.workspace.branchName);
-    this.committed = true;
-    return result;
+    await this.repoManager.pushToRadicle(this.workspace.branchName)
+    this.committed = true
+    return result
   }
 
   async abort(): Promise<void> {
-    if (!this.workspace) return;
-    await this.workspaceManager.cleanupWorkspace(this.init.taskId, this.workspace.workspacePath);
-    this.workspace = undefined;
+    if (!this.workspace) return
+    await this.workspaceManager.cleanupWorkspace(this.init.taskId, this.workspace.workspacePath)
+    this.workspace = undefined
   }
 
   async finish(commitMessage: string): Promise<CommitResult | null> {
     try {
-      if (!this.workspace) return null;
+      if (!this.workspace) return null
 
       // Optionally check if there are changes before committing
-      const commitResult = await this.commitAndPush(commitMessage);
-      return commitResult;
+      const commitResult = await this.commitAndPush(commitMessage)
+      return commitResult
     } finally {
       if (this.workspace) {
-        await this.workspaceManager.cleanupWorkspace(this.init.taskId, this.workspace.workspacePath);
-        this.workspace = undefined;
+        await this.workspaceManager.cleanupWorkspace(this.init.taskId, this.workspace.workspacePath)
+        this.workspace = undefined
       }
     }
   }
@@ -356,26 +346,28 @@ If you want a PR-like abstraction on top of Radicle:
 
 Responsibilities:
 
-* Create and manage “patch” metadata linked to branches.
-* Provide methods to:
-
-  * Open a patch (title, description, branch, base).
-  * Update notes (e.g. from verifier agent).
-  * Retrieve diff for review.
-  * Mark patch as “ready to merge” or similar.
+- Create and manage “patch” metadata linked to branches.
+- Provide methods to:
+  - Open a patch (title, description, branch, base).
+  - Update notes (e.g. from verifier agent).
+  - Retrieve diff for review.
+  - Mark patch as “ready to merge” or similar.
 
 API sketch:
 
 ```ts
 export interface PatchOpenParams {
-  branchName: string;
-  baseBranch: string;
-  title: string;
-  description: string;
+  branchName: string
+  baseBranch: string
+  title: string
+  description: string
 }
 
 export class RadiclePatchFlow {
-  constructor(private repoManager: RadicleRepoManager, private config: RadicleConfig) {}
+  constructor(
+    private repoManager: RadicleRepoManager,
+    private config: RadicleConfig
+  ) {}
 
   async openPatch(params: PatchOpenParams): Promise<RadiclePatch> {
     // create Radicle patch (e.g. via rad patch/mr/whatever CLI or metadata in repo)
@@ -401,45 +393,39 @@ Even if you don’t model Radicle’s patch objects initially, you can store pat
 From the perspective of your multi-agent orchestration:
 
 1. **Task execution flow:**
-
-   * Planner assigns a task to be executed on branch `feature/task-123`.
-   * Orchestrator does:
-
+   - Planner assigns a task to be executed on branch `feature/task-123`.
+   - Orchestrator does:
      1. Create `RadicleSession` with:
+        - `taskId = "task-123"`.
+        - `branchInfo` (base `main`, name `feature/task-123`).
 
-        * `taskId = "task-123"`.
-        * `branchInfo` (base `main`, name `feature/task-123`).
      2. `session.start()` → `WorkspaceInfo`.
      3. Invoke coding agents, passing `workspacePath` and repo info:
+        - Worker agent reads/modifies files under `workspacePath`.
+        - Instructor agent checks diffs and tests also under `workspacePath`.
 
-        * Worker agent reads/modifies files under `workspacePath`.
-        * Instructor agent checks diffs and tests also under `workspacePath`.
      4. If successful:
+        - `session.finish("task-123: implement foo feature")`
+        - Optionally open/update Radicle patch via `RadiclePatchFlow`.
 
-        * `session.finish("task-123: implement foo feature")`
-        * Optionally open/update Radicle patch via `RadiclePatchFlow`.
      5. If failed:
-
-        * `session.abort()`.
+        - `session.abort()`.
 
 2. **Single persistent repo guarantee:**
+   - Application startup:
+     - Instantiate a single `RadicleRepoManager` pointing to `config.persistentRepoPath`.
 
-   * Application startup:
+   - All `RadicleSession`s share this manager; they only differ by:
+     - `branchInfo`
+     - `workspacePath`
 
-     * Instantiate a single `RadicleRepoManager` pointing to `config.persistentRepoPath`.
-   * All `RadicleSession`s share this manager; they only differ by:
-
-     * `branchInfo`
-     * `workspacePath`
-   * Use `git worktree` to avoid multiple `.git` directories.
+   - Use `git worktree` to avoid multiple `.git` directories.
 
 3. **Automatic cleanup:**
-
-   * `RadicleSession.finish` and `RadicleSession.abort` must call `WorkspaceManager.cleanupWorkspace`.
-   * You may additionally have:
-
-     * A periodic job that scans `tempRootDir` for stale dirs and removes them.
-     * A “shutdown” hook to call `workspaceManager.cleanupAll()`.
+   - `RadicleSession.finish` and `RadicleSession.abort` must call `WorkspaceManager.cleanupWorkspace`.
+   - You may additionally have:
+     - A periodic job that scans `tempRootDir` for stale dirs and removes them.
+     - A “shutdown” hook to call `workspaceManager.cleanupAll()`.
 
 ---
 
@@ -447,23 +433,21 @@ From the perspective of your multi-agent orchestration:
 
 Consider these cases:
 
-* Failure when creating workspace:
+- Failure when creating workspace:
+  - Abort session, report error up to orchestrator.
 
-  * Abort session, report error up to orchestrator.
-* Failure when committing or pushing:
+- Failure when committing or pushing:
+  - Do not delete workspace immediately; record error and path for debugging.
+  - Optionally have a flag `persistentOnError` to keep workspace; else store patchable diff/log in another artifact.
 
-  * Do not delete workspace immediately; record error and path for debugging.
-  * Optionally have a flag `persistentOnError` to keep workspace; else store patchable diff/log in another artifact.
-* Failure when cleaning up:
-
-  * Log and continue. Provide a manual `cleanupAll` method to run later.
+- Failure when cleaning up:
+  - Log and continue. Provide a manual `cleanupAll` method to run later.
 
 For concurrency:
 
-* If multiple tasks work on same branch, you must control access:
-
-  * Easiest: “one session per branch at a time”.
-  * Use a simple lock map `{ branchName → mutex }` around commit/push operations.
+- If multiple tasks work on same branch, you must control access:
+  - Easiest: “one session per branch at a time”.
+  - Use a simple lock map `{ branchName → mutex }` around commit/push operations.
 
 ---
 
@@ -473,38 +457,38 @@ In `src/modules/radicle/index.ts`, expose a simple facade:
 
 ```ts
 export class RadicleModule {
-  private repoManager: RadicleRepoManager;
-  private workspaceManager: WorkspaceManager;
-  private patchFlow: RadiclePatchFlow;
+  private repoManager: RadicleRepoManager
+  private workspaceManager: WorkspaceManager
+  private patchFlow: RadiclePatchFlow
 
   constructor(private config: RadicleConfig) {
-    this.repoManager = new RadicleRepoManager(config);
-    this.workspaceManager = new WorkspaceManager(config);
-    this.patchFlow = new RadiclePatchFlow(this.repoManager, config);
+    this.repoManager = new RadicleRepoManager(config)
+    this.workspaceManager = new WorkspaceManager(config)
+    this.patchFlow = new RadiclePatchFlow(this.repoManager, config)
   }
 
   createSession(init: RadicleSessionInit): RadicleSession {
-    return new RadicleSession(this.repoManager, this.workspaceManager, init);
+    return new RadicleSession(this.repoManager, this.workspaceManager, init)
   }
 
   getPatchFlow(): RadiclePatchFlow {
-    return this.patchFlow;
+    return this.patchFlow
   }
 
   // Optional utility methods
   async getDiff(branch: string, base: string): Promise<DiffResult> {
-    return this.repoManager.getDiffForBranch(branch, base);
+    return this.repoManager.getDiffForBranch(branch, base)
   }
 }
 ```
 
 Your higher-level orchestration code then only needs:
 
-* `RadicleModule.createSession` for per-task work.
-* Optionally `RadicleModule.getPatchFlow` for PR-like operations.
+- `RadicleModule.createSession` for per-task work.
+- Optionally `RadicleModule.getPatchFlow` for PR-like operations.
 
 This gives you a clear, implementable architecture that:
 
-* Uses temporary directories for runtime work.
-* Keeps a single persistent Radicle/git repo on disk.
-* Provides a clean, PR-like flow for agents and humans.
+- Uses temporary directories for runtime work.
+- Keeps a single persistent Radicle/git repo on disk.
+- Provides a clean, PR-like flow for agents and humans.

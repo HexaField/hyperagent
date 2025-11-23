@@ -98,3 +98,41 @@ body,
   background: var(--bg-app);
   color: var(--text);
 }
+
+.diff-viewer {
+  font-family: 'JetBrains Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  overflow-x: auto;
+}
+
+.diff-pre {
+  margin: 0;
+  padding: 0;
+}
+
+.diff-line {
+  display: block;
+  padding: 0.2rem 1rem;
+  white-space: pre-wrap;
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-line-header {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.diff-line-hunk {
+  background: rgba(251, 191, 36, 0.18);
+  color: #b45309;
+}
+
+.diff-line-addition {
+  background: rgba(16, 185, 129, 0.12);
+  color: #065f46;
+}
+
+.diff-line-deletion {
+  background: rgba(239, 68, 68, 0.12);
+  color: #991b1b;
+}

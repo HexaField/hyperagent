@@ -13,6 +13,7 @@ import type {
   CodeServerOptions
 } from '../../src/modules/codeServer'
 import { createServerApp } from './app'
+import type { RadicleModule } from '../../src/modules/radicle'
 
 const mockResult: AgentLoopResult = {
   outcome: 'approved',
@@ -114,6 +115,8 @@ async function createIntegrationHarness () {
   const tmpBase = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-ui-server-tests-'))
   const dbFile = path.join(tmpBase, 'runtime.db')
   const fakeCodeServer = await startFakeCodeServer()
+  const radicleWorkspaceRoot = path.join(tmpBase, 'radicle-workspaces')
+  await fs.mkdir(radicleWorkspaceRoot, { recursive: true })
 
   const runLoop = vi.fn<[AgentLoopOptions], Promise<AgentLoopResult>>(async (options) => {
     const chunk: AgentStreamEvent = {
@@ -145,7 +148,8 @@ async function createIntegrationHarness () {
     controllerFactory,
     tmpDir: tmpBase,
     allocatePort: async () => fakeCodeServer.port,
-    persistenceFile: dbFile
+    persistenceFile: dbFile,
+    radicleModule: createFakeRadicleModule(radicleWorkspaceRoot)
   })
 
   const httpServer = appServer.start(0)
@@ -164,6 +168,49 @@ async function createIntegrationHarness () {
       await fakeCodeServer.close()
       await fs.rm(tmpBase, { recursive: true, force: true })
     }
+  }
+}
+
+function createFakeRadicleModule (workspaceRoot: string): RadicleModule {
+  return {
+    createSession: async (init) => {
+      let workspace: { workspacePath: string; branchName: string; baseBranch: string } | null = null
+      const start = async () => {
+        if (!workspace) {
+          const dir = await fs.mkdtemp(path.join(workspaceRoot, `${init.taskId}-`))
+          workspace = {
+            workspacePath: dir,
+            branchName: init.branchInfo.name,
+            baseBranch: init.branchInfo.baseBranch
+          }
+        }
+        return workspace
+      }
+      const getWorkspace = () => {
+        if (!workspace) throw new Error('workspace not started')
+        return workspace
+      }
+      const cleanup = async () => {
+        if (!workspace) return
+        await fs.rm(workspace.workspacePath, { recursive: true, force: true })
+        workspace = null
+      }
+      const finish = async () => {
+        await cleanup()
+        return null
+      }
+      const abort = async () => {
+        await cleanup()
+      }
+      return {
+        start,
+        getWorkspace,
+        commitAndPush: async () => null,
+        finish,
+        abort
+      }
+    },
+    cleanup: async () => {}
   }
 }
 
@@ -290,6 +337,52 @@ describe('createServerApp', () => {
       expect(listResponse.status).toBe(200)
       const listPayload = await listResponse.json()
       expect(listPayload.workflows.length).toBeGreaterThan(0)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('exposes repository graph and workflow diff endpoints', async () => {
+    const harness = await createIntegrationHarness()
+    try {
+      const projectResponse = await fetch(`${harness.baseUrl}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Graph Demo', repositoryPath: '/tmp/graph-demo' })
+      })
+      expect(projectResponse.status).toBe(201)
+      const project = await projectResponse.json()
+      const graphRes = await fetch(`${harness.baseUrl}/api/projects/${project.id}/graph`)
+      expect(graphRes.status).toBe(200)
+      const graphPayload = await graphRes.json()
+      expect(graphPayload.project.id).toBe(project.id)
+      expect(Array.isArray(graphPayload.branches)).toBe(true)
+
+      const workflowResponse = await fetch(`${harness.baseUrl}/api/workflows`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: project.id,
+          kind: 'graph-test',
+          tasks: [{ id: 'task-1', title: 'Branch update', instructions: 'touch files' }],
+          autoStart: true
+        })
+      })
+      expect(workflowResponse.status).toBe(201)
+      const workflowDetail = await workflowResponse.json()
+      const workflowId = workflowDetail.workflow?.id as string
+      expect(typeof workflowId).toBe('string')
+      const detailResponse = await fetch(`${harness.baseUrl}/api/workflows/${workflowId}`)
+      expect(detailResponse.status).toBe(200)
+      const detail = await detailResponse.json()
+      const firstStep = detail.steps[0]
+      expect(firstStep).toBeTruthy()
+      const diffResponse = await fetch(
+        `${harness.baseUrl}/api/workflows/${workflowId}/steps/${firstStep.id}/diff`
+      )
+      expect(diffResponse.status).toBe(404)
+      const diffPayload = await diffResponse.json()
+      expect(diffPayload).toHaveProperty('error')
     } finally {
       await harness.close()
     }
