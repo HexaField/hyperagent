@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .env
+data/
 package-lock.json
 .DS_Store
 .tests/

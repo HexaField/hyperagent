@@ -10,9 +10,10 @@ body,
   margin: 0;
 }
 
-/* Prevent the browser from showing the outer scrollbar; internal panels may still scroll. */
+/* Allow the page to scroll normally so longer layouts remain accessible. */
 body {
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 #root {

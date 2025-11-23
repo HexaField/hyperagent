@@ -20,7 +20,7 @@ Key principles:
    * Relational DB (Postgres or SQLite to start).
    * Filesystem volumes for:
 
-     * Radicle repo(s).
+     * Project repositories or checked-out workspaces.
      * Long-lived worktrees (e.g. “studio” worktrees for code-server).
      * Logs/artifacts.
 3. Every long-running thing (workflow, agent run, code-server session) has a durable record in the DB and a clear state machine.
@@ -37,7 +37,7 @@ Core tables (simplified):
 * `workflow_steps` (or `workflow_tasks` if you map directly to your task DAG)
 * `agent_runs`
 * `code_server_sessions`
-* `radicle_sessions` (mostly metadata; actual repo persists on disk)
+* `workspace_sessions` (mostly metadata; actual repo persists on disk)
 * `events` / `logs` (optional, or you keep logs on disk and store paths in DB)
 
 Representative schema sketch (not exact SQL, but close):
@@ -47,8 +47,8 @@ CREATE TABLE projects (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   description TEXT,
-  radicle_repo_path TEXT NOT NULL,
-  radicle_project_id TEXT NOT NULL,
+  repository_path TEXT NOT NULL,
+  repository_provider TEXT,
   default_branch TEXT NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT now()
 );
@@ -160,9 +160,9 @@ Separate process (could be the same codebase, different entry point):
      * Create `agent_run` row (status `running`).
      * Call into your existing modules:
 
-       * Create `RadicleSession` for branch.
-       * Invoke coding or planner agents as per `workflow_steps.data`.
-       * Commit/push via `RadicleSession.finish`.
+      * Ensure a workspace exists (checkout, dependencies, etc.).
+      * Invoke coding or planner agents as per `workflow_steps.data`.
+      * Commit/push via the workspace utilities you use.
      * Update `agent_run` and `workflow_step` status.
   4. Update workflow-level status:
 
@@ -184,9 +184,9 @@ For code-server, you don’t really “resume a process” after restart; you:
 
 1. User starts a code-server session for project+branch:
 
-   * `CodeServerManager.startSession(projectId, branch)`:
+   * `startCodeServerSession(projectId, branch)`:
 
-     * Ensures a studio worktree exists (Radicle module, persistent volume).
+     * Ensures a studio worktree exists (persistent volume, git checkout, dependencies).
      * Spawns code-server pointing at that path.
      * Inserts `code_server_sessions` row with `status = 'running'`.
 2. User navigates to `/code/:sessionId` (or project+branch mapping).
@@ -218,17 +218,14 @@ Use multiple containers/services:
 
 1. `app`:
 
-   * Your HTTP API + StudioModule, RadicleModule, planner, etc.
+  * Your HTTP API + StudioModule, planner, code-server orchestration, etc.
 2. `worker`:
 
    * Same codebase, but starts the Workflow worker instead of HTTP server.
 3. `db`:
 
    * Postgres (or you mount SQLite into a volume).
-4. `radicle-node` (optional):
-
-   * If running a Radicle daemon locally.
-5. `code-server`:
+4. `code-server`:
 
    * For flexibility, consider running code-server as a separate container per workspace, not as a child process of `app`.
 
@@ -238,9 +235,9 @@ Each of these is stateless except `db` and the volumes.
 
 Use named volumes or bind mounts for:
 
-* `radicle-repos`:
+* `project-repos`:
 
-  * Persistent Radicle repo(s).
+  * Persistent project repo(s).
 * `worktrees`:
 
   * Studio worktrees and/or ephemeral ones (if you want them to survive container restarts).
@@ -269,7 +266,7 @@ services:
     depends_on:
       - db
     volumes:
-      - radicle-repos:/radicle
+      - project-repos:/workspace
       - worktrees:/worktrees
       - logs:/logs
     environment:
@@ -281,7 +278,7 @@ services:
     depends_on:
       - db
     volumes:
-      - radicle-repos:/radicle
+      - project-repos:/workspace
       - worktrees:/worktrees
       - logs:/logs
     environment:
@@ -292,7 +289,7 @@ services:
 
 volumes:
   db-data:
-  radicle-repos:
+  project-repos:
   worktrees:
   logs:
 ```
@@ -312,7 +309,7 @@ Yes, but with a specific pattern:
 All of them share:
 
 * One DB.
-* Shared volumes for Radicle repo(s) and worktrees.
+* Shared volumes for project repo(s) and worktrees.
 
 This gives you:
 
@@ -332,7 +329,7 @@ Refactor each module so that:
 
 For example:
 
-### 5.1. AgentModule
+### 5.1. Functional Agent module
 
 ```ts
 interface AgentRunRepository {
@@ -341,11 +338,15 @@ interface AgentRunRepository {
   findById(id: AgentRunId): Promise<AgentRun | null>;
 }
 
-class AgentModule {
-  constructor(private repo: AgentRunRepository, private llmClient: LLMClient) {}
+interface AgentModuleDeps {
+  repo: AgentRunRepository;
+  llmClient: LLMClient;
+  workspace: WorkspaceAdapter;
+}
 
-  async executeStep(step: WorkflowStep, context: ExecutionContext): Promise<AgentRun> {
-    const run = await this.repo.create({
+export const createAgentModule = ({ repo, llmClient, workspace }: AgentModuleDeps) => {
+  const executeStep = async (step: WorkflowStep, context: ExecutionContext): Promise<AgentRun> => {
+    const run = await repo.create({
       projectId: context.projectId,
       branch: context.branch,
       status: "running",
@@ -354,18 +355,22 @@ class AgentModule {
     });
 
     try {
-      // do the LLM calls, interact with RadicleSession, etc.
-      await this.repo.update(run.id, { status: "succeeded", finishedAt: new Date().toISOString() });
+      await workspace.prepare(context);
+      await llmClient.run(step.prompt, context);
+      await workspace.commit(context, step.data.commitMessage);
+      await repo.update(run.id, { status: "succeeded", finishedAt: new Date().toISOString() });
       return { ...run, status: "succeeded" };
-    } catch (e) {
-      await this.repo.update(run.id, { status: "failed", finishedAt: new Date().toISOString() });
-      throw e;
+    } catch (error) {
+      await repo.update(run.id, { status: "failed", finishedAt: new Date().toISOString() });
+      throw error;
     }
-  }
-}
+  };
+
+  return { executeStep };
+};
 ```
 
-### 5.2. CodeServerManager
+### 5.2. Functional Code-server management
 
 ```ts
 interface CodeServerSessionRepository {
@@ -374,28 +379,95 @@ interface CodeServerSessionRepository {
   markStopped(id: string): Promise<void>;
 }
 
-class CodeServerManager {
-  constructor(private repo: CodeServerSessionRepository) {}
-
-  async startSession(project: Project, branch: string): Promise<CodeServerSession> {
-    // ensure worktree via RadicleModule
-    // spawn or create container; generate URL/token
-    // persist via repo.upsert
-  }
-
-  async stopSession(projectId: string, branch: string): Promise<void> {
-    const session = await this.repo.findByProjectAndBranch(projectId, branch);
-    if (!session) return;
-    // kill process/container
-    await this.repo.markStopped(session.id);
-  }
+interface CodeServerDeps {
+  repo: CodeServerSessionRepository;
+  processManager: ProcessManager;
+  workspace: WorkspaceAdapter;
 }
+
+export const createCodeServerManager = ({ repo, processManager, workspace }: CodeServerDeps) => {
+  const startSession = async (project: Project, branch: string): Promise<CodeServerSession> => {
+    const workspacePath = await workspace.ensure({ project, branch });
+    const { url, authToken, pid } = await processManager.spawn({ workspacePath });
+    const session: CodeServerSession = {
+      id: crypto.randomUUID(),
+      projectId: project.id,
+      branch,
+      workspacePath,
+      url,
+      authToken,
+      processId: pid,
+      status: "running",
+      startedAt: new Date().toISOString(),
+    };
+    await repo.upsert(session);
+    return session;
+  };
+
+  const stopSession = async (projectId: string, branch: string): Promise<void> => {
+    const session = await repo.findByProjectAndBranch(projectId, branch);
+    if (!session) return;
+    await processManager.kill(session.processId);
+    await repo.markStopped(session.id);
+  };
+
+  return { startSession, stopSession };
+};
 ```
 
-### 5.3. WorkflowModule
+### 5.3. Functional workflow module
 
-* Uses `WorkflowRepository` + `WorkflowStepRepository`.
-* Handles transitions purely via DB; runtime semantics are implemented in worker process using this module.
+```ts
+interface WorkflowRepository {
+  insert(workflow: Workflow): Promise<void>;
+  updateStatus(id: WorkflowId, status: WorkflowStatus): Promise<void>;
+  findById(id: WorkflowId): Promise<Workflow | null>;
+}
+
+interface WorkflowStepRepository {
+  insertMany(steps: WorkflowStep[]): Promise<void>;
+  findReadySteps(): Promise<WorkflowStep[]>;
+  claimStep(id: WorkflowStepId): Promise<boolean>;
+  update(id: WorkflowStepId, patch: Partial<WorkflowStep>): Promise<void>;
+}
+
+export const createWorkflowModule = ({
+  workflows,
+  steps,
+}: {
+  workflows: WorkflowRepository;
+  steps: WorkflowStepRepository;
+}) => {
+  const createFromPlanner = async (projectId: string, plannerRun: PlannerRun): Promise<Workflow> => {
+    const workflow: Workflow = buildWorkflow(projectId, plannerRun);
+    await workflows.insert(workflow);
+    await steps.insertMany(workflow.steps);
+    return workflow;
+  };
+
+  const transitionWorkflow = async (id: WorkflowId, status: WorkflowStatus): Promise<void> => {
+    await workflows.updateStatus(id, status);
+  };
+
+  const fetchReadySteps = async (): Promise<WorkflowStep[]> => {
+    return steps.findReadySteps();
+  };
+
+  const claimAndUpdateStep = async (
+    stepId: WorkflowStepId,
+    update: Partial<WorkflowStep>
+  ): Promise<boolean> => {
+    const claimed = await steps.claimStep(stepId);
+    if (!claimed) return false;
+    await steps.update(stepId, update);
+    return true;
+  };
+
+  return { createFromPlanner, transitionWorkflow, fetchReadySteps, claimAndUpdateStep };
+};
+```
+
+These factories encourage explicit dependency injection, remain easy to test, and map directly onto the persistence layer described above.
 
 ---
 

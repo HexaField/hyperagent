@@ -112,6 +112,7 @@ async function streamSseFrames (
 
 async function createIntegrationHarness () {
   const tmpBase = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-ui-server-tests-'))
+  const dbFile = path.join(tmpBase, 'runtime.db')
   const fakeCodeServer = await startFakeCodeServer()
 
   const runLoop = vi.fn<[AgentLoopOptions], Promise<AgentLoopResult>>(async (options) => {
@@ -143,7 +144,8 @@ async function createIntegrationHarness () {
     runLoop,
     controllerFactory,
     tmpDir: tmpBase,
-    allocatePort: async () => fakeCodeServer.port
+    allocatePort: async () => fakeCodeServer.port,
+    persistenceFile: dbFile
   })
 
   const httpServer = appServer.start(0)
@@ -233,6 +235,61 @@ describe('createServerApp', () => {
       const response = await fetch(`${harness.baseUrl}/code-server/missing`)
       expect(response.status).toBe(404)
       expect(await response.json()).toEqual({ error: 'Unknown code-server session' })
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('manages projects and workflows via REST APIs', async () => {
+    const harness = await createIntegrationHarness()
+    try {
+      const projectResponse = await fetch(`${harness.baseUrl}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Demo', repositoryPath: '/tmp/demo' })
+      })
+      expect(projectResponse.status).toBe(201)
+      const project = await projectResponse.json()
+      expect(project).toHaveProperty('id')
+
+      const workflowResponse = await fetch(`${harness.baseUrl}/api/workflows`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: project.id,
+          kind: 'demo',
+          tasks: [{ id: 'task-1', title: 'Demo task', instructions: 'Do demo things' }],
+          autoStart: true
+        })
+      })
+      expect(workflowResponse.status).toBe(201)
+      const workflowDetail = await workflowResponse.json()
+      const workflowId = workflowDetail.workflow?.id as string | undefined
+      expect(typeof workflowId).toBe('string')
+      if (!workflowId) {
+        throw new Error('workflow id missing in response')
+      }
+
+      let finalStatus = ''
+      for (let attempt = 0; attempt < 15; attempt++) {
+        const detailRes = await fetch(`${harness.baseUrl}/api/workflows/${workflowId}`)
+        expect(detailRes.status).toBe(200)
+        const detail = await detailRes.json()
+        finalStatus = detail.workflow.status
+        if (finalStatus === 'completed') {
+          expect(detail.steps.every((step: any) => step.status === 'completed')).toBe(true)
+          break
+        }
+        await new Promise(resolve => setTimeout(resolve, 200))
+      }
+      expect(finalStatus).toBe('completed')
+
+      const listResponse = await fetch(
+        `${harness.baseUrl}/api/workflows?projectId=${encodeURIComponent(project.id)}`
+      )
+      expect(listResponse.status).toBe(200)
+      const listPayload = await listResponse.json()
+      expect(listPayload.workflows.length).toBeGreaterThan(0)
     } finally {
       await harness.close()
     }

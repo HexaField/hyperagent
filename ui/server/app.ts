@@ -13,6 +13,8 @@ import {
   type CodeServerController,
   type CodeServerOptions
 } from '../../src/modules/codeServer'
+import { createPersistence, type Persistence, type ProjectRecord } from '../../src/modules/persistence'
+import { createWorkflowRuntime, type PlannerRun, type PlannerTask, type WorkflowRuntime } from '../../src/modules/workflows'
 import type { Provider } from '../../src/modules/llm'
 
 const DEFAULT_PORT = Number(process.env.UI_SERVER_PORT || 5556)
@@ -26,6 +28,8 @@ export type CodeServerSession = {
   id: string
   dir: string
   basePath: string
+  projectId: string
+  branch: string
   controller: CodeServerController
   proxy: ProxyWithUpgrade
   publicUrl: string
@@ -41,6 +45,10 @@ export type CreateServerOptions = {
   tmpDir?: string
   port?: number
   allocatePort?: () => Promise<number>
+  persistence?: Persistence
+  persistenceFile?: string
+  workflowRuntime?: WorkflowRuntime
+  workflowPollIntervalMs?: number
 }
 
 export type ServerInstance = {
@@ -77,11 +85,59 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
         })
       }))
 
+  const managePersistenceLifecycle = !options.persistence
+  const persistence = options.persistence ?? createPersistence({ file: options.persistenceFile })
+  const manageWorkerLifecycle = !options.workflowRuntime
+  const workflowRuntime =
+    options.workflowRuntime ??
+    createWorkflowRuntime({ persistence, pollIntervalMs: options.workflowPollIntervalMs })
+  if (manageWorkerLifecycle) {
+    workflowRuntime.startWorker()
+  }
+  persistence.codeServerSessions.resetAllRunning()
+
   const app = express()
   app.use(cors())
   app.use(express.json({ limit: '1mb' }))
 
   const activeCodeServers = new Map<string, CodeServerSession>()
+
+  function ensureEphemeralProject (sessionId: string, sessionDir: string): ProjectRecord {
+    return persistence.projects.upsert({
+      id: `session-${sessionId}`,
+      name: `Session ${sessionId}`,
+      repositoryPath: sessionDir,
+      defaultBranch: 'main'
+    })
+  }
+
+  function normalizePlannerTasks (raw: unknown): PlannerTask[] {
+    if (!Array.isArray(raw)) return []
+    const tasks: PlannerTask[] = []
+    raw.forEach((candidate, index) => {
+      if (!isPlainObject(candidate)) return
+      const title = typeof candidate.title === 'string' ? candidate.title.trim() : ''
+      const instructions = typeof candidate.instructions === 'string' ? candidate.instructions.trim() : ''
+      if (!title || !instructions) return
+      const dependsOn = Array.isArray(candidate.dependsOn)
+        ? candidate.dependsOn.filter(dep => typeof dep === 'string' && dep.length)
+        : []
+      const metadata = isPlainObject(candidate.metadata) ? candidate.metadata : undefined
+      tasks.push({
+        id: typeof candidate.id === 'string' && candidate.id.length ? candidate.id : `task-${index + 1}`,
+        title,
+        instructions,
+        agentType: typeof candidate.agentType === 'string' && candidate.agentType.length ? candidate.agentType : 'coding',
+        dependsOn,
+        metadata
+      })
+    })
+    return tasks
+  }
+
+  function isPlainObject (value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+  }
 
   function rewriteCodeServerPath(pathName: string, sessionId: string): string {
     const prefix = `/code-server/${sessionId}`
@@ -96,6 +152,8 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     }
 
     try {
+      const project = ensureEphemeralProject(sessionId, sessionDir)
+      const branch = project.defaultBranch
       const port = await allocatePort()
       const basePath = `/code-server/${sessionId}`
       const controller = controllerFactory({
@@ -120,11 +178,22 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
         id: sessionId,
         dir: sessionDir,
         basePath,
+        projectId: project.id,
+        branch,
         controller,
         proxy,
         publicUrl: handle.publicUrl
       }
       activeCodeServers.set(sessionId, session)
+      persistence.codeServerSessions.upsert({
+        id: sessionId,
+        projectId: project.id,
+        branch,
+        workspacePath: sessionDir,
+        url: handle.publicUrl,
+        authToken: 'none',
+        processId: handle.child.pid ?? null
+      })
       return session
     } catch (error) {
       console.warn('Unable to launch code-server session', sessionId, error)
@@ -137,6 +206,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     if (!session) return
     activeCodeServers.delete(sessionId)
     await session.controller.shutdown()
+    persistence.codeServerSessions.markStopped(sessionId)
   }
 
   function extractSessionIdFromUrl(rawUrl: string | undefined): string | null {
@@ -192,7 +262,9 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       payload: {
         sessionDir,
         sessionId,
-        codeServerUrl: codeServerSession?.publicUrl ?? null
+        codeServerUrl: codeServerSession?.publicUrl ?? null,
+        projectId: codeServerSession?.projectId ?? null,
+        branch: codeServerSession?.branch ?? null
       }
     })
 
@@ -250,10 +322,109 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     session.proxy(req, res, next)
   }
 
+  const listProjectsHandler: RequestHandler = (_req, res) => {
+    res.json({ projects: persistence.projects.list() })
+  }
+
+  const createProjectHandler: RequestHandler = (req, res) => {
+    const { name, repositoryPath, description, defaultBranch } = req.body ?? {}
+    if (!name || typeof name !== 'string' || !repositoryPath || typeof repositoryPath !== 'string') {
+      res.status(400).json({ error: 'name and repositoryPath are required' })
+      return
+    }
+    const project = persistence.projects.upsert({
+      name: name.trim(),
+      repositoryPath: repositoryPath.trim(),
+      description: typeof description === 'string' ? description.trim() : undefined,
+      defaultBranch: typeof defaultBranch === 'string' && defaultBranch.trim().length ? defaultBranch.trim() : 'main'
+    })
+    res.status(201).json(project)
+  }
+
+  const listWorkflowsHandler: RequestHandler = (req, res) => {
+    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined
+    const workflows = workflowRuntime.listWorkflows(projectId)
+    const payload = workflows.map(workflow => ({
+      workflow,
+      steps: persistence.workflowSteps.listByWorkflow(workflow.id)
+    }))
+    res.json({ workflows: payload })
+  }
+
+  const createWorkflowHandler: RequestHandler = (req, res) => {
+    const { projectId, kind, tasks, data, autoStart } = req.body ?? {}
+    if (!projectId || typeof projectId !== 'string') {
+      res.status(400).json({ error: 'projectId is required' })
+      return
+    }
+    const project = persistence.projects.getById(projectId)
+    if (!project) {
+      res.status(404).json({ error: 'Unknown project' })
+      return
+    }
+    const normalizedTasks = normalizePlannerTasks(tasks)
+    if (!normalizedTasks.length) {
+      res.status(400).json({ error: 'At least one task is required' })
+      return
+    }
+    const plannerRun: PlannerRun = {
+      id: `planner-${Date.now()}`,
+      kind: typeof kind === 'string' && kind.length ? kind : 'custom',
+      tasks: normalizedTasks,
+      data: isPlainObject(data) ? data : {}
+    }
+    const workflow = workflowRuntime.createWorkflowFromPlan({ projectId, plannerRun })
+    if (autoStart) {
+      workflowRuntime.startWorkflow(workflow.id)
+    }
+    const detail = workflowRuntime.getWorkflowDetail(workflow.id)
+    res.status(201).json(detail ?? { workflow })
+  }
+
+  const startWorkflowHandler: RequestHandler = (req, res) => {
+    const workflowId = req.params.workflowId
+    if (!workflowId) {
+      res.status(400).json({ error: 'workflowId is required' })
+      return
+    }
+    const detail = workflowRuntime.getWorkflowDetail(workflowId)
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown workflow' })
+      return
+    }
+    workflowRuntime.startWorkflow(workflowId)
+    res.json({ workflowId, status: 'running' })
+  }
+
+  const workflowDetailHandler: RequestHandler = (req, res) => {
+    const workflowId = req.params.workflowId
+    if (!workflowId) {
+      res.status(400).json({ error: 'workflowId is required' })
+      return
+    }
+    const detail = workflowRuntime.getWorkflowDetail(workflowId)
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown workflow' })
+      return
+    }
+    res.json(detail)
+  }
+
+  const listCodeSessionsHandler: RequestHandler = (_req, res) => {
+    res.json({ sessions: persistence.codeServerSessions.listActive() })
+  }
+
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true })
   })
 
+  app.get('/api/projects', listProjectsHandler)
+  app.post('/api/projects', createProjectHandler)
+  app.get('/api/workflows', listWorkflowsHandler)
+  app.post('/api/workflows', createWorkflowHandler)
+  app.post('/api/workflows/:workflowId/start', startWorkflowHandler)
+  app.get('/api/workflows/:workflowId', workflowDetailHandler)
+  app.get('/api/code-server/sessions', listCodeSessionsHandler)
   app.post('/api/agent/run', agentRunHandler)
 
   app.use('/code-server/:sessionId', codeServerProxyHandler)
@@ -280,10 +451,20 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     return server
   }
 
+  const shutdownApp = async () => {
+    await shutdownAllCodeServers()
+    if (manageWorkerLifecycle) {
+      await workflowRuntime.stopWorker()
+    }
+    if (managePersistenceLifecycle) {
+      persistence.db.close()
+    }
+  }
+
   return {
     app,
     start,
-    shutdown: shutdownAllCodeServers,
+    shutdown: shutdownApp,
     getActiveSessionIds: () => [...activeCodeServers.keys()],
     handleUpgrade,
     handlers: {

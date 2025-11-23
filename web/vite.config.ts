@@ -4,6 +4,7 @@ import solid from 'vite-plugin-solid'
 
 const DEV_PORT = Number(process.env.VITE_DEV_PORT || 5555)
 const API_TARGET = process.env.VITE_API_TARGET || 'http://localhost:5556'
+const HOST = process.env.VITE_DEV_HOST || undefined
 
 const proxyConfig = {
   '/api': {
@@ -22,7 +23,8 @@ export default defineConfig({
   root: path.resolve(__dirname),
   server: {
     port: DEV_PORT,
-    proxy: proxyConfig
+    proxy: proxyConfig,
+    host: HOST
   },
   preview: {
     port: DEV_PORT,
