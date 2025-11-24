@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@solidjs/testing-library'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import WorkflowDetailView from '../WorkflowDetailView'
 import { fetchJson } from '../../lib/http'
+import WorkflowDetailView from '../WorkflowDetailView'
 
 vi.mock('../../lib/http', () => ({
   fetchJson: vi.fn()
@@ -22,7 +22,7 @@ describe('WorkflowDetailView', () => {
       commitHash: '1234567890abcdef',
       branch: 'feature/agent-flow',
       message: 'refactor',
-      diffText: 'diff --git a/file.ts b/file.ts\n+hello'
+      diffText: 'diff --git a/file.ts b/file.ts\n@@ -0,0 +1 @@\n+hello'
     }
 
     fetchJsonMock.mockImplementation((input: RequestInfo) => {
@@ -43,7 +43,24 @@ describe('WorkflowDetailView', () => {
     expect(await screen.findByText('Implement the parser improvements.')).toBeDefined()
     expect(await screen.findByText(/Outcome ·/i)).toBeDefined()
     expect(await screen.findByText(/feature\/agent-flow · 1234567890/i)).toBeDefined()
-    expect(await screen.findByText('diff --git a/file.ts b/file.ts')).toBeDefined()
+
+    // Wait for the diff to load and file to appear
+    await waitFor(() => {
+      expect(screen.queryByText('Select a step with commits to preview the diff.')).toBeNull()
+    })
+
+    // Verify that file is shown with correct number of changes
+    expect(await screen.findByText('file.ts')).toBeDefined()
+    expect(await screen.findByText('1 changes')).toBeDefined()
+
+    // File should be collapsed by default (▶), click to expand
+    const fileHeader = await screen.findByText('file.ts')
+    const expandButton = fileHeader.closest('.diff-file-header') as HTMLElement
+    expandButton?.click()
+
+    // Now verify diff content is visible
+    expect(await screen.findByText('@@ -0,0 +1 @@')).toBeDefined()
+    expect(await screen.findByText('+hello')).toBeDefined()
   })
 })
 

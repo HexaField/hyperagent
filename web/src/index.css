@@ -109,11 +109,36 @@ body,
   padding: 0;
 }
 
+.diff-file-header {
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-hunk-header {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.75rem;
+}
+
+.diff-pre {
+  margin: 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
 .diff-line {
   display: block;
-  padding: 0.2rem 1rem;
+  padding: 0.125rem 1rem;
   white-space: pre-wrap;
   border-bottom: 1px solid var(--border);
+  min-height: 1.25rem;
+}
+
+.diff-line-number {
+  user-select: none;
+  border-right: 1px solid var(--border);
+  margin-right: 0.5rem;
+  padding-right: 0.5rem !important;
 }
 
 .diff-line-header {
@@ -132,7 +157,33 @@ body,
   color: #065f46;
 }
 
+.diff-line-addition::before {
+  content: '+';
+  position: absolute;
+  left: 0.25rem;
+  color: rgba(16, 185, 129, 0.6);
+  font-weight: bold;
+}
+
 .diff-line-deletion {
   background: rgba(239, 68, 68, 0.12);
   color: #991b1b;
+}
+
+.diff-line-deletion::before {
+  content: '-';
+  position: absolute;
+  left: 0.25rem;
+  color: rgba(239, 68, 68, 0.6);
+  font-weight: bold;
+}
+
+.diff-line-addition,
+.diff-line-deletion {
+  position: relative;
+  padding-left: 1.5rem;
+}
+
+.diff-line-context {
+  color: var(--text);
 }
