@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, onCleanup } from 'solid-js'
+import { For, Show, createMemo, createSignal, onCleanup, type JSX } from 'solid-js'
 
 export type AgentLogEntry = {
   role: 'worker' | 'verifier'
@@ -43,6 +43,7 @@ type AgentProps = {
   provider?: string
   showWorkspacePanel?: boolean
   onRunComplete?: () => void
+  headerActions?: JSX.Element
 }
 
 export default function Agent(props: AgentProps = {}) {
@@ -227,7 +228,10 @@ export default function Agent(props: AgentProps = {}) {
             {props.description ?? 'Stream the agent\'s reasoning and inspect the repo inside the embedded code-server.'}
           </p>
         </div>
-        <div class="flex items-center gap-3">
+        <div class="flex flex-wrap items-center gap-3">
+          <Show when={props.headerActions}>
+            {(actions) => <div class="flex flex-wrap items-center gap-2">{actions()}</div>}
+          </Show>
           <button
             class="rounded-xl bg-[#0f172a] px-6 py-2.5 font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50"
             type="button"
