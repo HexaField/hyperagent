@@ -10,6 +10,8 @@ type AgentProps = {
   workspacePath?: string
   onRunComplete?: (sessionId: string) => void
   headerActions?: JSX.Element
+  hideHeader?: boolean
+  class?: string
 }
 
 export default function Agent(props: AgentProps = {}) {
@@ -25,6 +27,8 @@ export default function Agent(props: AgentProps = {}) {
       defaultPrompt={props.defaultPrompt ?? DEFAULT_PROMPT}
       onRunStarted={props.onRunComplete}
       headerActions={props.headerActions}
+      hideHeader={props.hideHeader}
+      class={props.class}
     />
   )
 }
