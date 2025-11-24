@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import { once } from 'node:events'
 import { createServer as createHttpServer } from 'node:http'
+import { request as httpsRequest } from 'node:https'
 import { AddressInfo } from 'node:net'
 import { TextDecoder } from 'node:util'
 import { pathToFileURL } from 'node:url'
@@ -72,6 +73,8 @@ type StreamPacket = { type: string; payload?: any }
 type FakeCodeServer = {
   port: number
   requests: string[]
+  wsOrigins: string[]
+  origin: string
   close: () => Promise<void>
 }
 
@@ -147,10 +150,47 @@ function createTestWorkflowRunnerGateway(): TestRunnerGateway {
 
 async function startFakeCodeServer(): Promise<FakeCodeServer> {
   const requests: string[] = []
+  const wsOrigins: string[] = []
   const server = createHttpServer((req, res) => {
     requests.push(req.url ?? '/')
-    res.writeHead(200, { 'Content-Type': 'text/plain' })
+    res.writeHead(200, {
+      'Content-Type': 'text/plain',
+      'Content-Security-Policy': "default-src 'self'; frame-ancestors 'self'",
+      'X-Frame-Options': 'SAMEORIGIN'
+    })
     res.end(`fake-code-server${req.url ?? '/'}`)
+  })
+  server.on('upgrade', (req, socket, head) => {
+    if (head && head.length) {
+      socket.unshift(head)
+    }
+    const originHeader = req.headers.origin
+    const normalizedOrigin = Array.isArray(originHeader)
+      ? originHeader[0] ?? ''
+      : typeof originHeader === 'string'
+        ? originHeader
+        : ''
+    wsOrigins.push(normalizedOrigin)
+    const keyHeader = req.headers['sec-websocket-key']
+    if (typeof keyHeader !== 'string') {
+      socket.destroy()
+      return
+    }
+    const accept = crypto.createHash('sha1').update(keyHeader + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
+    const responseHeaders = [
+      'HTTP/1.1 101 Switching Protocols',
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      `Sec-WebSocket-Accept: ${accept}`
+    ]
+    socket.write(responseHeaders.join('\r\n') + '\r\n\r\n')
+    const payload = Buffer.from('ready', 'utf8')
+    const frame = Buffer.alloc(2 + payload.length)
+    frame[0] = 0x81
+    frame[1] = payload.length
+    payload.copy(frame, 2)
+    socket.write(frame)
+    socket.end(Buffer.from([0x88, 0x00]))
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address() as AddressInfo | null
@@ -162,6 +202,8 @@ async function startFakeCodeServer(): Promise<FakeCodeServer> {
   return {
     port: address.port,
     requests,
+    wsOrigins,
+    origin: `http://127.0.0.1:${address.port}`,
     close: async () => {
       if (closed) return
       closed = true
@@ -213,7 +255,11 @@ async function streamSseFrames(
   }
 }
 
-async function createIntegrationHarness(options?: { radicleModule?: RadicleModule; terminalModule?: TerminalModule }) {
+async function createIntegrationHarness(options?: {
+  radicleModule?: RadicleModule
+  terminalModule?: TerminalModule
+  publicOrigin?: string
+}) {
   const tmpBase = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-ui-server-tests-'))
   const dbFile = path.join(tmpBase, 'runtime.db')
   const fakeCodeServer = await startFakeCodeServer()
@@ -261,7 +307,8 @@ async function createIntegrationHarness(options?: { radicleModule?: RadicleModul
     radicleModule,
     terminalModule,
     workflowRunnerGateway: testRunnerGateway.gateway,
-    tls: tlsMaterials
+    tls: tlsMaterials,
+    publicOrigin: options?.publicOrigin
   })
 
   const httpsServer = appServer.start(0)
@@ -594,9 +641,13 @@ describe('createServerApp', () => {
           if (!codeServerUrl) {
             throw new Error('code-server url missing in session frame')
           }
-          const codeServerResponse = await fetch(`${harness.baseUrl}${codeServerUrl}`)
+          const resolvedUrl = codeServerUrl.startsWith('http://') || codeServerUrl.startsWith('https://')
+            ? codeServerUrl
+            : `${harness.baseUrl}${codeServerUrl}`
+          const codeServerResponse = await fetch(resolvedUrl)
           expect(codeServerResponse.status).toBe(200)
           expect(await codeServerResponse.text()).toContain('fake-code-server')
+          expect(codeServerResponse.headers.get('x-frame-options')).toBeNull()
           codeServerVerified = true
         }
       })
@@ -605,6 +656,97 @@ describe('createServerApp', () => {
       expect(frames.map((frame) => frame.type)).toEqual(['session', 'chunk', 'result', 'end'])
       expect(harness.runLoop).toHaveBeenCalledTimes(1)
       expect(harness.controllerFactory).toHaveBeenCalledTimes(1)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('builds code-server urls using the configured public origin', async () => {
+    const publicOrigin = 'https://external.hyperagent.dev:8443'
+    const harness = await createIntegrationHarness({ publicOrigin })
+    try {
+      const response = await fetch(`${harness.baseUrl}/api/agent/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: 'Check origin handling' })
+      })
+      expect(response.status).toBe(200)
+
+      let headersVerified = false
+      await streamSseFrames(response, async (frame) => {
+        if (headersVerified) return
+        if (frame.type === 'session' && typeof frame.payload?.codeServerUrl === 'string') {
+          const absoluteUrl = frame.payload.codeServerUrl
+          expect(absoluteUrl.startsWith(publicOrigin)).toBe(true)
+          const resolved = new URL(absoluteUrl)
+          const fallbackUrl = `${harness.baseUrl}${resolved.pathname}${resolved.search}`
+          const codeServerResponse = await fetch(fallbackUrl)
+          expect(codeServerResponse.headers.get('content-security-policy')).toContain(
+            `frame-ancestors 'self' ${publicOrigin}`
+          )
+          expect(codeServerResponse.headers.get('x-frame-options')).toBeNull()
+          headersVerified = true
+        }
+      })
+      expect(headersVerified).toBe(true)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('rewrites websocket origins when proxying code-server sessions', { timeout: 15000 }, async () => {
+    const harness = await createIntegrationHarness()
+    const repoDir = await createGitTestRepo()
+    try {
+      const projectResponse = await fetch(`${harness.baseUrl}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Origin Check', repositoryPath: repoDir })
+      })
+      expect(projectResponse.status).toBe(201)
+      const project = await projectResponse.json()
+
+      const devspaceResponse = await fetch(`${harness.baseUrl}/api/projects/${project.id}/devspace`, {
+        method: 'POST'
+      })
+      expect(devspaceResponse.status).toBe(200)
+      const devspace = await devspaceResponse.json()
+
+      const wsUrl = new URL(`/code-server/${devspace.sessionId}/ws`, harness.baseUrl)
+      const upgradeKey = Buffer.from(`origin-check-${Date.now()}`).toString('base64')
+      await new Promise<void>((resolve, reject) => {
+        const requestOptions = {
+          protocol: wsUrl.protocol,
+          hostname: wsUrl.hostname,
+          port: wsUrl.port,
+          path: `${wsUrl.pathname}${wsUrl.search}`,
+          method: 'GET',
+          headers: {
+            Connection: 'Upgrade',
+            Upgrade: 'websocket',
+            Origin: 'https://remote.example.dev',
+            'Sec-WebSocket-Version': '13',
+            'Sec-WebSocket-Key': upgradeKey
+          },
+          rejectUnauthorized: false
+        }
+        const req = httpsRequest(requestOptions, (res) => {
+          res.resume()
+          reject(new Error(`Unexpected response ${res.statusCode}`))
+        })
+        req.on('upgrade', (_res, socket) => {
+          socket.end()
+          resolve()
+        })
+        req.on('error', reject)
+        req.setTimeout(8000, () => {
+          req.destroy(new Error('WebSocket upgrade timeout'))
+        })
+        req.end()
+      })
+
+      const lastOrigin = harness.fakeCodeServer.wsOrigins[harness.fakeCodeServer.wsOrigins.length - 1]
+      expect(lastOrigin).toBe(harness.fakeCodeServer.origin)
     } finally {
       await harness.close()
     }

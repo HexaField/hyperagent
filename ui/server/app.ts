@@ -89,7 +89,7 @@ import express from 'express'
 import fs from 'fs/promises'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { spawn, spawnSync } from 'node:child_process'
-import type { IncomingMessage } from 'node:http'
+import type { ClientRequest, IncomingMessage } from 'node:http'
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
 import { createServer as createNetServer, type AddressInfo, type Socket } from 'node:net'
 import { pathToFileURL } from 'node:url'
@@ -202,6 +202,40 @@ async function resolveTlsMaterials(config: TlsConfig): Promise<TlsMaterials> {
   return { cert, key }
 }
 
+function normalizePublicOrigin(raw?: string | null): string | null {
+  if (!raw) return null
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  const candidate = trimmed.includes('://') ? trimmed : `https://${trimmed}`
+  try {
+    const url = new URL(candidate)
+    return url.origin
+  } catch {
+    return null
+  }
+}
+
+function buildExternalUrl(pathOrUrl: string | null, origin: string | null): string | null {
+  if (!pathOrUrl) return null
+  if (!origin) return pathOrUrl
+  try {
+    const resolved = new URL(pathOrUrl, origin)
+    return resolved.toString()
+  } catch {
+    return pathOrUrl
+  }
+}
+
+function mergeFrameAncestorsDirective(policy: string | string[] | undefined, ancestor: string): string {
+  const normalized = Array.isArray(policy) ? policy.join('; ') : policy ?? ''
+  const directives = normalized
+    .split(';')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length && !entry.toLowerCase().startsWith('frame-ancestors'))
+  directives.push(`frame-ancestors 'self' ${ancestor}`)
+  return directives.join('; ')
+}
+
 export type ProxyWithUpgrade = RequestHandler & {
   upgrade?: (req: IncomingMessage, socket: Socket, head: Buffer) => void
 }
@@ -266,6 +300,8 @@ export type CreateServerOptions = {
   terminalModule?: TerminalModule
   workflowRunnerGateway?: WorkflowRunnerGateway
   tls?: TlsConfig
+  publicOrigin?: string
+  corsOrigin?: string
 }
 
 export type ServerInstance = {
@@ -296,6 +332,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     certPath: options.tls?.certPath ?? defaultCertPath,
     keyPath: options.tls?.keyPath ?? defaultKeyPath
   })
+  const publicOrigin =
+    normalizePublicOrigin(options.publicOrigin ?? process.env.UI_PUBLIC_ORIGIN ?? null) ??
+    normalizePublicOrigin(process.env.UI_PUBLIC_HOST ?? null)
+  const corsOrigin = options.corsOrigin ?? process.env.UI_CORS_ORIGIN ?? publicOrigin ?? undefined
+  const frameAncestorOrigin =
+    normalizePublicOrigin(process.env.UI_FRAME_ANCESTOR ?? null) ?? corsOrigin ?? publicOrigin ?? null
   const allocatePort =
     options.allocatePort ??
     (async () =>
@@ -442,10 +484,28 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   persistence.codeServerSessions.resetAllRunning()
 
   const app = express()
-  app.use(cors())
+  const corsMiddleware = corsOrigin ? cors({ origin: corsOrigin, credentials: true }) : cors()
+  app.use(corsMiddleware)
   app.use(express.json({ limit: '1mb' }))
 
   const activeCodeServers = new Map<string, CodeServerSession>()
+  const applyProxyResponseHeaders = (proxyRes: IncomingMessage, _req: IncomingMessage, res: Response) => {
+    if (corsOrigin) {
+      proxyRes.headers['access-control-allow-origin'] = corsOrigin
+      proxyRes.headers['access-control-allow-credentials'] = 'true'
+      res.setHeader('Access-Control-Allow-Origin', corsOrigin)
+      res.setHeader('Access-Control-Allow-Credentials', 'true')
+    }
+    if (frameAncestorOrigin) {
+      const merged = mergeFrameAncestorsDirective(proxyRes.headers['content-security-policy'], frameAncestorOrigin)
+      proxyRes.headers['content-security-policy'] = merged
+      res.setHeader('Content-Security-Policy', merged)
+    } else if (proxyRes.headers['content-security-policy']) {
+      res.setHeader('Content-Security-Policy', proxyRes.headers['content-security-policy'] as string)
+    }
+    delete proxyRes.headers['x-frame-options']
+    res.removeHeader('X-Frame-Options')
+  }
 
   const deriveProjectSessionId = (projectId: string) => `project-${projectId}`
 
@@ -775,13 +835,29 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       if (!handle) {
         throw new Error('code-server failed to start')
       }
+      const sessionPublicUrl = buildExternalUrl(handle.publicUrl, publicOrigin) ?? handle.publicUrl
+
+      const targetBase = `http://${CODE_SERVER_HOST}:${port}`
+      const rewriteProxyOriginHeader = (proxyReq: ClientRequest) => {
+        if (!proxyReq.hasHeader('origin')) return
+        proxyReq.setHeader('origin', targetBase)
+      }
 
       const proxy = createProxyMiddleware({
-        target: `http://${CODE_SERVER_HOST}:${port}`,
+        target: targetBase,
         changeOrigin: true,
         ws: true,
-        pathRewrite: (pathName: string) => rewriteCodeServerPath(pathName, options.sessionId)
-      }) as ProxyWithUpgrade
+        pathRewrite: (pathName: string) => rewriteCodeServerPath(pathName, options.sessionId),
+        on: {
+          proxyRes: applyProxyResponseHeaders,
+          proxyReq: (proxyReq: ClientRequest) => {
+            rewriteProxyOriginHeader(proxyReq)
+          },
+          proxyReqWs: (proxyReq: ClientRequest) => {
+            rewriteProxyOriginHeader(proxyReq)
+          }
+        }
+      } as any) as ProxyWithUpgrade
 
       const session: CodeServerSession = {
         id: options.sessionId,
@@ -791,7 +867,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         branch,
         controller,
         proxy,
-        publicUrl: handle.publicUrl
+        publicUrl: sessionPublicUrl
       }
       activeCodeServers.set(options.sessionId, session)
       persistence.codeServerSessions.upsert({
@@ -799,7 +875,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         projectId: options.project.id,
         branch,
         workspacePath: options.sessionDir,
-        url: handle.publicUrl,
+        url: sessionPublicUrl,
         authToken: 'none',
         processId: handle.child.pid ?? null
       })
