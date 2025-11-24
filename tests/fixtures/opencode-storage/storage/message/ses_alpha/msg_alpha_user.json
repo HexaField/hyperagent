@@ -1,0 +1,13 @@
+{
+  "id": "msg_alpha_user",
+  "sessionID": "ses_alpha",
+  "role": "user",
+  "time": {
+    "created": 1700000005000
+  },
+  "agent": "build",
+  "model": {
+    "providerID": "opencode",
+    "modelID": "github-copilot/gpt-5-mini"
+  }
+}

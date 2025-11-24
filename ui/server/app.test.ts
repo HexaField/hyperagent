@@ -17,6 +17,13 @@ import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../../
 import type { CodeServerController, CodeServerHandle, CodeServerOptions } from '../../src/modules/codeServer'
 import type { TerminalSessionRecord } from '../../src/modules/database'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
+import type { OpencodeRunner } from '../../src/modules/opencodeRunner'
+import {
+  createOpencodeStorage,
+  type OpencodeSessionDetail,
+  type OpencodeSessionSummary,
+  type OpencodeStorage
+} from '../../src/modules/opencodeStorage'
 import type { LiveTerminalSession, TerminalModule } from '../../src/modules/terminal'
 import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from '../../src/modules/workflowRunnerGateway'
 import { createServerApp } from './app'
@@ -259,6 +266,8 @@ async function createIntegrationHarness(options?: {
   radicleModule?: RadicleModule
   terminalModule?: TerminalModule
   publicOrigin?: string
+  opencodeStorage?: OpencodeStorage
+  opencodeRunner?: OpencodeRunner
 }) {
   const tmpBase = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-ui-server-tests-'))
   const dbFile = path.join(tmpBase, 'runtime.db')
@@ -308,7 +317,9 @@ async function createIntegrationHarness(options?: {
     terminalModule,
     workflowRunnerGateway: testRunnerGateway.gateway,
     tls: tlsMaterials,
-    publicOrigin: options?.publicOrigin
+    publicOrigin: options?.publicOrigin,
+    opencodeStorage: options?.opencodeStorage,
+    opencodeRunner: options?.opencodeRunner
   })
 
   const httpsServer = appServer.start(0)
@@ -1121,3 +1132,106 @@ describe('createServerApp', () => {
     }
   })
 })
+
+describe('opencode session endpoints', () => {
+  const fixtureRoot = path.join(process.cwd(), 'tests/fixtures/opencode-storage')
+
+  it('exposes persisted opencode sessions across server restarts', async () => {
+    const runnerStub = createFakeOpencodeRunnerStub()
+    const harnessA = await createIntegrationHarness({
+      opencodeStorage: createOpencodeStorage({ rootDir: fixtureRoot }),
+      opencodeRunner: runnerStub
+    })
+    const resA = await fetch(`${harnessA.baseUrl}/api/opencode/sessions`)
+    expect(resA.status).toBe(200)
+    const payloadA = (await resA.json()) as { sessions: OpencodeSessionSummary[] }
+    expect(payloadA.sessions.length).toBeGreaterThanOrEqual(2)
+    await harnessA.close()
+
+    const harnessB = await createIntegrationHarness({
+      opencodeStorage: createOpencodeStorage({ rootDir: fixtureRoot }),
+      opencodeRunner: runnerStub
+    })
+    const resB = await fetch(`${harnessB.baseUrl}/api/opencode/sessions`)
+    expect(resB.status).toBe(200)
+    const payloadB = (await resB.json()) as { sessions: OpencodeSessionSummary[] }
+    expect(payloadB.sessions.length).toBe(payloadA.sessions.length)
+    await harnessB.close()
+  })
+
+  it('proxies runner lifecycle operations and session detail lookups', async () => {
+    const summary: OpencodeSessionSummary = {
+      id: 'ses_alpha',
+      title: 'Alpha Session',
+      workspacePath: '/workspace/repo-alpha',
+      projectId: 'hash-alpha',
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      summary: { additions: 1, deletions: 0, files: 1 }
+    }
+    const detail: OpencodeSessionDetail = {
+      session: summary,
+      messages: []
+    }
+    const storageStub = createFakeOpencodeStorageStub(detail)
+    const runnerStub = createFakeOpencodeRunnerStub()
+    const harness = await createIntegrationHarness({ opencodeStorage: storageStub, opencodeRunner: runnerStub })
+
+    const startRes = await fetch(`${harness.baseUrl}/api/opencode/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspacePath: summary.workspacePath, prompt: 'Ship it' })
+    })
+    expect(startRes.status).toBe(202)
+    expect(runnerStub.startRun).toHaveBeenCalledWith(
+      expect.objectContaining({ workspacePath: summary.workspacePath, prompt: 'Ship it' })
+    )
+
+    const detailRes = await fetch(`${harness.baseUrl}/api/opencode/sessions/${summary.id}`)
+    expect(detailRes.status).toBe(200)
+    const detailPayload = (await detailRes.json()) as OpencodeSessionDetail
+    expect(detailPayload.session.id).toBe(summary.id)
+
+    const runsRes = await fetch(`${harness.baseUrl}/api/opencode/runs`)
+    expect(runsRes.status).toBe(200)
+    const runsPayload = (await runsRes.json()) as { runs: unknown[] }
+    expect(Array.isArray(runsPayload.runs)).toBe(true)
+
+    const killRes = await fetch(`${harness.baseUrl}/api/opencode/sessions/${summary.id}/kill`, { method: 'POST' })
+    expect(killRes.status).toBe(200)
+    expect(runnerStub.killRun).toHaveBeenCalledWith(summary.id)
+
+    await harness.close()
+  })
+})
+
+function createFakeOpencodeRunnerStub(): OpencodeRunner {
+  const record = {
+    sessionId: 'ses_alpha',
+    pid: 1234,
+    workspacePath: '/workspace/repo-alpha',
+    prompt: 'Ship it',
+    title: 'Alpha Session',
+    model: null,
+    logFile: '/tmp/log',
+    startedAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    status: 'running' as const,
+    exitCode: null,
+    signal: null
+  }
+  return {
+    startRun: vi.fn(async () => record),
+    listRuns: vi.fn(async () => [record]),
+    getRun: vi.fn(async () => record),
+    killRun: vi.fn(async () => true)
+  }
+}
+
+function createFakeOpencodeStorageStub(detail: OpencodeSessionDetail): OpencodeStorage {
+  return {
+    rootDir: '/tmp/opencode',
+    listSessions: vi.fn(async () => [detail.session]),
+    getSession: vi.fn(async (sessionId) => (sessionId === detail.session.id ? detail : null))
+  }
+}

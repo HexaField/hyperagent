@@ -1,0 +1,16 @@
+{
+  "id": "ses_alpha",
+  "version": "1.0.0",
+  "projectID": "hash-alpha",
+  "directory": "/workspace/repo-alpha",
+  "title": "Alpha Session",
+  "time": {
+    "created": 1700000000000,
+    "updated": 1700001000000
+  },
+  "summary": {
+    "additions": 3,
+    "deletions": 1,
+    "files": 1
+  }
+}

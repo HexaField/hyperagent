@@ -1,0 +1,11 @@
+{
+  "id": "prt_beta_user_text",
+  "sessionID": "ses_beta",
+  "messageID": "msg_beta_user",
+  "type": "text",
+  "text": "Refactor data pipeline",
+  "time": {
+    "start": 1700002001100,
+    "end": 1700002001105
+  }
+}

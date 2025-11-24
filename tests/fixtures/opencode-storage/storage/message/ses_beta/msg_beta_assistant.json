@@ -1,0 +1,18 @@
+{
+  "id": "msg_beta_assistant",
+  "sessionID": "ses_beta",
+  "role": "assistant",
+  "parentID": "msg_beta_user",
+  "time": {
+    "created": 1700002004000,
+    "completed": 1700002009000
+  },
+  "modelID": "github-copilot/gpt-4o-mini",
+  "providerID": "opencode",
+  "mode": "build",
+  "path": {
+    "cwd": "/workspace/repo-beta",
+    "root": "/workspace/repo-beta"
+  },
+  "finish": "stop"
+}

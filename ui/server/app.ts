@@ -118,6 +118,8 @@ import { createPullRequestModule } from '../../src/modules/review/pullRequest'
 import { createDockerReviewRunnerGateway } from '../../src/modules/review/runnerGateway'
 import { createReviewSchedulerModule } from '../../src/modules/review/scheduler'
 import type { ReviewRunTrigger } from '../../src/modules/review/types'
+import { createOpencodeRunner, type OpencodeRunner } from '../../src/modules/opencodeRunner'
+import { createOpencodeStorage, type OpencodeStorage } from '../../src/modules/opencodeStorage'
 import { createTerminalModule, type LiveTerminalSession, type TerminalModule } from '../../src/modules/terminal'
 import { createAgentWorkflowExecutor } from '../../src/modules/workflowAgentExecutor'
 import type { WorkflowRunnerGateway } from '../../src/modules/workflowRunnerGateway'
@@ -302,6 +304,8 @@ export type CreateServerOptions = {
   tls?: TlsConfig
   publicOrigin?: string
   corsOrigin?: string
+  opencodeStorage?: OpencodeStorage
+  opencodeRunner?: OpencodeRunner
 }
 
 export type ServerInstance = {
@@ -385,6 +389,9 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       },
       repository: persistence.terminalSessions
     })
+
+  const opencodeStorage = options.opencodeStorage ?? createOpencodeStorage()
+  const opencodeRunner = options.opencodeRunner ?? createOpencodeRunner()
 
   const gitAuthor = detectGitAuthorFromCli()
   const commitAuthor = {
@@ -1124,6 +1131,94 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       res.json({ repositories: payload })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to list Radicle repositories'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const listOpencodeSessionsHandler: RequestHandler = async (req, res) => {
+    try {
+      const workspaceParam = req.query.workspacePath
+      const workspacePath = typeof workspaceParam === 'string' ? workspaceParam : undefined
+      const sessions = await opencodeStorage.listSessions({ workspacePath })
+      res.json({ sessions })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to list opencode sessions'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const getOpencodeSessionHandler: RequestHandler = async (req, res) => {
+    const sessionId = req.params.sessionId
+    if (!sessionId) {
+      res.status(400).json({ error: 'sessionId is required' })
+      return
+    }
+    try {
+      const detail = await opencodeStorage.getSession(sessionId)
+      if (!detail) {
+        res.status(404).json({ error: 'Unknown session' })
+        return
+      }
+      res.json(detail)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load opencode session'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const listOpencodeRunsHandler: RequestHandler = async (_req, res) => {
+    try {
+      const runs = await opencodeRunner.listRuns()
+      res.json({ runs })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to list opencode runs'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const startOpencodeSessionHandler: RequestHandler = async (req, res) => {
+    const { workspacePath, prompt, title, model } = req.body ?? {}
+    if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
+      res.status(400).json({ error: 'workspacePath is required' })
+      return
+    }
+    if (typeof prompt !== 'string' || !prompt.trim()) {
+      res.status(400).json({ error: 'prompt is required' })
+      return
+    }
+    const normalizedWorkspace = workspacePath.trim()
+    try {
+      await ensureWorkspaceDirectory(normalizedWorkspace)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Workspace path is unavailable'
+      res.status(400).json({ error: message })
+      return
+    }
+    try {
+      const run = await opencodeRunner.startRun({
+        workspacePath: normalizedWorkspace,
+        prompt: prompt.trim(),
+        title: typeof title === 'string' ? title : undefined,
+        model: typeof model === 'string' ? model : undefined
+      })
+      res.status(202).json({ run })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to start opencode session'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const killOpencodeSessionHandler: RequestHandler = async (req, res) => {
+    const sessionId = req.params.sessionId
+    if (!sessionId) {
+      res.status(400).json({ error: 'sessionId is required' })
+      return
+    }
+    try {
+      const success = await opencodeRunner.killRun(sessionId)
+      res.json({ success })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to terminate opencode session'
       res.status(500).json({ error: message })
     }
   }
@@ -2093,6 +2188,11 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   app.get('/api/terminal/sessions', listTerminalSessionsHandler)
   app.post('/api/terminal/sessions', createTerminalSessionHandler)
   app.delete('/api/terminal/sessions/:sessionId', deleteTerminalSessionHandler)
+  app.get('/api/opencode/sessions', listOpencodeSessionsHandler)
+  app.get('/api/opencode/sessions/:sessionId', getOpencodeSessionHandler)
+  app.get('/api/opencode/runs', listOpencodeRunsHandler)
+  app.post('/api/opencode/sessions', startOpencodeSessionHandler)
+  app.post('/api/opencode/sessions/:sessionId/kill', killOpencodeSessionHandler)
   app.post('/api/agent/run', agentRunHandler)
 
   const sendTerminalPayload = (socket: WebSocketType, payload: Record<string, unknown>) => {

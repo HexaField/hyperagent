@@ -5,6 +5,7 @@ import { fetchJson } from './lib/http'
 import RepositoriesPage from './pages/RepositoriesPage'
 import ProjectRepositoriesPage from './pages/ProjectRepositoriesPage'
 import RepositoryGraphPage from './pages/RepositoryGraphPage'
+import SessionsPage from './pages/SessionsPage'
 import TerminalPage from './pages/TerminalPage'
 import WorkflowDetailPage from './pages/WorkflowDetailPage'
 import WorkflowsPage from './pages/WorkflowsPage'
@@ -30,6 +31,7 @@ const AppShell = (props: RouteSectionProps) => (
         <NavLink href="/repositories">Repositories</NavLink>
         <NavLink href="/workflows">Workflows</NavLink>
         <NavLink href="/terminal">Terminal</NavLink>
+        <NavLink href="/sessions">Sessions</NavLink>
       </nav>
     </header>
     <section class="flex-1">{props.children}</section>
@@ -54,6 +56,7 @@ export default function App() {
         <Route path="/workflows" component={WorkflowsPage} />
         <Route path="/workflows/:workflowId" component={WorkflowDetailPage} />
         <Route path="/terminal" component={TerminalPage} />
+        <Route path="/sessions" component={SessionsPage} />
       </Router>
     </Show>
   )

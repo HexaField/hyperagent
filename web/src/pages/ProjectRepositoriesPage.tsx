@@ -32,8 +32,8 @@ const SECTION_METADATA: Record<SectionId, { title: string; description: string }
     description: 'Embedded code-server workspace'
   },
   agent: {
-    title: 'Autonomous coding agent',
-    description: 'Opencode-powered repository agent'
+    title: 'Opencode console',
+    description: 'Background opencode session controls'
   },
   diffs: {
     title: 'Diffs',
@@ -297,13 +297,13 @@ export default function ProjectRepositoriesPage() {
                   <section class="flex flex-col gap-3 rounded-[1.25rem] border border-[var(--border)] bg-[var(--bg-card)] p-6">
                     <div class="flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <p class="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">Autonomous coding agent</p>
-                        <h2 class="text-lg font-semibold text-[var(--text)]">Agent session controls</h2>
+                        <p class="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">Opencode console</p>
+                        <h2 class="text-lg font-semibold text-[var(--text)]">Opencode session controls</h2>
                       </div>
                       <SectionControls id="agent" />
                     </div>
                     <p class="text-sm text-[var(--text-muted)]">
-                      This section is collapsed for a compact layout. Expand it to run the opencode-powered agent.
+                      This section is collapsed for a compact layout. Expand it to launch and monitor opencode sessions.
                     </p>
                   </section>
                 }
@@ -311,12 +311,19 @@ export default function ProjectRepositoriesPage() {
                 <Agent
                   title="Opencode session"
                   description="Prompt the opencode-powered agent directly against this repository."
-                  projectId={currentProject().id}
-                  provider="opencode"
+                  workspacePath={currentProject().repositoryPath}
                   defaultPrompt={defaultPrompt()}
-                  showWorkspacePanel={false}
-                  onRunComplete={handleRefreshDiff}
-                  headerActions={<SectionControls id="agent" />}
+                  headerActions={
+                    <div class="flex flex-wrap items-center gap-2">
+                      <A
+                        href={`/sessions?workspace=${encodeURIComponent(currentProject().repositoryPath)}`}
+                        class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs font-semibold text-[var(--text)]"
+                      >
+                        Sessions page
+                      </A>
+                      <SectionControls id="agent" />
+                    </div>
+                  }
                 />
               </Show>
             </div>
