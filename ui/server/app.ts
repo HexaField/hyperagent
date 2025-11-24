@@ -973,10 +973,18 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       return
     }
     try {
-      const diffText = await runGitCommand(
-        ['show', commit.commitHash, '--stat', '--patch', '--unified=200'],
-        project.repositoryPath
-      )
+      const diffArgs = [
+        'show',
+        commit.commitHash,
+        '--stat',
+        '--patch',
+        '--unified=200',
+        '--',
+        '.',
+        ':(exclude).hyperagent.json',
+        ':(exclude)**/.hyperagent.json'
+      ]
+      const diffText = await runGitCommand(diffArgs, project.repositoryPath)
       res.json({
         workflowId,
         stepId,
@@ -1165,6 +1173,27 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       }
     })
     res.json({ project, pullRequests })
+  }
+
+  const listActiveReviewsHandler: RequestHandler = (_req, res) => {
+    const projects = persistence.projects.list()
+    const groups: Array<{ project: ProjectRecord; pullRequests: Array<Record<string, unknown>> }> = []
+    projects.forEach((project) => {
+      const pullRequests = pullRequestModule
+        .listPullRequests(project.id)
+        .filter((pullRequest) => pullRequest.status === 'open')
+        .map((pullRequest) => {
+          const runs = persistence.reviewRuns.listByPullRequest(pullRequest.id)
+          return {
+            ...pullRequest,
+            latestReviewRun: runs.length ? runs[0] : null
+          }
+        })
+      if (pullRequests.length) {
+        groups.push({ project, pullRequests })
+      }
+    })
+    res.json({ groups })
   }
 
   const createProjectPullRequestHandler: RequestHandler = async (req, res) => {
@@ -1648,6 +1677,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   app.get('/api/projects', listProjectsHandler)
   app.get('/api/projects/:projectId/graph', repositoryGraphHandler)
   app.get('/api/projects/:projectId/pull-requests', listProjectPullRequestsHandler)
+  app.get('/api/reviews/active', listActiveReviewsHandler)
   app.post('/api/projects/:projectId/pull-requests', createProjectPullRequestHandler)
   app.post('/api/projects', createProjectHandler)
   app.get('/api/pull-requests/:prId', pullRequestDetailHandler)

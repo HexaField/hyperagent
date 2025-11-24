@@ -2,7 +2,6 @@ import type { RouteSectionProps } from '@solidjs/router'
 import { A, Navigate, Route, Router } from '@solidjs/router'
 import { Show, createResource } from 'solid-js'
 import { fetchJson } from './lib/http'
-import LaunchWorkflowPage from './pages/LaunchWorkflowPage'
 import RepositoriesPage from './pages/RepositoriesPage'
 import RepositoryGraphPage from './pages/RepositoryGraphPage'
 import TerminalPage from './pages/TerminalPage'
@@ -29,7 +28,6 @@ const AppShell = (props: RouteSectionProps) => (
       <nav class="flex flex-wrap items-center gap-3 text-sm font-semibold">
         <NavLink href="/repositories">Repositories</NavLink>
         <NavLink href="/workflows">Workflows</NavLink>
-        <NavLink href="/launch">Launch</NavLink>
         <NavLink href="/terminal">Terminal</NavLink>
       </nav>
     </header>
@@ -53,7 +51,6 @@ export default function App() {
         <Route path="/repositories/:projectId/graph" component={RepositoryGraphPage} />
         <Route path="/workflows" component={WorkflowsPage} />
         <Route path="/workflows/:workflowId" component={WorkflowDetailPage} />
-        <Route path="/launch" component={LaunchWorkflowPage} />
         <Route path="/terminal" component={TerminalPage} />
       </Router>
     </Show>

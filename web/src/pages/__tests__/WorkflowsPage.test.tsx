@@ -13,6 +13,7 @@ const fetchJsonMock = vi.mocked(fetchJson)
 describe('WorkflowsPage', () => {
   afterEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
   })
 
   it('opens and closes the workflow session overlay via search params', async () => {
@@ -52,6 +53,9 @@ describe('WorkflowsPage', () => {
       if (input === '/api/workflows') {
         return Promise.resolve({ workflows: [workflowSummary] })
       }
+      if (input === '/api/reviews/active') {
+        return Promise.resolve({ groups: [] })
+      }
       if (input === '/api/workflows/wf-1') {
         return Promise.resolve(workflowDetail)
       }
@@ -84,5 +88,40 @@ describe('WorkflowsPage', () => {
     fireEvent.click(closeButton)
 
     await waitFor(() => expect(screen.queryByTestId('workflow-session-viewer')).toBeNull())
+  })
+
+  it('opens the launch workflow modal from the Workflows page', async () => {
+    fetchJsonMock.mockImplementation((input: RequestInfo) => {
+      if (input === '/api/workflows') {
+        return Promise.resolve({ workflows: [] })
+      }
+      if (input === '/api/reviews/active') {
+        return Promise.resolve({ groups: [] })
+      }
+      if (input === '/api/projects') {
+        return Promise.resolve({
+          projects: [
+            {
+              id: 'project-1',
+              name: 'Project One',
+              repositoryPath: '/repo/project-one'
+            }
+          ]
+        })
+      }
+      throw new Error(`Unexpected request: ${String(input)}`)
+    })
+
+    render(() => (
+      <Router root={(props) => <>{props.children}</>}>
+        <Route path="/workflows" component={WorkflowsPage} />
+      </Router>
+    ))
+
+    const [launchButton] = await screen.findAllByRole('button', { name: /launch workflow/i })
+    fireEvent.click(launchButton)
+
+    await screen.findByText('Workflow blueprint')
+    expect(fetchJsonMock).toHaveBeenCalledWith('/api/projects')
   })
 })
