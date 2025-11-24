@@ -42,5 +42,30 @@ export async function closeTerminalSession(sessionId: string): Promise<void> {
 export function createTerminalWebSocket(sessionId: string): WebSocket {
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
   const url = `${protocol}://${window.location.host}/ws/terminal/${sessionId}`
-  return new WebSocket(url)
+  // Instrumentation: log WS lifecycle for easier debugging across proxies/load balancers
+  try {
+    console.info(`[WS] terminal.connect start session=${sessionId} protocol=${window.location.protocol} url=${url}`)
+  } catch {
+    // no-op in environments where console isn't available
+  }
+  const ws = new WebSocket(url)
+  try {
+    ws.addEventListener('open', () => {
+      console.info(`[WS] terminal.open session=${sessionId} url=${url}`)
+    })
+    ws.addEventListener('message', (event) => {
+      const data = event.data
+      const snippet = typeof data === 'string' ? data.substring(0, 200) : ''
+      console.info(`[WS] terminal.message session=${sessionId} data=${snippet}`)
+    })
+    ws.addEventListener('close', (ev) => {
+      console.info(`[WS] terminal.close session=${sessionId} code=${ev.code} reason=${ev.reason}`)
+    })
+    ws.addEventListener('error', (ev) => {
+      console.info(`[WS] terminal.error session=${sessionId} event=${ev}`)
+    })
+  } catch {
+    // ignore instrumentation failures
+  }
+  return ws
 }

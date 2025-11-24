@@ -1,7 +1,13 @@
-const loadWebSocketModule = async (): Promise<{ WebSocket: typeof WebSocketType; WebSocketServer: typeof WebSocketServerType }> => {
+const loadWebSocketModule = async (): Promise<{
+  WebSocket: typeof WebSocketType
+  WebSocketServer: typeof WebSocketServerType
+}> => {
   const nodeRequire = eval('require') as NodeJS.Require
 
-  const loadFromLibFiles = (): { WebSocket: typeof WebSocketType; WebSocketServer: typeof WebSocketServerType } | null => {
+  const loadFromLibFiles = (): {
+    WebSocket: typeof WebSocketType
+    WebSocketServer: typeof WebSocketServerType
+  } | null => {
     try {
       const resolvedEntry = nodeRequire.resolve('ws')
       const packageDir = path.dirname(resolvedEntry)
@@ -68,7 +74,9 @@ const loadWebSocketModule = async (): Promise<{ WebSocket: typeof WebSocketType;
     Server?: typeof WebSocketServerType
     WebSocketServer?: typeof WebSocketServerType
   }
-  const WebSocket = (fallback as any).default ? ((fallback as any).default as typeof WebSocketType) : (fallback as typeof WebSocketType)
+  const WebSocket = (fallback as any).default
+    ? ((fallback as any).default as typeof WebSocketType)
+    : (fallback as typeof WebSocketType)
   const WebSocketServer = (fallback.WebSocketServer ?? fallback.Server) as typeof WebSocketServerType
   if (typeof WebSocketServer !== 'function') {
     throw new Error('WebSocketServer export from ws is unavailable')
@@ -102,11 +110,17 @@ import {
 } from '../../src/modules/database'
 import { listBranchCommits, listGitBranches } from '../../src/modules/git'
 import type { Provider } from '../../src/modules/llm'
-import { createAgentWorkflowExecutor } from '../../src/modules/workflowAgentExecutor'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
+import { createDiffModule } from '../../src/modules/review/diff'
+import { createReviewEngineModule } from '../../src/modules/review/engine'
+import { createPullRequestModule } from '../../src/modules/review/pullRequest'
+import { createDockerReviewRunnerGateway } from '../../src/modules/review/runnerGateway'
+import { createReviewSchedulerModule } from '../../src/modules/review/scheduler'
+import type { ReviewRunTrigger } from '../../src/modules/review/types'
 import { createTerminalModule, type LiveTerminalSession, type TerminalModule } from '../../src/modules/terminal'
-import { createDockerWorkflowRunnerGateway } from '../../src/modules/workflowRunnerGateway'
+import { createAgentWorkflowExecutor } from '../../src/modules/workflowAgentExecutor'
 import type { WorkflowRunnerGateway } from '../../src/modules/workflowRunnerGateway'
+import { createDockerWorkflowRunnerGateway } from '../../src/modules/workflowRunnerGateway'
 import {
   createWorkflowRuntime,
   type PlannerRun,
@@ -114,12 +128,6 @@ import {
   type WorkflowDetail,
   type WorkflowRuntime
 } from '../../src/modules/workflows'
-import { createPullRequestModule } from '../../src/modules/review/pullRequest'
-import { createDiffModule } from '../../src/modules/review/diff'
-import { createReviewEngineModule } from '../../src/modules/review/engine'
-import { createReviewSchedulerModule } from '../../src/modules/review/scheduler'
-import { createDockerReviewRunnerGateway } from '../../src/modules/review/runnerGateway'
-import type { ReviewRunTrigger } from '../../src/modules/review/types'
 
 const DEFAULT_PORT = Number(process.env.UI_SERVER_PORT || 5556)
 const CODE_SERVER_HOST = process.env.CODE_SERVER_HOST || '127.0.0.1'
@@ -317,8 +325,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     maxRounds: WORKFLOW_AGENT_MAX_ROUNDS
   })
 
-  const workflowCallbackBaseUrl =
-    process.env.WORKFLOW_CALLBACK_BASE_URL ?? `http://host.docker.internal:${defaultPort}`
+  const workflowCallbackBaseUrl = process.env.WORKFLOW_CALLBACK_BASE_URL ?? `http://host.docker.internal:${defaultPort}`
   const workflowRunnerToken = process.env.WORKFLOW_RUNNER_TOKEN ?? process.env.WORKFLOW_CALLBACK_TOKEN ?? null
   const workflowRunnerGateway =
     options.workflowRunnerGateway ??
@@ -344,8 +351,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   if (manageWorkerLifecycle) {
     workflowRuntime.startWorker()
   }
-  const reviewCallbackBaseUrl =
-    process.env.REVIEW_CALLBACK_BASE_URL ?? `http://host.docker.internal:${defaultPort}`
+  const reviewCallbackBaseUrl = process.env.REVIEW_CALLBACK_BASE_URL ?? `http://host.docker.internal:${defaultPort}`
   const reviewRunnerToken = process.env.REVIEW_RUNNER_TOKEN ?? process.env.REVIEW_CALLBACK_TOKEN ?? null
   const reviewRunnerGateway = createDockerReviewRunnerGateway({
     dockerBinary: process.env.REVIEW_DOCKER_BINARY,
@@ -483,7 +489,9 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 
-  const collectWorkspaceEntries = async (workspacePath: string | null): Promise<Array<{ name: string; kind: 'file' | 'directory' }>> => {
+  const collectWorkspaceEntries = async (
+    workspacePath: string | null
+  ): Promise<Array<{ name: string; kind: 'file' | 'directory' }>> => {
     if (!workspacePath) return []
     try {
       const dirents = await fs.readdir(workspacePath, { withFileTypes: true })
@@ -1702,7 +1710,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         ? req.body.commitMessage.trim()
         : `Apply suggestion from review comment ${comment.id}`
     try {
-      const commitHash = await applyPatchToBranch(detail.project.repositoryPath, detail.pullRequest.sourceBranch, comment.suggestedPatch, commitMessage)
+      const commitHash = await applyPatchToBranch(
+        detail.project.repositoryPath,
+        detail.pullRequest.sourceBranch,
+        comment.suggestedPatch,
+        commitMessage
+      )
       await pullRequestModule.updatePullRequestCommits(prId)
       res.json({ pullRequestId: prId, commitHash })
     } catch (error) {
@@ -1833,8 +1846,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       res.status(401).json({ error: 'Invalid workflow runner token' })
       return
     }
-    const runnerInstanceId =
-      typeof req.body?.runnerInstanceId === 'string' ? req.body.runnerInstanceId.trim() : ''
+    const runnerInstanceId = typeof req.body?.runnerInstanceId === 'string' ? req.body.runnerInstanceId.trim() : ''
     if (!runnerInstanceId.length) {
       res.status(400).json({ error: 'runnerInstanceId is required' })
       return
@@ -1994,12 +2006,26 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       return
     }
     const userId = resolveUserIdFromHeaders(request.headers)
+    try {
+      console.info(
+        `[WS] terminal connected session=${sessionId} from=${request.socket?.remoteAddress ?? 'unknown'} (user=${userId})`
+      )
+    } catch {
+      // ignore logging failures
+    }
     ;(async () => {
       try {
         const live = await terminalModule.attachSession(sessionId, userId)
         sendTerminalPayload(socket, { type: 'ready', sessionId: live.id })
         const disposables: Array<() => void> = []
         const dataSubscription = live.pty.onData((data) => {
+          try {
+            console.info(
+              `[WS] terminal -> client session=${sessionId} data=${typeof data === 'string' ? data.substring(0, 200) : '[binary]'}`
+            )
+          } catch {
+            // ignore
+          }
           sendTerminalPayload(socket, { type: 'output', data })
         })
         const exitSubscription = live.pty.onExit(({ exitCode, signal }) => {
