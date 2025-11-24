@@ -60,17 +60,19 @@ type ReviewGroup = {
   pullRequests: PullRequestSummary[]
 }
 
-type WorkflowCategory = 'inProgress' | 'readyForReview' | 'done'
+type WorkflowCategory = 'inProgress' | 'readyForReview' | 'done' | 'failed'
 const CATEGORY_LABELS: Record<WorkflowCategory, string> = {
   inProgress: 'In progress',
   readyForReview: 'Ready for review',
-  done: 'Done'
+  done: 'Done',
+  failed: 'Failed'
 }
 const FILTER_STORAGE_KEY = 'hyperagent.workflows.filters'
 const DEFAULT_FILTERS: Record<WorkflowCategory, boolean> = {
   inProgress: true,
   readyForReview: true,
-  done: true
+  done: true,
+  failed: true
 }
 
 export default function WorkflowsPage() {
@@ -127,7 +129,8 @@ export default function WorkflowsPage() {
     const base: Record<WorkflowCategory, number> = {
       inProgress: 0,
       readyForReview: 0,
-      done: 0
+      done: 0,
+      failed: 0
     }
     categorized().forEach((entry) => {
       base[entry.category] += 1
@@ -342,12 +345,16 @@ function shortToken(token: string): string {
 }
 
 function deriveCategory(summary: WorkflowSummary, map: Map<string, PullRequestSummary[]>): WorkflowCategory {
-  const status = summary.workflow.status
+  const rawStatus = summary.workflow.status
+  const status = typeof rawStatus === 'string' ? rawStatus.trim().toLowerCase() : ''
   const openPullRequests = map.get(summary.workflow.projectId) ?? []
+  if (status === 'failed') {
+    return 'failed'
+  }
   if (status === 'completed' && openPullRequests.length) {
     return 'readyForReview'
   }
-  if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+  if (status === 'completed' || status === 'cancelled') {
     return 'done'
   }
   return 'inProgress'

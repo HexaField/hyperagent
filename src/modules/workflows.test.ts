@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createPersistence, type Persistence } from './database'
-import { createWorkflowRuntime, type PlannerRun } from './workflows'
+import { createWorkflowRuntime, type AgentExecutor, type PlannerRun } from './workflows'
 import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from './workflowRunnerGateway'
 
 const commitAuthor = { name: 'Test Workflow', email: 'workflow@test.local' }
@@ -29,7 +29,7 @@ describe('workflow runtime docker runner integration', () => {
     ]
   }
 
-  const createRuntime = (persistence: Persistence, runnerGateway: WorkflowRunnerGateway) => {
+  const createRuntime = (persistence: Persistence, runnerGateway: WorkflowRunnerGateway, agentExecutor?: AgentExecutor) => {
     return createWorkflowRuntime({
       persistence: {
         projects: persistence.projects,
@@ -37,10 +37,12 @@ describe('workflow runtime docker runner integration', () => {
         workflowSteps: persistence.workflowSteps,
         agentRuns: persistence.agentRuns
       },
-      agentExecutor: async () => ({
-        stepResult: { summary: 'completed' },
-        skipCommit: true
-      }),
+      agentExecutor:
+        agentExecutor ??
+        (async () => ({
+          stepResult: { summary: 'completed' },
+          skipCommit: true
+        })),
       runnerGateway,
       pollIntervalMs: 25,
       commitAuthor
@@ -73,6 +75,47 @@ describe('workflow runtime docker runner integration', () => {
       expect(detail?.steps[0].status).toBe('completed')
       expect(detail?.steps[0].runnerInstanceId).toBeNull()
       expect(detail?.steps[0].result?.summary).toBe('completed')
+    } finally {
+      await runtime.stopWorker()
+      persistence.db.close()
+    }
+  })
+
+  it('marks workflow and agent run as failed when agent outcome is not approved', async () => {
+    const persistence = createPersistence({ file: ':memory:' })
+    const project = persistence.projects.upsert({
+      name: 'demo',
+      repositoryPath: '/tmp/demo-repo'
+    })
+    const runnerCalls: WorkflowRunnerPayload[] = []
+    const runnerGateway: WorkflowRunnerGateway = {
+      enqueue: async (payload) => {
+        runnerCalls.push(payload)
+      }
+    }
+    const agentExecutor: AgentExecutor = async () => ({
+      stepResult: {
+        summary: 'Rejected by verifier',
+        agent: {
+          outcome: 'failed',
+          reason: 'Verifier rejected the work'
+        }
+      },
+      skipCommit: true
+    })
+    const runtime = createRuntime(persistence, runnerGateway, agentExecutor)
+    try {
+      const workflow = runtime.createWorkflowFromPlan({ projectId: project.id, plannerRun })
+      runtime.startWorkflow(workflow.id)
+      runtime.startWorker()
+      await waitFor(() => runnerCalls.length >= 1)
+      const payload = runnerCalls[0]
+      await runtime.runStepById(payload)
+      const detail = runtime.getWorkflowDetail(workflow.id)
+      expect(detail?.workflow.status).toBe('failed')
+      expect(detail?.steps[0].status).toBe('failed')
+      const runs = persistence.agentRuns.listByWorkflow(workflow.id)
+      expect(runs[0]?.status).toBe('failed')
     } finally {
       await runtime.stopWorker()
       persistence.db.close()

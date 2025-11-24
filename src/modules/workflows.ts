@@ -316,6 +316,7 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
 
       const result = await agentExecutor({ project, workflow, step, workspace, radicleSession })
       provenanceLogsPath = result.logsPath ?? null
+      const agentFailure = detectAgentFailure(result.stepResult)
 
       if (radicleSession) {
         if (result.skipCommit) {
@@ -336,12 +337,12 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
         ...(provenanceLogsPath ? { provenance: { logsPath: provenanceLogsPath } } : {})
       }
       persistence.workflowSteps.update(step.id, {
-        status: 'completed',
+        status: agentFailure.failed ? 'failed' : 'completed',
         result: enrichedResult,
         runnerInstanceId: null
       })
       persistence.agentRuns.update(agentRun.id, {
-        status: 'succeeded',
+        status: agentFailure.failed ? 'failed' : 'succeeded',
         finishedAt: new Date().toISOString(),
         logsPath: result.logsPath ?? null
       })
@@ -380,6 +381,21 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
     stopWorker,
     runStepById
   }
+}
+
+function detectAgentFailure(stepResult?: Record<string, unknown> | null): { failed: boolean } {
+  if (!stepResult || typeof stepResult !== 'object') {
+    return { failed: false }
+  }
+  const agent = stepResult.agent as { outcome?: string } | undefined
+  if (!agent || typeof agent.outcome !== 'string') {
+    return { failed: false }
+  }
+  const outcome = agent.outcome.trim().toLowerCase()
+  if (!outcome) {
+    return { failed: false }
+  }
+  return { failed: outcome !== 'approved' }
 }
 
 function refreshWorkflowStatus(
