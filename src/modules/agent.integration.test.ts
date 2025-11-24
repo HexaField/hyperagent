@@ -64,11 +64,15 @@ describe('Verifier/worker collaboration loop', () => {
 
     expect(['approved', 'failed', 'max-rounds']).toContain(result.outcome)
 
-    const metaPath = path.join(sessionDir, '.hyperagent.json')
-    expect(fs.existsSync(metaPath)).toBe(true)
-    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'))
-    expect(Array.isArray(meta.log)).toBe(true)
-    const opencodeEntries = meta.log.filter((entry: any) => entry.provider === 'opencode')
+    const metaDir = path.join(sessionDir, '.hyperagent')
+    expect(fs.existsSync(metaDir)).toBe(true)
+    const metaFiles = fs.readdirSync(metaDir).filter((file) => file.endsWith('.json'))
+    expect(metaFiles.length).toBeGreaterThan(0)
+    const logs = metaFiles.flatMap((file) => {
+      const meta = JSON.parse(fs.readFileSync(path.join(metaDir, file), 'utf8'))
+      return Array.isArray(meta.log) ? meta.log : []
+    })
+    const opencodeEntries = logs.filter((entry: any) => entry.provider === 'opencode')
     expect(opencodeEntries.length).toBeGreaterThanOrEqual(2)
     for (const entry of opencodeEntries) {
       expect(entry.model).toBe('github-copilot/gpt-5-mini')

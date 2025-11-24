@@ -57,10 +57,32 @@ const cliLastResponses = new Map<string, string>()
 
 // Persistent session storage now lives inside a caller-provided directory (e.g. a sourceDir).
 // We support legacy global path for backward compatibility if no directory supplied.
-function metaFile(sessionId: string, baseDir?: string) {
-  const dir = baseDir ? path.join(baseDir) : path.join(os.tmpdir(), '.sessions', sessionId)
+const META_FOLDER = '.hyperagent'
+
+function sanitizeSessionId(sessionId: string): string {
+  const safe = sessionId.replace(/[^a-zA-Z0-9._-]/g, '_')
+  return safe.length ? safe : 'session'
+}
+
+function resolveSessionRoot(sessionId: string, baseDir?: string): string {
+  return baseDir ? path.join(baseDir) : path.join(os.tmpdir(), '.sessions', sessionId)
+}
+
+function metaDirectory(sessionId: string, baseDir?: string): string {
+  const root = resolveSessionRoot(sessionId, baseDir)
+  const dir = path.join(root, META_FOLDER)
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-  return path.join(dir, '.hyperagent.json')
+  return dir
+}
+
+function metaFile(sessionId: string, baseDir?: string) {
+  const dir = metaDirectory(sessionId, baseDir)
+  return path.join(dir, `${sanitizeSessionId(sessionId)}.json`)
+}
+
+function legacyMetaFile(sessionId: string, baseDir?: string) {
+  const root = resolveSessionRoot(sessionId, baseDir)
+  return path.join(root, '.hyperagent.json')
 }
 type LogEntry = {
   entryId: string
@@ -85,7 +107,20 @@ function loadSessionMeta(sessionId: string, baseDir?: string): SessionMeta {
       parsed.log = Array.isArray(parsed.log) ? parsed.log : []
       return parsed
     } catch (e) {
-      console.log('Failed to parse session meta.json; recreating', e)
+      console.log('Failed to parse session meta json; recreating', e)
+    }
+  } else {
+    const legacy = legacyMetaFile(sessionId, baseDir)
+    if (fs.existsSync(legacy)) {
+      try {
+        const raw = fs.readFileSync(legacy, 'utf-8')
+        const parsed = JSON.parse(raw)
+        parsed.log = Array.isArray(parsed.log) ? parsed.log : []
+        saveSessionMeta(parsed, baseDir)
+        return parsed
+      } catch (e) {
+        console.log('Failed to parse legacy session meta json; recreating', e)
+      }
     }
   }
   const blank: SessionMeta = {

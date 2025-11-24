@@ -83,8 +83,9 @@ describe('LLM CLI integrations', () => {
       expect(r1.data).toContain('```json')
       expect(r2.data).toContain('```json')
 
-      // Validate .hyperagent.json persisted in the sessionDir with log entries
-      const metaPath = path.join(sessionDir, '.hyperagent.json')
+      // Validate .hyperagent/<sessionId>.json persisted in the sessionDir with log entries
+      const safeSid = sid.replace(/[^a-zA-Z0-9._-]/g, '_')
+      const metaPath = path.join(sessionDir, '.hyperagent', `${safeSid}.json`)
       expect(fs.existsSync(metaPath)).toBe(true)
       const metaRaw = fs.readFileSync(metaPath, 'utf8')
       const meta = JSON.parse(metaRaw)
@@ -187,7 +188,8 @@ describe('LLM CLI integrations', () => {
     expect(res.success).toBe(true)
     expect(res.data).toContain('```json')
 
-    const metaPath = path.join(sessionDir, '.hyperagent.json')
+    const safeSession = sessionName.replace(/[^a-zA-Z0-9._-]/g, '_')
+    const metaPath = path.join(sessionDir, '.hyperagent', `${safeSession}.json`)
     expect(fs.existsSync(metaPath)).toBe(true)
     const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'))
     const log = Array.isArray(meta.log) ? meta.log : []

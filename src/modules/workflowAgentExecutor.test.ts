@@ -40,7 +40,11 @@ describe('createAgentWorkflowExecutor', () => {
     expect(result.commitMessage).toContain('Feature work')
     const agentPayload = result.stepResult?.agent as { outcome?: string } | undefined
     expect(agentPayload?.outcome).toBe('approved')
-    expect(result.logsPath === null || result.logsPath?.endsWith('.hyperagent.json')).toBe(true)
+    const logsPath = result.logsPath
+    const legacyPath = logsPath?.endsWith('.hyperagent.json')
+    const perRunPath =
+      typeof logsPath === 'string' && logsPath.includes(`${path.sep}.hyperagent${path.sep}`) && logsPath.endsWith('.json')
+    expect(logsPath === null || legacyPath || perRunPath).toBe(true)
   })
 
   it('skips commits when the agent does not approve', async () => {

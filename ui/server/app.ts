@@ -982,7 +982,9 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
         '--',
         '.',
         ':(exclude).hyperagent.json',
-        ':(exclude)**/.hyperagent.json'
+        ':(exclude).hyperagent/**',
+        ':(exclude)**/.hyperagent.json',
+        ':(exclude)**/.hyperagent/**'
       ]
       const diffText = await runGitCommand(diffArgs, project.repositoryPath)
       res.json({

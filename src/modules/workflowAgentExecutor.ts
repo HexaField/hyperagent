@@ -118,11 +118,33 @@ async function ensureOpencodeConfig(sessionDir: string): Promise<void> {
 }
 
 async function detectLogsPath(sessionDir: string): Promise<string | undefined> {
-  const file = path.join(sessionDir, '.hyperagent.json')
+  const legacy = path.join(sessionDir, '.hyperagent.json')
   try {
-    await fs.access(file)
-    return file
+    await fs.access(legacy)
+    return legacy
   } catch {
-    return undefined
+    // fall through to directory scan
+  }
+
+  const dir = path.join(sessionDir, '.hyperagent')
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true })
+    const candidates = await Promise.all(
+      entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+        .map(async (entry) => {
+          const fullPath = path.join(dir, entry.name)
+          const stat = await fs.stat(fullPath)
+          return { fullPath, mtime: stat.mtimeMs }
+        })
+    )
+    if (!candidates.length) return undefined
+    candidates.sort((a, b) => b.mtime - a.mtime)
+    return candidates[0].fullPath
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') {
+      return undefined
+    }
+    throw error
   }
 }
