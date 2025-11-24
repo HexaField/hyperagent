@@ -6,7 +6,7 @@ import { buildSessionWorkflowPayload } from '../lib/sessions'
 const BROWSER_PAGE_SIZE = 10
 const BROWSER_STATE_STORAGE_KEY = 'hyperagent:repoBrowser'
 
-type Project = {
+export type Project = {
   id: string
   name: string
   description?: string | null
@@ -16,7 +16,7 @@ type Project = {
   git?: GitInfo | null
 }
 
-type GitInfo = {
+export type GitInfo = {
   repositoryPath: string
   branch: string | null
   commit: {
@@ -672,6 +672,12 @@ export default function RepositoriesPage() {
                           >
                             New session
                           </button>
+                          <A
+                            href={`/repositories/${project.id}`}
+                            class="rounded-xl border border-blue-600 px-3 py-1.5 text-sm font-semibold text-blue-600"
+                          >
+                            Repositories
+                          </A>
                           <A
                             href={`/repositories/${project.id}/graph`}
                             class="rounded-xl border border-blue-600 px-3 py-1.5 text-sm font-semibold text-blue-600"

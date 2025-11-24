@@ -1,7 +1,7 @@
 import { createServerApp } from './app'
 
 async function startServer() {
-  const serverInstance = createServerApp()
+  const serverInstance = await createServerApp()
   serverInstance.start()
 
   const shutdown = async () => {

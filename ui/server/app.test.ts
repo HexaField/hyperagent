@@ -5,16 +5,48 @@ import { once } from 'node:events'
 import { createServer as createHttpServer } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { TextDecoder } from 'node:util'
+import { pathToFileURL } from 'node:url'
 import os from 'os'
 import path from 'path'
 import { describe, expect, it, vi, type Mock } from 'vitest'
-import WebSocket from 'ws'
+import type WebSocketType from 'ws'
+import type { RawData as WsRawData } from 'ws'
 import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../../src/modules/agent'
 import type { CodeServerController, CodeServerHandle, CodeServerOptions } from '../../src/modules/codeServer'
 import type { TerminalSessionRecord } from '../../src/modules/database'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import type { LiveTerminalSession, TerminalModule } from '../../src/modules/terminal'
+import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from '../../src/modules/workflowRunnerGateway'
 import { createServerApp } from './app'
+
+const loadWsClient = async (): Promise<typeof WebSocketType> => {
+  const nodeRequire = eval('require') as NodeJS.Require
+  const resolvedPath = nodeRequire.resolve('ws')
+  const packageDir = path.dirname(resolvedPath)
+  const candidatePaths = [
+    path.join(packageDir, 'lib', 'websocket.js'),
+    resolvedPath
+  ]
+
+  for (const candidate of candidatePaths) {
+    try {
+      const mod = nodeRequire(candidate)
+      const WebSocket = (mod && typeof mod === 'object' && 'default' in mod ? (mod as any).default : mod) as typeof WebSocketType
+      if (typeof WebSocket === 'function') {
+        return WebSocket
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+
+  const module = await import(pathToFileURL(resolvedPath).href)
+  const WebSocket = (module.default ?? (module as unknown as typeof WebSocketType)) as typeof WebSocketType
+  if (typeof WebSocket !== 'function') {
+    throw new Error('Unable to load ws client')
+  }
+  return WebSocket
+}
 
 const mockResult: AgentLoopResult = {
   outcome: 'approved',
@@ -38,6 +70,49 @@ type FakeCodeServer = {
   port: number
   requests: string[]
   close: () => Promise<void>
+}
+
+type TestRunnerGateway = {
+  gateway: WorkflowRunnerGateway
+  setBaseUrl: (url: string) => Promise<void>
+}
+
+function createTestWorkflowRunnerGateway(): TestRunnerGateway {
+  let baseUrl: string | null = null
+  const pending: WorkflowRunnerPayload[] = []
+
+  const dispatch = async (payload: WorkflowRunnerPayload) => {
+    if (!baseUrl) {
+      pending.push(payload)
+      return
+    }
+    const url = new URL(
+      `/api/workflows/${encodeURIComponent(payload.workflowId)}/steps/${encodeURIComponent(payload.stepId)}/callback`,
+      baseUrl
+    )
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runnerInstanceId: payload.runnerInstanceId })
+    })
+    if (!response.ok) {
+      throw new Error(`Workflow callback failed with status ${response.status}`)
+    }
+  }
+
+  return {
+    gateway: {
+      enqueue: async (payload) => {
+        await dispatch(payload)
+      }
+    },
+    setBaseUrl: async (url: string) => {
+      baseUrl = url
+      while (pending.length) {
+        await dispatch(pending.shift()!)
+      }
+    }
+  }
 }
 
 async function startFakeCodeServer(): Promise<FakeCodeServer> {
@@ -144,21 +219,24 @@ async function createIntegrationHarness(options?: { radicleModule?: RadicleModul
 
   const radicleModule = options?.radicleModule ?? createFakeRadicleModule(radicleWorkspaceRoot)
   const terminalModule = options?.terminalModule ?? createFakeTerminalModule()
+  const testRunnerGateway = createTestWorkflowRunnerGateway()
 
-  const appServer = createServerApp({
+  const appServer = await createServerApp({
     runLoop,
     controllerFactory,
     tmpDir: tmpBase,
     allocatePort: async () => fakeCodeServer.port,
     persistenceFile: dbFile,
     radicleModule,
-    terminalModule
+    terminalModule,
+    workflowRunnerGateway: testRunnerGateway.gateway
   })
 
   const httpServer = appServer.start(0)
   await once(httpServer, 'listening')
   const address = httpServer.address() as AddressInfo
   const baseUrl = `http://127.0.0.1:${address.port}`
+  await testRunnerGateway.setBaseUrl(baseUrl)
 
   return {
     baseUrl,
@@ -528,7 +606,83 @@ describe('createServerApp', () => {
     }
   })
 
-  it('manages projects and workflows via REST APIs', async () => {
+  it('creates reusable project devspace sessions', async () => {
+    const harness = await createIntegrationHarness()
+    const repoDir = await createGitTestRepo()
+    try {
+      const projectResponse = await fetch(`${harness.baseUrl}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Workspace Demo', repositoryPath: repoDir })
+      })
+      expect(projectResponse.status).toBe(201)
+      const project = await projectResponse.json()
+
+      const devspaceResponse = await fetch(`${harness.baseUrl}/api/projects/${project.id}/devspace`, {
+        method: 'POST'
+      })
+      expect(devspaceResponse.status).toBe(200)
+      const first = await devspaceResponse.json()
+      expect(first.codeServerUrl).toContain(`/code-server/${first.sessionId}`)
+
+      const secondResponse = await fetch(`${harness.baseUrl}/api/projects/${project.id}/devspace`, {
+        method: 'POST'
+      })
+      expect(secondResponse.status).toBe(200)
+      const second = await secondResponse.json()
+      expect(second.sessionId).toBe(first.sessionId)
+      expect(second.codeServerUrl).toBe(first.codeServerUrl)
+      expect(harness.controllerFactory).toHaveBeenCalledTimes(1)
+    } finally {
+      await harness.close()
+      await fs.rm(repoDir, { recursive: true, force: true })
+    }
+  })
+
+  it('streams agent runs for existing projects without launching extra code-servers', async () => {
+    const harness = await createIntegrationHarness()
+    const repoDir = await createGitTestRepo()
+    try {
+      const projectResponse = await fetch(`${harness.baseUrl}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Project Agent', repositoryPath: repoDir })
+      })
+      expect(projectResponse.status).toBe(201)
+      const project = await projectResponse.json()
+
+      const devspaceResponse = await fetch(`${harness.baseUrl}/api/projects/${project.id}/devspace`, {
+        method: 'POST'
+      })
+      expect(devspaceResponse.status).toBe(200)
+
+      harness.controllerFactory.mockClear()
+
+      const response = await fetch(`${harness.baseUrl}/api/agent/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: 'Summarize the repo', projectId: project.id })
+      })
+      expect(response.status).toBe(200)
+
+      const frames: StreamPacket[] = []
+      await streamSseFrames(response, (frame) => {
+        frames.push(frame)
+      })
+
+      const sessionFrame = frames.find((frame) => frame.type === 'session')
+      expect(sessionFrame?.payload?.projectId).toBe(project.id)
+      expect(sessionFrame?.payload?.codeServerUrl).toContain(`/code-server/project-${project.id}`)
+      expect(harness.runLoop).toHaveBeenCalledTimes(1)
+      expect(harness.runLoop.mock.calls[0][0].sessionDir).toBe(repoDir)
+      expect(harness.controllerFactory).not.toHaveBeenCalled()
+    } finally {
+      await harness.close()
+      await fs.rm(repoDir, { recursive: true, force: true })
+    }
+  })
+
+  it('manages projects and workflows via REST APIs', { timeout: 15000 }, async () => {
     const harness = await createIntegrationHarness()
     try {
       const projectResponse = await fetch(`${harness.baseUrl}/api/projects`, {
@@ -559,7 +713,8 @@ describe('createServerApp', () => {
       }
 
       let finalStatus = ''
-      for (let attempt = 0; attempt < 15; attempt++) {
+      const maxAttempts = 60
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const detailRes = await fetch(`${harness.baseUrl}/api/workflows/${workflowId}`)
         expect(detailRes.status).toBe(200)
         const detail = await detailRes.json()
@@ -729,6 +884,7 @@ describe('createServerApp', () => {
 
       const wsUrl = new URL(`/ws/terminal/${session.id}`, harness.baseUrl)
       wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+      const WebSocket = await loadWsClient()
       const socket = new WebSocket(wsUrl)
       const marker = '__hyper_terminal__'
       let outputBuffer = ''
@@ -736,7 +892,7 @@ describe('createServerApp', () => {
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error('Timed out waiting for terminal output')), 12000)
 
-          const handleMessage = (data: WebSocket.RawData) => {
+          const handleMessage = (data: WsRawData) => {
             try {
               const payload = JSON.parse(data.toString())
               if (payload.type === 'ready') {

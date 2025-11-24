@@ -1,3 +1,80 @@
+const loadWebSocketModule = async (): Promise<{ WebSocket: typeof WebSocketType; WebSocketServer: typeof WebSocketServerType }> => {
+  const nodeRequire = eval('require') as NodeJS.Require
+
+  const loadFromLibFiles = (): { WebSocket: typeof WebSocketType; WebSocketServer: typeof WebSocketServerType } | null => {
+    try {
+      const resolvedEntry = nodeRequire.resolve('ws')
+      const packageDir = path.dirname(resolvedEntry)
+      const loadLib = (relativePath: string) => {
+        const mod = nodeRequire(path.join(packageDir, relativePath))
+        return (mod && typeof mod === 'object' && 'default' in mod ? (mod as any).default : mod) as typeof WebSocketType
+      }
+      const WebSocket = loadLib('lib/websocket.js') as unknown as typeof WebSocketType
+      const WebSocketServer = loadLib('lib/websocket-server.js') as unknown as typeof WebSocketServerType
+      if (typeof WebSocketServer === 'function') {
+        return { WebSocket, WebSocketServer }
+      }
+    } catch {
+      // ignore and fall through
+    }
+    return null
+  }
+
+  const libResult = loadFromLibFiles()
+  if (libResult) {
+    return libResult
+  }
+
+  const tryImport = async (specifier: string) => {
+    const module = await import(specifier)
+    const defaultExport = module.default as typeof WebSocketType & {
+      Server?: typeof WebSocketServerType
+      WebSocketServer?: typeof WebSocketServerType
+    }
+    const candidates = [
+      module.WebSocketServer,
+      module.Server,
+      defaultExport?.WebSocketServer,
+      defaultExport?.Server,
+      (module as any).default?.WebSocketServer,
+      (module as any).default?.Server
+    ]
+    const WebSocketServer = candidates.find((entry): entry is typeof WebSocketServerType => typeof entry === 'function')
+    const WebSocket = (defaultExport ?? (module as unknown as typeof WebSocketType)) as typeof WebSocketType
+    if (!WebSocketServer) {
+      throw new Error('WebSocketServer export from ws is unavailable')
+    }
+    return { WebSocket, WebSocketServer }
+  }
+
+  const candidateSpecifiers: string[] = []
+  try {
+    const resolvedPath = nodeRequire.resolve('ws')
+    candidateSpecifiers.push(pathToFileURL(resolvedPath).href)
+  } catch {
+    // ignore resolve failures
+  }
+  candidateSpecifiers.push('ws')
+
+  for (const specifier of candidateSpecifiers) {
+    try {
+      return await tryImport(specifier)
+    } catch {
+      // try next specifier
+    }
+  }
+
+  const fallback = nodeRequire('ws') as typeof WebSocketType & {
+    Server?: typeof WebSocketServerType
+    WebSocketServer?: typeof WebSocketServerType
+  }
+  const WebSocket = (fallback as any).default ? ((fallback as any).default as typeof WebSocketType) : (fallback as typeof WebSocketType)
+  const WebSocketServer = (fallback.WebSocketServer ?? fallback.Server) as typeof WebSocketServerType
+  if (typeof WebSocketServer !== 'function') {
+    throw new Error('WebSocketServer export from ws is unavailable')
+  }
+  return { WebSocket, WebSocketServer }
+}
 import cors from 'cors'
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import express from 'express'
@@ -6,9 +83,11 @@ import { createProxyMiddleware } from 'http-proxy-middleware'
 import { spawn, spawnSync } from 'node:child_process'
 import type { Server as HttpServer, IncomingMessage } from 'node:http'
 import { createServer, type AddressInfo, type Socket } from 'node:net'
+import { pathToFileURL } from 'node:url'
 import os from 'os'
 import path from 'path'
-import WebSocket, { WebSocketServer, type RawData } from 'ws'
+import type WebSocketType from 'ws'
+import type { RawData, WebSocketServer as WebSocketServerType } from 'ws'
 import { runVerifierWorkerLoop, type AgentStreamEvent } from '../../src/modules/agent'
 import {
   createCodeServerController,
@@ -27,6 +106,7 @@ import { createAgentWorkflowExecutor } from '../../src/modules/workflowAgentExec
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import { createTerminalModule, type LiveTerminalSession, type TerminalModule } from '../../src/modules/terminal'
 import { createDockerWorkflowRunnerGateway } from '../../src/modules/workflowRunnerGateway'
+import type { WorkflowRunnerGateway } from '../../src/modules/workflowRunnerGateway'
 import {
   createWorkflowRuntime,
   type PlannerRun,
@@ -127,6 +207,7 @@ export type CreateServerOptions = {
   reviewPollIntervalMs?: number
   radicleModule?: RadicleModule
   terminalModule?: TerminalModule
+  workflowRunnerGateway?: WorkflowRunnerGateway
 }
 
 export type ServerInstance = {
@@ -141,7 +222,10 @@ export type ServerInstance = {
   }
 }
 
-export function createServerApp(options: CreateServerOptions = {}): ServerInstance {
+export async function createServerApp(options: CreateServerOptions = {}): Promise<ServerInstance> {
+  const wsModule = await loadWebSocketModule()
+  const WebSocketCtor = wsModule.WebSocket
+  const WebSocketServerCtor = wsModule.WebSocketServer
   const runLoop = options.runLoop ?? runVerifierWorkerLoop
   const controllerFactory = options.controllerFactory ?? createCodeServerController
   const tmpDir = options.tmpDir ?? os.tmpdir()
@@ -236,13 +320,15 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   const workflowCallbackBaseUrl =
     process.env.WORKFLOW_CALLBACK_BASE_URL ?? `http://host.docker.internal:${defaultPort}`
   const workflowRunnerToken = process.env.WORKFLOW_RUNNER_TOKEN ?? process.env.WORKFLOW_CALLBACK_TOKEN ?? null
-  const workflowRunnerGateway = createDockerWorkflowRunnerGateway({
-    dockerBinary: process.env.WORKFLOW_DOCKER_BINARY,
-    image: process.env.WORKFLOW_RUNNER_IMAGE,
-    callbackBaseUrl: workflowCallbackBaseUrl,
-    callbackToken: workflowRunnerToken ?? undefined,
-    timeoutMs: process.env.WORKFLOW_RUNNER_TIMEOUT ? Number(process.env.WORKFLOW_RUNNER_TIMEOUT) : undefined
-  })
+  const workflowRunnerGateway =
+    options.workflowRunnerGateway ??
+    createDockerWorkflowRunnerGateway({
+      dockerBinary: process.env.WORKFLOW_DOCKER_BINARY,
+      image: process.env.WORKFLOW_RUNNER_IMAGE,
+      callbackBaseUrl: workflowCallbackBaseUrl,
+      callbackToken: workflowRunnerToken ?? undefined,
+      timeoutMs: process.env.WORKFLOW_RUNNER_TIMEOUT ? Number(process.env.WORKFLOW_RUNNER_TIMEOUT) : undefined
+    })
 
   const manageWorkerLifecycle = !options.workflowRuntime
   const workflowRuntime =
@@ -296,7 +382,23 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   app.use(express.json({ limit: '1mb' }))
 
   const activeCodeServers = new Map<string, CodeServerSession>()
-  const terminalWsServer = new WebSocketServer({ noServer: true })
+
+  const deriveProjectSessionId = (projectId: string) => `project-${projectId}`
+
+  const normalizeBranchName = (value?: string | null) => {
+    if (typeof value === 'string' && value.trim().length) {
+      return value.trim()
+    }
+    return 'main'
+  }
+
+  const ensureWorkspaceDirectory = async (dirPath: string): Promise<void> => {
+    const stats = await fs.stat(dirPath)
+    if (!stats.isDirectory()) {
+      throw new Error('Project repository path is not a directory')
+    }
+  }
+  const terminalWsServer: WebSocketServerType = new WebSocketServerCtor({ noServer: true })
   const DEFAULT_TERMINAL_USER_ID = process.env.TERMINAL_DEFAULT_USER_ID ?? 'anonymous'
   const USER_ID_HEADER_KEYS = ['x-user-id', 'x-user', 'x-hyperagent-user'] as const
 
@@ -581,20 +683,26 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     }
   }
 
-  async function startCodeServerForSession(sessionId: string, sessionDir: string): Promise<CodeServerSession | null> {
-    if (activeCodeServers.has(sessionId)) {
-      return activeCodeServers.get(sessionId) ?? null
+  type CodeServerWorkspaceOptions = {
+    sessionId: string
+    sessionDir: string
+    project: ProjectRecord
+    branch?: string | null
+  }
+
+  async function startCodeServerWorkspace(options: CodeServerWorkspaceOptions): Promise<CodeServerSession | null> {
+    if (activeCodeServers.has(options.sessionId)) {
+      return activeCodeServers.get(options.sessionId) ?? null
     }
 
     try {
-      const project = ensureEphemeralProject(sessionId, sessionDir)
-      const branch = project.defaultBranch
+      const branch = normalizeBranchName(options.branch ?? options.project.defaultBranch)
       const port = await allocatePort()
-      const basePath = `/code-server/${sessionId}`
+      const basePath = `/code-server/${options.sessionId}`
       const controller = controllerFactory({
         host: CODE_SERVER_HOST,
         port,
-        repoRoot: sessionDir,
+        repoRoot: options.sessionDir,
         publicBasePath: basePath
       })
       const handle = await controller.ensure()
@@ -606,34 +714,48 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
         target: `http://${CODE_SERVER_HOST}:${port}`,
         changeOrigin: true,
         ws: true,
-        pathRewrite: (pathName: string) => rewriteCodeServerPath(pathName, sessionId)
+        pathRewrite: (pathName: string) => rewriteCodeServerPath(pathName, options.sessionId)
       }) as ProxyWithUpgrade
 
       const session: CodeServerSession = {
-        id: sessionId,
-        dir: sessionDir,
+        id: options.sessionId,
+        dir: options.sessionDir,
         basePath,
-        projectId: project.id,
+        projectId: options.project.id,
         branch,
         controller,
         proxy,
         publicUrl: handle.publicUrl
       }
-      activeCodeServers.set(sessionId, session)
+      activeCodeServers.set(options.sessionId, session)
       persistence.codeServerSessions.upsert({
-        id: sessionId,
-        projectId: project.id,
+        id: options.sessionId,
+        projectId: options.project.id,
         branch,
-        workspacePath: sessionDir,
+        workspacePath: options.sessionDir,
         url: handle.publicUrl,
         authToken: 'none',
         processId: handle.child.pid ?? null
       })
       return session
     } catch (error) {
-      console.warn('Unable to launch code-server session', sessionId, error)
+      console.warn('Unable to launch code-server session', options.sessionId, error)
       return null
     }
+  }
+
+  async function ensureProjectCodeServer(project: ProjectRecord): Promise<CodeServerSession | null> {
+    return await startCodeServerWorkspace({
+      sessionId: deriveProjectSessionId(project.id),
+      sessionDir: project.repositoryPath,
+      project,
+      branch: project.defaultBranch
+    })
+  }
+
+  async function startCodeServerForSession(sessionId: string, sessionDir: string): Promise<CodeServerSession | null> {
+    const project = ensureEphemeralProject(sessionId, sessionDir)
+    return await startCodeServerWorkspace({ sessionId, sessionDir, project, branch: project.defaultBranch })
   }
 
   async function shutdownCodeServerSession(sessionId: string): Promise<void> {
@@ -662,10 +784,26 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   }
 
   const agentRunHandler: RequestHandler = async (req: Request, res: Response) => {
-    const { prompt, provider, model, maxRounds } = req.body ?? {}
+    const { prompt, provider, model, maxRounds, projectId } = req.body ?? {}
     if (!prompt || typeof prompt !== 'string') {
       res.status(400).json({ error: 'prompt is required' })
       return
+    }
+
+    let project: ProjectRecord | null = null
+    if (typeof projectId === 'string' && projectId.trim().length) {
+      project = persistence.projects.getById(projectId.trim())
+      if (!project) {
+        res.status(404).json({ error: 'Unknown project' })
+        return
+      }
+      try {
+        await ensureWorkspaceDirectory(project.repositoryPath)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Project repository path is unavailable'
+        res.status(400).json({ error: message })
+        return
+      }
     }
 
     res.writeHead(200, {
@@ -678,9 +816,11 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
 
     let closed = false
     let sessionId: string | null = null
+    let sessionDir: string | null = null
+    let shouldShutdownCodeServer = !project
     res.on('close', () => {
       closed = true
-      if (sessionId) {
+      if (sessionId && shouldShutdownCodeServer) {
         void shutdownCodeServerSession(sessionId)
       }
     })
@@ -694,9 +834,22 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       }
     }
 
-    const sessionDir = await fs.mkdtemp(path.join(tmpDir, 'hyperagent-session-'))
-    sessionId = path.basename(sessionDir)
-    const codeServerSession = await startCodeServerForSession(sessionId, sessionDir)
+    if (project) {
+      sessionDir = project.repositoryPath
+      sessionId = `project-run-${project.id}-${Date.now().toString(36)}`
+    } else {
+      sessionDir = await fs.mkdtemp(path.join(tmpDir, 'hyperagent-session-'))
+      sessionId = path.basename(sessionDir)
+    }
+
+    if (!sessionId || !sessionDir) {
+      throw new Error('Unable to initialize agent workspace')
+    }
+
+    const codeServerSession = project
+      ? await ensureProjectCodeServer(project)
+      : await startCodeServerForSession(sessionId, sessionDir)
+
     console.log('session ready', sessionId)
     emit({
       type: 'session',
@@ -704,8 +857,8 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
         sessionDir,
         sessionId,
         codeServerUrl: codeServerSession?.publicUrl ?? null,
-        projectId: codeServerSession?.projectId ?? null,
-        branch: codeServerSession?.branch ?? null
+        projectId: project?.id ?? codeServerSession?.projectId ?? null,
+        branch: project?.defaultBranch ?? codeServerSession?.branch ?? null
       }
     })
 
@@ -725,7 +878,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
         provider: providerToUse,
         model: modelToUse,
         maxRounds: normalizedMaxRounds,
-        sessionDir,
+        sessionDir: sessionDir ?? undefined,
         onStream: streamHandler
       })
       console.log('runLoop completed', sessionId)
@@ -747,7 +900,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
         console.log('ending response', sessionId)
         res.end()
       }
-      if (sessionId) {
+      if (sessionId && shouldShutdownCodeServer) {
         await shutdownCodeServerSession(sessionId)
       }
     }
@@ -1011,6 +1164,94 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       res.json({ projects: payload })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to list projects'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const projectDetailHandler: RequestHandler = async (req, res) => {
+    const projectId = req.params.projectId
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' })
+      return
+    }
+    const project = persistence.projects.getById(projectId)
+    if (!project) {
+      res.status(404).json({ error: 'Unknown project' })
+      return
+    }
+    try {
+      const gitMap = await collectGitMetadata([project.repositoryPath])
+      const payload = {
+        ...project,
+        git: gitMap.get(path.resolve(project.repositoryPath)) ?? null
+      }
+      res.json({ project: payload })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to read project metadata'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const projectDevspaceHandler: RequestHandler = async (req, res) => {
+    const projectId = req.params.projectId
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' })
+      return
+    }
+    const project = persistence.projects.getById(projectId)
+    if (!project) {
+      res.status(404).json({ error: 'Unknown project' })
+      return
+    }
+    try {
+      await ensureWorkspaceDirectory(project.repositoryPath)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Project repository path is unavailable'
+      res.status(400).json({ error: message })
+      return
+    }
+    const session = await ensureProjectCodeServer(project)
+    if (!session) {
+      res.status(500).json({ error: 'Failed to launch code-server for project' })
+      return
+    }
+    res.json({
+      projectId: project.id,
+      sessionId: session.id,
+      codeServerUrl: session.publicUrl,
+      workspacePath: session.dir,
+      branch: session.branch
+    })
+  }
+
+  const projectDiffHandler: RequestHandler = async (req, res) => {
+    const projectId = req.params.projectId
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' })
+      return
+    }
+    const project = persistence.projects.getById(projectId)
+    if (!project) {
+      res.status(404).json({ error: 'Unknown project' })
+      return
+    }
+    const isRepo = await isGitRepository(project.repositoryPath)
+    if (!isRepo) {
+      res.status(400).json({ error: 'Project repository is not a Git repository' })
+      return
+    }
+    try {
+      const diffArgs = ['diff', '--stat', '--patch', '--unified=200']
+      const diffText = await runGitCommand(diffArgs, project.repositoryPath)
+      const statusText = await runGitCommand(['status', '-sb'], project.repositoryPath)
+      res.json({
+        projectId: project.id,
+        diffText,
+        hasChanges: diffText.trim().length > 0,
+        status: statusText
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to compute project diff'
       res.status(500).json({ error: message })
     }
   }
@@ -1678,9 +1919,12 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   app.get('/api/fs/browse', browseFilesystemHandler)
   app.get('/api/projects', listProjectsHandler)
   app.get('/api/projects/:projectId/graph', repositoryGraphHandler)
+  app.get('/api/projects/:projectId/diff', projectDiffHandler)
+  app.post('/api/projects/:projectId/devspace', projectDevspaceHandler)
   app.get('/api/projects/:projectId/pull-requests', listProjectPullRequestsHandler)
   app.get('/api/reviews/active', listActiveReviewsHandler)
   app.post('/api/projects/:projectId/pull-requests', createProjectPullRequestHandler)
+  app.get('/api/projects/:projectId', projectDetailHandler)
   app.post('/api/projects', createProjectHandler)
   app.get('/api/pull-requests/:prId', pullRequestDetailHandler)
   app.get('/api/pull-requests/:prId/diff', pullRequestDiffHandler)
@@ -1705,8 +1949,8 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   app.delete('/api/terminal/sessions/:sessionId', deleteTerminalSessionHandler)
   app.post('/api/agent/run', agentRunHandler)
 
-  const sendTerminalPayload = (socket: WebSocket, payload: Record<string, unknown>) => {
-    if (socket.readyState !== WebSocket.OPEN) return
+  const sendTerminalPayload = (socket: WebSocketType, payload: Record<string, unknown>) => {
+    if (socket.readyState !== WebSocketCtor.OPEN) return
     socket.send(JSON.stringify(payload))
   }
 
@@ -1743,7 +1987,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     }
   }
 
-  terminalWsServer.on('connection', (socket, request) => {
+  terminalWsServer.on('connection', (socket: WebSocketType, request: IncomingMessage) => {
     const sessionId = extractTerminalSessionId(request.url)
     if (!sessionId) {
       socket.close(1008, 'Missing terminal session id')
@@ -1797,7 +2041,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
 
   const handleUpgrade = (req: IncomingMessage, socket: Socket, head: Buffer) => {
     if (extractTerminalSessionId(req.url)) {
-      terminalWsServer.handleUpgrade(req, socket, head, (ws) => {
+      terminalWsServer.handleUpgrade(req, socket, head, (ws: WebSocketType) => {
         terminalWsServer.emit('connection', ws, req)
       })
       return
@@ -1825,7 +2069,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
 
   const shutdownApp = async () => {
     await shutdownAllCodeServers()
-    terminalWsServer.clients.forEach((client) => {
+    terminalWsServer.clients.forEach((client: WebSocketType) => {
       try {
         client.close()
       } catch {

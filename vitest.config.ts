@@ -9,5 +9,13 @@ export default defineConfig({
     exclude: ['node_modules/**', 'dist/**', 'external/**', '**/.{tmp,temp}/**', '**/.tmp/**'],
     environment: 'node',
     environmentMatchGlobs: [['web/**', 'jsdom']]
+  },
+  server: {
+    deps: {
+      external: ['ws']
+    }
+  },
+  ssr: {
+    external: ['ws']
   }
 })

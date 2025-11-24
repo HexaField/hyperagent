@@ -35,8 +35,18 @@ type AgentChunkPayload = {
 
 const DEFAULT_PROMPT = `Draft a quick project overview for a habit-tracking app.`
 
-export default function Agent() {
-  const [prompt, setPrompt] = createSignal(DEFAULT_PROMPT)
+type AgentProps = {
+  title?: string
+  description?: string
+  defaultPrompt?: string
+  projectId?: string
+  provider?: string
+  showWorkspacePanel?: boolean
+  onRunComplete?: () => void
+}
+
+export default function Agent(props: AgentProps = {}) {
+  const [prompt, setPrompt] = createSignal(props.defaultPrompt ?? DEFAULT_PROMPT)
   const [isRunning, setIsRunning] = createSignal(false)
   const [logs, setLogs] = createSignal<AgentLogEntry[]>([])
   const [sessionDir, setSessionDir] = createSignal<string | null>(null)
@@ -78,12 +88,20 @@ export default function Agent() {
     setCodeServerUrl(null)
 
     try {
+      const body: Record<string, unknown> = { prompt: trimmed }
+      if (props.projectId) {
+        body.projectId = props.projectId
+      }
+      if (props.provider) {
+        body.provider = props.provider
+      }
+
       const response = await fetch('/api/agent/run', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ prompt: trimmed }),
+        body: JSON.stringify(body),
         signal: controller.signal
       })
 
@@ -157,6 +175,7 @@ export default function Agent() {
         break
       case 'end':
         setCodeServerUrl(null)
+        props.onRunComplete?.()
         break
       default:
         break
@@ -203,9 +222,9 @@ export default function Agent() {
       <div class="flex flex-wrap items-center justify-between gap-4">
         <div class="space-y-2">
           <p class="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">Autonomous coding agent</p>
-          <h2 class="text-2xl font-semibold text-[var(--text)]">Live autonomous agent</h2>
+          <h2 class="text-2xl font-semibold text-[var(--text)]">{props.title ?? 'Live autonomous agent'}</h2>
           <p class="text-[var(--text-muted)]">
-            Stream the agent's reasoning and inspect the repo inside the embedded code-server.
+            {props.description ?? 'Stream the agent\'s reasoning and inspect the repo inside the embedded code-server.'}
           </p>
         </div>
         <div class="flex items-center gap-3">
@@ -288,48 +307,50 @@ export default function Agent() {
           </div>
         </div>
 
-        <div class="flex flex-col gap-3">
-          <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-            <div class="flex flex-col gap-1">
-              <p class="text-sm font-semibold text-[var(--text-muted)]">Workspace editor</p>
-              <Show
-                when={sessionDir()}
-                fallback={<p class="text-xs text-[var(--text-muted)]">Run the agent to allocate a workspace folder.</p>}
-              >
-                {(dir) => (
-                  <code
-                    class="max-w-full truncate rounded bg-[var(--bg-muted)] px-2 py-1 text-xs text-[var(--text)]"
-                    title={dir()}
-                  >
-                    {dir()}
-                  </code>
-                )}
+        <Show when={props.showWorkspacePanel !== false}>
+          <div class="flex flex-col gap-3">
+            <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <div class="flex flex-col gap-1">
+                <p class="text-sm font-semibold text-[var(--text-muted)]">Workspace editor</p>
+                <Show
+                  when={sessionDir()}
+                  fallback={<p class="text-xs text-[var(--text-muted)]">Run the agent to allocate a workspace folder.</p>}
+                >
+                  {(dir) => (
+                    <code
+                      class="max-w-full truncate rounded bg-[var(--bg-muted)] px-2 py-1 text-xs text-[var(--text)]"
+                      title={dir()}
+                    >
+                      {dir()}
+                    </code>
+                  )}
+                </Show>
+              </div>
+              <Show when={isRunning() && !codeServerUrl()}>
+                <p class="text-xs text-[var(--text-muted)]">Launching code-server…</p>
               </Show>
             </div>
-            <Show when={isRunning() && !codeServerUrl()}>
-              <p class="text-xs text-[var(--text-muted)]">Launching code-server…</p>
+            <Show
+              when={codeServerUrl()}
+              fallback={
+                <div class="flex flex-1 items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-6 text-center text-sm text-[var(--text-muted)]">
+                  {isRunning()
+                    ? 'code-server is starting in the agent workspace…'
+                    : 'Run the agent to launch code-server inside its workspace.'}
+                </div>
+              }
+            >
+              {(url) => (
+                <iframe
+                  src={url()}
+                  class="min-h-[360px] w-full flex-1 rounded-2xl border border-[var(--border)] bg-[#0f172a]"
+                  title="Embedded code-server"
+                  allow="clipboard-write"
+                />
+              )}
             </Show>
           </div>
-          <Show
-            when={codeServerUrl()}
-            fallback={
-              <div class="flex flex-1 items-center justify-center rounded-xl border border-dashed border-[var(--border)] p-6 text-center text-sm text-[var(--text-muted)]">
-                {isRunning()
-                  ? 'code-server is starting in the agent workspace…'
-                  : 'Run the agent to launch code-server inside its workspace.'}
-              </div>
-            }
-          >
-            {(url) => (
-              <iframe
-                src={url()}
-                class="min-h-[360px] w-full flex-1 rounded-2xl border border-[var(--border)] bg-[#0f172a]"
-                title="Embedded code-server"
-                allow="clipboard-write"
-              />
-            )}
-          </Show>
-        </div>
+        </Show>
       </div>
     </section>
   )

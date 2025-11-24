@@ -3,6 +3,7 @@ import { A, Navigate, Route, Router } from '@solidjs/router'
 import { Show, createResource } from 'solid-js'
 import { fetchJson } from './lib/http'
 import RepositoriesPage from './pages/RepositoriesPage'
+import ProjectRepositoriesPage from './pages/ProjectRepositoriesPage'
 import RepositoryGraphPage from './pages/RepositoryGraphPage'
 import TerminalPage from './pages/TerminalPage'
 import WorkflowDetailPage from './pages/WorkflowDetailPage'
@@ -49,6 +50,7 @@ export default function App() {
         <Route path="/" component={RedirectHome} />
         <Route path="/repositories" component={RepositoriesPage} />
         <Route path="/repositories/:projectId/graph" component={RepositoryGraphPage} />
+        <Route path="/repositories/:projectId" component={ProjectRepositoriesPage} />
         <Route path="/workflows" component={WorkflowsPage} />
         <Route path="/workflows/:workflowId" component={WorkflowDetailPage} />
         <Route path="/terminal" component={TerminalPage} />
