@@ -223,7 +223,6 @@ const TerminalPage = () => {
           <input
             class="mt-1 rounded-xl border border-[var(--border)] bg-transparent px-3 py-2"
             type="text"
-            placeholder="/Users/josh/Desktop"
             value={cwdInput()}
             onInput={(event) => setCwdInput(event.currentTarget.value)}
           />

@@ -224,3 +224,11 @@ If you were to build toward this:
 
 6. Scale integrations and agent types:
    - Make it easy for 3rd parties (or internal teams) to publish new agents into the ecosystem.
+
+---
+
+## 8. Local HTTPS setup
+
+- Run `npm run certs:generate` once to create `certs/hyperagent.cert.pem` and `certs/hyperagent.key.pem`. The directory is gitignored so every developer manages their own keys.
+- `UI_TLS_CERT_PATH` / `UI_TLS_KEY_PATH` override the UI server certificates; `VITE_TLS_CERT_PATH` / `VITE_TLS_KEY_PATH` do the same for the Vite dev server (both default to the generated files).
+- When running workflows or proxies via Docker, mount or copy the certificate bundle so other services can trust the HTTPS-only UI endpoints.

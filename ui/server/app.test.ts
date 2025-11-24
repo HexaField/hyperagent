@@ -8,6 +8,7 @@ import { TextDecoder } from 'node:util'
 import { pathToFileURL } from 'node:url'
 import os from 'os'
 import path from 'path'
+import selfsigned from 'selfsigned'
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import type WebSocketType from 'ws'
 import type { RawData as WsRawData } from 'ws'
@@ -18,6 +19,8 @@ import { createRadicleModule, type RadicleModule } from '../../src/modules/radic
 import type { LiveTerminalSession, TerminalModule } from '../../src/modules/terminal'
 import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from '../../src/modules/workflowRunnerGateway'
 import { createServerApp } from './app'
+
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
 
 const loadWsClient = async (): Promise<typeof WebSocketType> => {
   const nodeRequire = eval('require') as NodeJS.Require
@@ -75,6 +78,33 @@ type FakeCodeServer = {
 type TestRunnerGateway = {
   gateway: WorkflowRunnerGateway
   setBaseUrl: (url: string) => Promise<void>
+}
+
+function createTestTlsMaterials() {
+  const extensions = [
+    { name: 'basicConstraints', cA: true },
+    { name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
+    { name: 'extKeyUsage', serverAuth: true, clientAuth: true },
+    {
+      name: 'subjectAltName',
+      altNames: [
+        { type: 2, value: 'localhost' },
+        { type: 2, value: 'hyperagent.test' },
+        { type: 7, ip: '127.0.0.1' },
+        { type: 7, ip: '::1' }
+      ]
+    }
+  ]
+  const result = selfsigned.generate([{ name: 'commonName', value: 'hyperagent.test' }], {
+    days: 30,
+    algorithm: 'sha256',
+    keySize: 2048,
+    extensions
+  })
+  return {
+    cert: Buffer.from(result.cert),
+    key: Buffer.from(result.private)
+  }
 }
 
 function createTestWorkflowRunnerGateway(): TestRunnerGateway {
@@ -221,6 +251,7 @@ async function createIntegrationHarness(options?: { radicleModule?: RadicleModul
   const terminalModule = options?.terminalModule ?? createFakeTerminalModule()
   const testRunnerGateway = createTestWorkflowRunnerGateway()
 
+  const tlsMaterials = createTestTlsMaterials()
   const appServer = await createServerApp({
     runLoop,
     controllerFactory,
@@ -229,13 +260,14 @@ async function createIntegrationHarness(options?: { radicleModule?: RadicleModul
     persistenceFile: dbFile,
     radicleModule,
     terminalModule,
-    workflowRunnerGateway: testRunnerGateway.gateway
+    workflowRunnerGateway: testRunnerGateway.gateway,
+    tls: tlsMaterials
   })
 
-  const httpServer = appServer.start(0)
-  await once(httpServer, 'listening')
-  const address = httpServer.address() as AddressInfo
-  const baseUrl = `http://127.0.0.1:${address.port}`
+  const httpsServer = appServer.start(0)
+  await once(httpsServer, 'listening')
+  const address = httpsServer.address() as AddressInfo
+  const baseUrl = `https://127.0.0.1:${address.port}`
   await testRunnerGateway.setBaseUrl(baseUrl)
 
   return {
@@ -244,7 +276,7 @@ async function createIntegrationHarness(options?: { radicleModule?: RadicleModul
     controllerFactory,
     fakeCodeServer,
     close: async () => {
-      await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+      await new Promise<void>((resolve) => httpsServer.close(() => resolve()))
       await appServer.shutdown()
       await radicleModule.cleanup()
       await terminalModule.cleanup()

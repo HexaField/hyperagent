@@ -89,8 +89,9 @@ import express from 'express'
 import fs from 'fs/promises'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { spawn, spawnSync } from 'node:child_process'
-import type { Server as HttpServer, IncomingMessage } from 'node:http'
-import { createServer, type AddressInfo, type Socket } from 'node:net'
+import type { IncomingMessage } from 'node:http'
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
+import { createServer as createNetServer, type AddressInfo, type Socket } from 'node:net'
 import { pathToFileURL } from 'node:url'
 import os from 'os'
 import path from 'path'
@@ -151,6 +152,54 @@ function parsePositiveInteger(raw?: string | null): number | undefined {
   if (!Number.isFinite(parsed)) return undefined
   const rounded = Math.floor(parsed)
   return rounded > 0 ? rounded : undefined
+}
+
+type TlsConfig = {
+  certPath?: string
+  keyPath?: string
+  cert?: Buffer | string
+  key?: Buffer | string
+}
+
+type TlsMaterials = {
+  cert: Buffer
+  key: Buffer
+}
+
+const bufferize = (value: Buffer | string): Buffer => (Buffer.isBuffer(value) ? value : Buffer.from(value))
+
+const readTlsFile = async (filePath: string, label: 'certificate' | 'key'): Promise<Buffer> => {
+  try {
+    return await fs.readFile(filePath)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      `Unable to read TLS ${label} at ${filePath}: ${reason}. Run \"npm run certs:generate\" or set UI_TLS_${
+        label === 'certificate' ? 'CERT' : 'KEY'
+      }_PATH.`
+    )
+  }
+}
+
+async function resolveTlsMaterials(config: TlsConfig): Promise<TlsMaterials> {
+  if (config.cert && config.key) {
+    return {
+      cert: bufferize(config.cert),
+      key: bufferize(config.key)
+    }
+  }
+  if ((config.cert && !config.key) || (!config.cert && config.key)) {
+    throw new Error('TLS configuration requires both certificate and key data to be provided together.')
+  }
+  const certPath = config.certPath
+  const keyPath = config.keyPath
+  if (!certPath || !keyPath) {
+    throw new Error(
+      'TLS certificate and key paths must be provided. Set UI_TLS_CERT_PATH and UI_TLS_KEY_PATH or run "npm run certs:generate".'
+    )
+  }
+  const [cert, key] = await Promise.all([readTlsFile(certPath, 'certificate'), readTlsFile(keyPath, 'key')])
+  return { cert, key }
 }
 
 export type ProxyWithUpgrade = RequestHandler & {
@@ -216,11 +265,12 @@ export type CreateServerOptions = {
   radicleModule?: RadicleModule
   terminalModule?: TerminalModule
   workflowRunnerGateway?: WorkflowRunnerGateway
+  tls?: TlsConfig
 }
 
 export type ServerInstance = {
   app: express.Express
-  start: (port?: number) => HttpServer
+  start: (port?: number) => HttpsServer
   shutdown: () => Promise<void>
   getActiveSessionIds: () => string[]
   handleUpgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void
@@ -238,11 +288,19 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   const controllerFactory = options.controllerFactory ?? createCodeServerController
   const tmpDir = options.tmpDir ?? os.tmpdir()
   const defaultPort = options.port ?? DEFAULT_PORT
+  const defaultCertPath = process.env.UI_TLS_CERT_PATH ?? path.resolve(process.cwd(), 'certs/hyperagent.cert.pem')
+  const defaultKeyPath = process.env.UI_TLS_KEY_PATH ?? path.resolve(process.cwd(), 'certs/hyperagent.key.pem')
+  const tlsMaterials = await resolveTlsMaterials({
+    cert: options.tls?.cert,
+    key: options.tls?.key,
+    certPath: options.tls?.certPath ?? defaultCertPath,
+    keyPath: options.tls?.keyPath ?? defaultKeyPath
+  })
   const allocatePort =
     options.allocatePort ??
     (async () =>
       await new Promise<number>((resolve, reject) => {
-        const server = createServer()
+        const server = createNetServer()
         server.once('error', reject)
         server.listen(0, CODE_SERVER_HOST, () => {
           const address = server.address() as AddressInfo | null
@@ -325,7 +383,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     maxRounds: WORKFLOW_AGENT_MAX_ROUNDS
   })
 
-  const workflowCallbackBaseUrl = process.env.WORKFLOW_CALLBACK_BASE_URL ?? `http://host.docker.internal:${defaultPort}`
+  const workflowCallbackBaseUrl = process.env.WORKFLOW_CALLBACK_BASE_URL ?? `https://host.docker.internal:${defaultPort}`
   const workflowRunnerToken = process.env.WORKFLOW_RUNNER_TOKEN ?? process.env.WORKFLOW_CALLBACK_TOKEN ?? null
   const workflowRunnerGateway =
     options.workflowRunnerGateway ??
@@ -351,7 +409,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   if (manageWorkerLifecycle) {
     workflowRuntime.startWorker()
   }
-  const reviewCallbackBaseUrl = process.env.REVIEW_CALLBACK_BASE_URL ?? `http://host.docker.internal:${defaultPort}`
+  const reviewCallbackBaseUrl = process.env.REVIEW_CALLBACK_BASE_URL ?? `https://host.docker.internal:${defaultPort}`
   const reviewRunnerToken = process.env.REVIEW_RUNNER_TOKEN ?? process.env.REVIEW_CALLBACK_TOKEN ?? null
   const reviewRunnerGateway = createDockerReviewRunnerGateway({
     dockerBinary: process.env.REVIEW_DOCKER_BINARY,
@@ -2085,11 +2143,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     session.proxy.upgrade(req, socket, head)
   }
 
-  const start = (port = defaultPort) => {
-    const server = app.listen(port, () => {
-      console.log(`UI server listening on http://localhost:${port}`)
-    })
+  const start = (port = defaultPort): HttpsServer => {
+    const server = createHttpsServer({ key: tlsMaterials.key, cert: tlsMaterials.cert }, app)
     server.on('upgrade', handleUpgrade)
+    server.listen(port, () => {
+      console.log(`UI server listening on https://localhost:${port}`)
+    })
     return server
   }
 
