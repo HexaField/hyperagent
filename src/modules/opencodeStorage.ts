@@ -1,4 +1,5 @@
 import fs from 'fs/promises'
+import { existsSync } from 'fs'
 import type { Dirent } from 'fs'
 import os from 'os'
 import path from 'path'
@@ -345,9 +346,17 @@ export function resolveDefaultOpencodeRoot(): string {
   candidates.push(path.join(home, '.local', 'share', 'opencode'))
   candidates.push(path.join(home, '.opencode'))
   for (const candidate of candidates) {
-    if (candidate && candidate.trim().length) {
+    if (candidate && candidate.trim().length && pathExists(candidate)) {
       return candidate
     }
   }
-  return path.join(home, '.opencode')
+  return candidates[0] ?? path.join(home, '.opencode')
+}
+
+function pathExists(candidate: string): boolean {
+  try {
+    return existsSync(candidate)
+  } catch {
+    return false
+  }
 }

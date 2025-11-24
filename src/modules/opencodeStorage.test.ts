@@ -1,6 +1,8 @@
+import fs from 'fs'
+import os from 'os'
 import path from 'path'
-import { describe, expect, it } from 'vitest'
-import { createOpencodeStorage } from './opencodeStorage'
+import { describe, expect, it, vi, afterEach } from 'vitest'
+import { createOpencodeStorage, resolveDefaultOpencodeRoot } from './opencodeStorage'
 
 const fixtureRoot = path.join(process.cwd(), 'tests/fixtures/opencode-storage')
 
@@ -25,5 +27,29 @@ describe('createOpencodeStorage', () => {
     const assistant = detail?.messages.find((message) => message.role === 'assistant')
     expect(assistant?.text).toContain('Outlined plan')
     expect(assistant?.modelId).toBe('github-copilot/gpt-5-mini')
+  })
+})
+
+describe('resolveDefaultOpencodeRoot', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('prefers candidate directories that already exist', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    vi.spyOn(os, 'homedir').mockReturnValue('/Users/demo')
+    const localShare = path.join('/Users/demo', '.local', 'share', 'opencode')
+    vi.spyOn(fs, 'existsSync').mockImplementation((target) => {
+      const value = typeof target === 'string' ? target : target.toString()
+      return value === localShare
+    })
+    expect(resolveDefaultOpencodeRoot()).toBe(localShare)
+  })
+
+  it('falls back to the first candidate when none exist', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux')
+    vi.spyOn(os, 'homedir').mockReturnValue('/home/demo')
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false)
+    expect(resolveDefaultOpencodeRoot()).toBe(path.join('/home/demo', '.local', 'share', 'opencode'))
   })
 })
