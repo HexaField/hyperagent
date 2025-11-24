@@ -20,7 +20,7 @@ export type DockerWorkflowRunnerOptions = {
 }
 
 const DEFAULT_IMAGE = 'curlimages/curl:8.11.1'
-const DEFAULT_TIMEOUT_MS = 120_000
+const DEFAULT_TIMEOUT_MS = 900_000
 
 export function createDockerWorkflowRunnerGateway(options: DockerWorkflowRunnerOptions): WorkflowRunnerGateway {
   const binary = options.dockerBinary ?? 'docker'

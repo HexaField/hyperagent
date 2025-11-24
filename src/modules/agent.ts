@@ -108,7 +108,7 @@ export type AgentStreamCallback = (event: AgentStreamEvent) => void
 export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
   const provider = options.provider ?? 'ollama'
   const model = options.model ?? 'llama3.2'
-  const maxRounds = options.maxRounds ?? 3
+  const maxRounds = options.maxRounds ?? 10
   const workerSessionId = options.workerSessionId ?? `worker-${Date.now()}`
   const verifierSessionId = options.verifierSessionId ?? `verifier-${Date.now()}`
   const sessionDir = options.sessionDir ?? os.tmpdir() // Use OS temp dir if none provided
