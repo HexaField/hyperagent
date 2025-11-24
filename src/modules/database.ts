@@ -53,6 +53,19 @@ import {
   type WorkflowsBindings,
   type WorkflowsRepository
 } from './workflows'
+import {
+  reviewPersistence,
+  type PullRequestCommitInput,
+  type PullRequestCommitsRepository,
+  type PullRequestEventsRepository,
+  type PullRequestInsertInput,
+  type PullRequestsRepository,
+  type ReviewBindings,
+  type ReviewCommentsRepository,
+  type ReviewRunInsertInput,
+  type ReviewRunsRepository,
+  type ReviewThreadsRepository
+} from './review/persistence'
 
 export type Timestamp = string
 
@@ -93,7 +106,8 @@ const defaultModules: readonly PersistenceModule<Record<string, unknown>>[] = [
   agentRunsPersistence,
   codeServerSessionsPersistence,
   radicleRegistrationsPersistence,
-  terminalSessionsPersistence
+  terminalSessionsPersistence,
+  reviewPersistence
 ]
 
 type DefaultBindings = ProjectsBindings &
@@ -101,7 +115,8 @@ type DefaultBindings = ProjectsBindings &
   AgentRunsBindings &
   CodeServerSessionsBindings &
   RadicleRegistrationsBindings &
-  TerminalSessionsBindings
+  TerminalSessionsBindings &
+  ReviewBindings
 
 export type Persistence = { db: Database.Database } & DefaultBindings
 
@@ -131,11 +146,20 @@ export type {
   RadicleRegistrationInput,
   RadicleRegistrationRecord,
   RadicleRegistrationsRepository,
+  PullRequestCommitInput,
+  PullRequestCommitsRepository,
+  PullRequestEventsRepository,
+  PullRequestInsertInput,
+  PullRequestsRepository,
   TerminalSessionCreateInput,
   TerminalSessionRecord,
   TerminalSessionStatus,
   TerminalSessionUpdateInput,
   TerminalSessionsRepository,
+  ReviewRunInsertInput,
+  ReviewRunsRepository,
+  ReviewThreadsRepository,
+  ReviewCommentsRepository,
   WorkflowInput,
   WorkflowKind,
   WorkflowRecord,

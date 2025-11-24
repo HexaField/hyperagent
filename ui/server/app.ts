@@ -33,6 +33,12 @@ import {
   type WorkflowDetail,
   type WorkflowRuntime
 } from '../../src/modules/workflows'
+import { createPullRequestModule } from '../../src/modules/review/pullRequest'
+import { createDiffModule } from '../../src/modules/review/diff'
+import { createReviewEngineModule } from '../../src/modules/review/engine'
+import { createReviewSchedulerModule } from '../../src/modules/review/scheduler'
+import { createDockerReviewRunnerGateway } from '../../src/modules/review/runnerGateway'
+import type { ReviewRunTrigger } from '../../src/modules/review/types'
 
 const DEFAULT_PORT = Number(process.env.UI_SERVER_PORT || 5556)
 const CODE_SERVER_HOST = process.env.CODE_SERVER_HOST || '127.0.0.1'
@@ -116,6 +122,7 @@ export type CreateServerOptions = {
   persistenceFile?: string
   workflowRuntime?: WorkflowRuntime
   workflowPollIntervalMs?: number
+  reviewPollIntervalMs?: number
   radicleModule?: RadicleModule
   terminalModule?: TerminalModule
 }
@@ -191,6 +198,32 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     email: gitAuthor?.email ?? process.env.WORKFLOW_AUTHOR_EMAIL ?? 'workflow@hyperagent.local'
   }
 
+  const applyPatchToBranch = async (
+    repositoryPath: string,
+    branch: string,
+    patch: string,
+    commitMessage: string
+  ): Promise<string> => {
+    const repoPath = path.resolve(repositoryPath)
+    const scratchDir = await fs.mkdtemp(path.join(tmpDir, 'review-patch-'))
+    const patchFile = path.join(scratchDir, 'suggestion.patch')
+    await fs.writeFile(patchFile, patch, 'utf8')
+    const currentBranch = await runGitCommand(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath).catch(() => null)
+    try {
+      await runGitCommand(['checkout', branch], repoPath)
+      await runGitCommand(['apply', '--whitespace=fix', '--index', patchFile], repoPath)
+      const authorFlag = `${commitAuthor.name} <${commitAuthor.email}>`
+      await runGitCommand(['commit', '-m', commitMessage, `--author=${authorFlag}`], repoPath)
+      const commitHash = (await runGitCommand(['rev-parse', 'HEAD'], repoPath)).trim()
+      return commitHash
+    } finally {
+      if (currentBranch && currentBranch !== branch) {
+        await runGitCommand(['checkout', currentBranch], repoPath).catch(() => undefined)
+      }
+      await fs.rm(scratchDir, { recursive: true, force: true }).catch(() => undefined)
+    }
+  }
+
   const workflowAgentExecutor = createAgentWorkflowExecutor({
     runLoop,
     provider: WORKFLOW_AGENT_PROVIDER,
@@ -211,6 +244,37 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   if (manageWorkerLifecycle) {
     workflowRuntime.startWorker()
   }
+  const reviewCallbackBaseUrl =
+    process.env.REVIEW_CALLBACK_BASE_URL ?? `http://host.docker.internal:${defaultPort}`
+  const reviewRunnerToken = process.env.REVIEW_RUNNER_TOKEN ?? process.env.REVIEW_CALLBACK_TOKEN ?? null
+  const reviewRunnerGateway = createDockerReviewRunnerGateway({
+    dockerBinary: process.env.REVIEW_DOCKER_BINARY,
+    image: process.env.REVIEW_RUNNER_IMAGE,
+    callbackBaseUrl: reviewCallbackBaseUrl,
+    callbackToken: reviewRunnerToken ?? undefined,
+    logsDir: process.env.REVIEW_RUNNER_LOGS_DIR,
+    timeoutMs: process.env.REVIEW_RUNNER_TIMEOUT ? Number(process.env.REVIEW_RUNNER_TIMEOUT) : undefined
+  })
+  const pullRequestModule = createPullRequestModule({
+    projects: persistence.projects,
+    pullRequests: persistence.pullRequests,
+    pullRequestCommits: persistence.pullRequestCommits,
+    pullRequestEvents: persistence.pullRequestEvents
+  })
+  const diffModule = createDiffModule()
+  const reviewEngine = createReviewEngineModule()
+  const reviewScheduler = createReviewSchedulerModule({
+    reviewRuns: persistence.reviewRuns,
+    reviewThreads: persistence.reviewThreads,
+    reviewComments: persistence.reviewComments,
+    pullRequestEvents: persistence.pullRequestEvents,
+    pullRequestModule,
+    diffModule,
+    reviewEngine,
+    runnerGateway: reviewRunnerGateway,
+    pollIntervalMs: options.reviewPollIntervalMs
+  })
+  reviewScheduler.startWorker()
   persistence.codeServerSessions.resetAllRunning()
 
   const app = express()
@@ -250,6 +314,12 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     return resolveUserIdFromHeaders(req.headers)
   }
 
+  const validateRunnerToken = (req: Request): boolean => {
+    if (!reviewRunnerToken) return true
+    const value = pickUserIdValue(req.headers['x-review-runner-token'])
+    return value === reviewRunnerToken
+  }
+
   function ensureEphemeralProject(sessionId: string, sessionDir: string): ProjectRecord {
     return persistence.projects.upsert({
       id: `session-${sessionId}`,
@@ -282,6 +352,13 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       })
     })
     return tasks
+  }
+
+  function normalizeReviewTrigger(value: unknown): ReviewRunTrigger {
+    if (value === 'auto_on_open' || value === 'auto_on_update') {
+      return value
+    }
+    return 'manual'
   }
 
   function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -988,6 +1065,342 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     res.status(201).json(detail ?? { workflow })
   }
 
+  const listProjectPullRequestsHandler: RequestHandler = (req, res) => {
+    const projectId = req.params.projectId
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' })
+      return
+    }
+    const project = persistence.projects.getById(projectId)
+    if (!project) {
+      res.status(404).json({ error: 'Unknown project' })
+      return
+    }
+    const pullRequests = pullRequestModule.listPullRequests(projectId).map((pullRequest) => {
+      const runs = persistence.reviewRuns.listByPullRequest(pullRequest.id)
+      return {
+        ...pullRequest,
+        latestReviewRun: runs.length ? runs[0] : null
+      }
+    })
+    res.json({ project, pullRequests })
+  }
+
+  const createProjectPullRequestHandler: RequestHandler = async (req, res) => {
+    const projectId = req.params.projectId
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' })
+      return
+    }
+    const project = persistence.projects.getById(projectId)
+    if (!project) {
+      res.status(404).json({ error: 'Unknown project' })
+      return
+    }
+    const { title, description, sourceBranch, targetBranch, radiclePatchId } = req.body ?? {}
+    if (typeof title !== 'string' || !title.trim().length) {
+      res.status(400).json({ error: 'title is required' })
+      return
+    }
+    if (typeof sourceBranch !== 'string' || !sourceBranch.trim().length) {
+      res.status(400).json({ error: 'sourceBranch is required' })
+      return
+    }
+    const authorUserId = resolveUserIdFromRequest(req)
+    try {
+      const record = await pullRequestModule.createPullRequest({
+        projectId: project.id,
+        title: title.trim(),
+        description: typeof description === 'string' ? description : undefined,
+        sourceBranch: sourceBranch.trim(),
+        targetBranch: typeof targetBranch === 'string' && targetBranch.trim().length ? targetBranch.trim() : undefined,
+        radiclePatchId:
+          typeof radiclePatchId === 'string' && radiclePatchId.trim().length ? radiclePatchId.trim() : undefined,
+        authorUserId
+      })
+      res.status(201).json({ pullRequest: record })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create pull request'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const pullRequestDetailHandler: RequestHandler = async (req, res) => {
+    const prId = req.params.prId
+    if (!prId) {
+      res.status(400).json({ error: 'pull request id is required' })
+      return
+    }
+    const detail = await pullRequestModule.getPullRequestWithCommits(prId)
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown pull request' })
+      return
+    }
+    const reviewRuns = persistence.reviewRuns.listByPullRequest(prId)
+    res.json({
+      project: detail.project,
+      pullRequest: detail.pullRequest,
+      commits: detail.commits,
+      events: detail.events,
+      reviewRuns
+    })
+  }
+
+  const pullRequestDiffHandler: RequestHandler = async (req, res) => {
+    const prId = req.params.prId
+    if (!prId) {
+      res.status(400).json({ error: 'pull request id is required' })
+      return
+    }
+    const detail = await pullRequestModule.getPullRequestWithCommits(prId)
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown pull request' })
+      return
+    }
+    try {
+      const diff = await diffModule.getPullRequestDiff(detail.pullRequest, detail.project)
+      res.json({ pullRequestId: prId, diff })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to compute diff'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const pullRequestThreadsHandler: RequestHandler = (req, res) => {
+    const prId = req.params.prId
+    if (!prId) {
+      res.status(400).json({ error: 'pull request id is required' })
+      return
+    }
+    const pullRequest = persistence.pullRequests.getById(prId)
+    if (!pullRequest) {
+      res.status(404).json({ error: 'Unknown pull request' })
+      return
+    }
+    const threads = persistence.reviewThreads.listByPullRequest(prId)
+    const comments = persistence.reviewComments.listByThreadIds(threads.map((thread) => thread.id))
+    const commentMap = new Map<string, typeof comments>()
+    comments.forEach((comment) => {
+      const existing = commentMap.get(comment.threadId) ?? []
+      existing.push(comment)
+      commentMap.set(comment.threadId, existing)
+    })
+    res.json({
+      pullRequest,
+      threads: threads.map((thread) => ({
+        ...thread,
+        comments: commentMap.get(thread.id) ?? []
+      }))
+    })
+  }
+
+  const addThreadCommentHandler: RequestHandler = (req, res) => {
+    const threadId = req.params.threadId
+    if (!threadId) {
+      res.status(400).json({ error: 'threadId is required' })
+      return
+    }
+    const thread = persistence.reviewThreads.getById(threadId)
+    if (!thread) {
+      res.status(404).json({ error: 'Unknown review thread' })
+      return
+    }
+    const bodyText = typeof req.body?.body === 'string' ? req.body.body.trim() : ''
+    if (!bodyText.length) {
+      res.status(400).json({ error: 'body is required' })
+      return
+    }
+    const authorKind = req.body?.authorKind === 'agent' ? 'agent' : 'user'
+    const authorUserId = authorKind === 'agent' ? null : resolveUserIdFromRequest(req)
+    const suggestedPatch =
+      typeof req.body?.suggestedPatch === 'string' && req.body.suggestedPatch.trim().length
+        ? req.body.suggestedPatch
+        : null
+    const comment = persistence.reviewComments.create({
+      threadId,
+      authorKind,
+      authorUserId,
+      body: bodyText,
+      suggestedPatch
+    })
+    persistence.pullRequestEvents.insert({
+      pullRequestId: thread.pullRequestId,
+      kind: 'comment_added',
+      actorUserId: authorUserId,
+      data: { threadId, commentId: comment.id }
+    })
+    res.status(201).json({ comment })
+  }
+
+  const resolveThreadHandler: RequestHandler = (req, res) => {
+    const threadId = req.params.threadId
+    if (!threadId) {
+      res.status(400).json({ error: 'threadId is required' })
+      return
+    }
+    const thread = persistence.reviewThreads.getById(threadId)
+    if (!thread) {
+      res.status(404).json({ error: 'Unknown review thread' })
+      return
+    }
+    const resolvedState = typeof req.body?.resolved === 'boolean' ? req.body.resolved : true
+    persistence.reviewThreads.markResolved(threadId, resolvedState)
+    const actorUserId = resolveUserIdFromRequest(req)
+    persistence.pullRequestEvents.insert({
+      pullRequestId: thread.pullRequestId,
+      kind: 'comment_resolved',
+      actorUserId,
+      data: { threadId, resolved: resolvedState }
+    })
+    res.json({ threadId, resolved: resolvedState })
+  }
+
+  const triggerPullRequestReviewHandler: RequestHandler = async (req, res) => {
+    const prId = req.params.prId
+    if (!prId) {
+      res.status(400).json({ error: 'pull request id is required' })
+      return
+    }
+    const pullRequest = persistence.pullRequests.getById(prId)
+    if (!pullRequest) {
+      res.status(404).json({ error: 'Unknown pull request' })
+      return
+    }
+    const trigger = normalizeReviewTrigger(req.body?.trigger)
+    try {
+      const run = await reviewScheduler.requestReview(prId, trigger)
+      res.status(202).json({ run })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to request review'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const mergePullRequestHandler: RequestHandler = async (req, res) => {
+    const prId = req.params.prId
+    if (!prId) {
+      res.status(400).json({ error: 'pull request id is required' })
+      return
+    }
+    const pullRequest = persistence.pullRequests.getById(prId)
+    if (!pullRequest) {
+      res.status(404).json({ error: 'Unknown pull request' })
+      return
+    }
+    const actorUserId = resolveUserIdFromRequest(req)
+    try {
+      await pullRequestModule.mergePullRequest(prId, actorUserId)
+      res.json({ pullRequestId: prId, status: 'merged' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to merge pull request'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const closePullRequestHandler: RequestHandler = async (req, res) => {
+    const prId = req.params.prId
+    if (!prId) {
+      res.status(400).json({ error: 'pull request id is required' })
+      return
+    }
+    const pullRequest = persistence.pullRequests.getById(prId)
+    if (!pullRequest) {
+      res.status(404).json({ error: 'Unknown pull request' })
+      return
+    }
+    const actorUserId = resolveUserIdFromRequest(req)
+    try {
+      await pullRequestModule.closePullRequest(prId, actorUserId)
+      res.json({ pullRequestId: prId, status: 'closed' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to close pull request'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const applySuggestionHandler: RequestHandler = async (req, res) => {
+    const prId = req.params.prId
+    if (!prId) {
+      res.status(400).json({ error: 'pull request id is required' })
+      return
+    }
+    const commentId = typeof req.body?.commentId === 'string' ? req.body.commentId.trim() : ''
+    if (!commentId.length) {
+      res.status(400).json({ error: 'commentId is required' })
+      return
+    }
+    const detail = await pullRequestModule.getPullRequestWithCommits(prId)
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown pull request' })
+      return
+    }
+    const comment = persistence.reviewComments.getById(commentId)
+    if (!comment || !comment.suggestedPatch) {
+      res.status(404).json({ error: 'Review comment does not contain a suggestion' })
+      return
+    }
+    const thread = persistence.reviewThreads.getById(comment.threadId)
+    if (!thread || thread.pullRequestId !== prId) {
+      res.status(400).json({ error: 'Comment does not belong to this pull request' })
+      return
+    }
+    const commitMessage =
+      typeof req.body?.commitMessage === 'string' && req.body.commitMessage.trim().length
+        ? req.body.commitMessage.trim()
+        : `Apply suggestion from review comment ${comment.id}`
+    try {
+      const commitHash = await applyPatchToBranch(detail.project.repositoryPath, detail.pullRequest.sourceBranch, comment.suggestedPatch, commitMessage)
+      await pullRequestModule.updatePullRequestCommits(prId)
+      res.json({ pullRequestId: prId, commitHash })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to apply suggestion'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const reviewRunCallbackHandler: RequestHandler = async (req, res) => {
+    const runId = req.params.runId
+    if (!runId) {
+      res.status(400).json({ error: 'runId is required' })
+      return
+    }
+    if (!validateRunnerToken(req)) {
+      res.status(401).json({ error: 'Invalid runner token' })
+      return
+    }
+    const run = persistence.reviewRuns.getById(runId)
+    if (!run) {
+      res.status(404).json({ error: 'Unknown review run' })
+      return
+    }
+    const status = typeof req.body?.status === 'string' ? req.body.status : 'completed'
+    if (status === 'failed') {
+      const summary =
+        typeof req.body?.error === 'string' && req.body.error.trim().length
+          ? req.body.error.trim()
+          : 'Review runner reported failure'
+      persistence.reviewRuns.update(runId, {
+        status: 'failed',
+        completedAt: new Date().toISOString(),
+        summary,
+        logsPath: typeof req.body?.logsPath === 'string' ? req.body.logsPath : undefined
+      })
+      persistence.pullRequestEvents.insert({
+        pullRequestId: run.pullRequestId,
+        kind: 'review_run_completed',
+        actorUserId: null,
+        data: { runId, status: 'failed' }
+      })
+      res.json({ ok: true })
+      return
+    }
+    await reviewScheduler.runRunById(runId)
+    if (typeof req.body?.logsPath === 'string' && req.body.logsPath.trim().length) {
+      persistence.reviewRuns.update(runId, { logsPath: req.body.logsPath.trim() })
+    }
+    res.json({ ok: true })
+  }
+
   const startWorkflowHandler: RequestHandler = (req, res) => {
     const workflowId = req.params.workflowId
     if (!workflowId) {
@@ -1075,7 +1488,19 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   app.get('/api/fs/browse', browseFilesystemHandler)
   app.get('/api/projects', listProjectsHandler)
   app.get('/api/projects/:projectId/graph', repositoryGraphHandler)
+  app.get('/api/projects/:projectId/pull-requests', listProjectPullRequestsHandler)
+  app.post('/api/projects/:projectId/pull-requests', createProjectPullRequestHandler)
   app.post('/api/projects', createProjectHandler)
+  app.get('/api/pull-requests/:prId', pullRequestDetailHandler)
+  app.get('/api/pull-requests/:prId/diff', pullRequestDiffHandler)
+  app.get('/api/pull-requests/:prId/threads', pullRequestThreadsHandler)
+  app.post('/api/pull-requests/:prId/reviews', triggerPullRequestReviewHandler)
+  app.post('/api/pull-requests/:prId/merge', mergePullRequestHandler)
+  app.post('/api/pull-requests/:prId/close', closePullRequestHandler)
+  app.post('/api/pull-requests/:prId/apply-suggestion', applySuggestionHandler)
+  app.post('/api/threads/:threadId/comments', addThreadCommentHandler)
+  app.post('/api/threads/:threadId/resolve', resolveThreadHandler)
+  app.post('/api/review-runs/:runId/callback', reviewRunCallbackHandler)
   app.get('/api/workflows', listWorkflowsHandler)
   app.post('/api/workflows', createWorkflowHandler)
   app.post('/api/workflows/:workflowId/start', startWorkflowHandler)
@@ -1218,6 +1643,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     if (manageWorkerLifecycle) {
       await workflowRuntime.stopWorker()
     }
+    await reviewScheduler.stopWorker()
     if (managePersistenceLifecycle) {
       persistence.db.close()
     }

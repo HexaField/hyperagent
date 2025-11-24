@@ -1,66 +1,51 @@
-Here is a concrete, modular architecture for a **Pull Request Review** module over your Radicle repositories, with:
+# Pull Request Review System – Functional Spec
 
-- A PR workflow (branch/patch-based).
-- GitHub-style UI (timeline + commits + diff + comments).
-- LLM-powered comprehensive review (like CodeRabbit / Claude Code / Copilot).
-
-You can treat this as a set of small modules that plug into your existing Radicle + Studio + Workflow setup.
+This document defines the backend contracts, persistence, HTTP routes, and Docker-based runner backend that power the `review.md` view. All code is TypeScript in `src/modules`, following the repository's factory/module conventions.
 
 ---
 
-## 1. Core goals and boundaries
+## 1. Goals and Scope
 
-**Goals:**
+- Expose a first-class pull-request abstraction over Radicle branches (patch support can follow the same shape).
+- Persist PR metadata, commits, review runs, and inline comments so server restarts never lose state.
+- Execute LLM-powered code reviews that produce summaries, inline feedback, and patch suggestions.
+- Run every review inside an isolated Docker runner so long analyses cannot block the API server and can be retried.
+- Keep the implementation minimal, modular, and active by default (no gates/flags).
 
-- Provide a first-class “Pull Request” abstraction over Radicle branches/patches.
-- Show GitHub-like UI:
-  - PR list
-  - PR detail:
-    - Header (title, status, branches)
-    - Timeline of events (open, updates, reviews, comments)
-    - Commit list
-    - File tree + diff
-    - Inline comments
-
-- Run LLM-based code review on demand (or automatically) and surface:
-  - Global summary
-  - Per-file/per-hunk comments
-  - Concrete suggestions (including patch snippets).
-
-**Non-goals (v1):**
-
-- Complex merge strategies (just assume fast-forward or simple merge handled elsewhere).
-- Full Radicle patch protocol implementation (you can adapt later; start with branches).
+Non-goals for v1: merge conflict UX, Radicle patch parity, or human approval workflows.
 
 ---
 
-## 2. Domain model
+## 2. Domain Model (Persistent Tables)
 
-Define PR-related entities in your DB layer (types + tables). Focus on Radicle and branches; you can later plug in Radicle patch IDs.
-
-### 2.1. Types
+All tables live in the shared persistence layer that already powers workflows.
 
 ```ts
 export type PullRequestId = string
 export type ReviewRunId = string
-export type ReviewCommentId = string
 export type ReviewThreadId = string
+export type ReviewCommentId = string
+export type PullRequestEventKind =
+  | 'opened'
+  | 'closed'
+  | 'merged'
+  | 'commit_added'
+  | 'review_requested'
+  | 'review_run_started'
+  | 'review_run_completed'
+  | 'comment_added'
+  | 'comment_resolved'
 
 export interface PullRequest {
   id: PullRequestId
   projectId: string
   title: string
   description?: string
-
-  // Branch-based diff; optionally also a Radicle patch id
-  sourceBranch: string // head
-  targetBranch: string // base, e.g. "main"
-
+  sourceBranch: string
+  targetBranch: string
   radiclePatchId?: string
-
   status: 'open' | 'merged' | 'closed'
   authorUserId: string
-
   createdAt: string
   updatedAt: string
   mergedAt?: string
@@ -75,34 +60,39 @@ export interface PullRequestCommit {
   authorName: string
   authorEmail: string
   authoredAt: string
-  createdAt: string // record creation time in DB
+  createdAt: string
+}
+
+export interface PullRequestEvent {
+  id: string
+  pullRequestId: PullRequestId
+  kind: PullRequestEventKind
+  actorUserId?: string
+  createdAt: string
+  data: Record<string, unknown>
 }
 
 export interface ReviewRun {
   id: ReviewRunId
   pullRequestId: PullRequestId
   trigger: 'manual' | 'auto_on_open' | 'auto_on_update'
+  runnerAgent: 'docker'
   status: 'queued' | 'running' | 'completed' | 'failed'
   createdAt: string
   completedAt?: string
-
-  // Global review summary and suggestions
   summary?: string
-  highLevelFindings?: string // bullet points
-  riskAssessment?: string // "low/medium/high", text explanation
+  highLevelFindings?: string
+  riskAssessment?: string
+  runnerInstanceId?: string
+  logsPath?: string
 }
 
 export interface ReviewThread {
   id: ReviewThreadId
   pullRequestId: PullRequestId
-  reviewRunId?: ReviewRunId // optional: which review run created it
+  reviewRunId?: ReviewRunId
   filePath: string
-  // line positions are "position in diff" and "position in file"
-  // to handle moved lines
-  diffHunkRange: {
-    startLine: number
-    endLine: number
-  }
+  diffHunkRange: { startLine: number; endLine: number }
   fileLine?: number
   resolved: boolean
   createdAt: string
@@ -112,45 +102,13 @@ export interface ReviewThread {
 export interface ReviewComment {
   id: ReviewCommentId
   threadId: ReviewThreadId
-  authorUserId?: string // null for system/agent
+  authorUserId?: string
   authorKind: 'user' | 'agent'
   body: string
+  suggestedPatch?: string
   createdAt: string
-
-  // optional link to suggested patch
-  suggestedPatch?: string // unified diff snippet
 }
-```
 
-You will also want a generic `PullRequestEvent` table to back the timeline:
-
-```ts
-export type PullRequestEventKind =
-  | 'opened'
-  | 'closed'
-  | 'merged'
-  | 'commit_added'
-  | 'review_requested'
-  | 'review_run_started'
-  | 'review_run_completed'
-  | 'comment_added'
-  | 'comment_resolved'
-
-export interface PullRequestEvent {
-  id: string
-  pullRequestId: PullRequestId
-  kind: PullRequestEventKind
-  actorUserId?: string // user/system/agent
-  createdAt: string
-  data: any // JSON metadata per event type
-}
-```
-
-### 2.2. Diff representation
-
-Use a lightweight diff model, generated through Radicle/git:
-
-```ts
 export interface FileDiff {
   path: string
   status: 'added' | 'modified' | 'deleted' | 'renamed'
@@ -159,7 +117,7 @@ export interface FileDiff {
 }
 
 export interface DiffHunk {
-  header: string // @@ -a,b +c,d @@
+  header: string
   lines: DiffLine[]
 }
 
@@ -167,460 +125,330 @@ export interface DiffLine {
   type: 'context' | 'added' | 'removed'
   oldLineNumber?: number
   newLineNumber?: number
-  content: string // line text
+  content: string
 }
 ```
-
-This is the input for both the UI and the reviewer agent.
 
 ---
 
-## 3. Modules and responsibilities
+## 3. Module Interfaces
 
-Break it into several small modules:
+Each module is exported via a factory to keep dependencies explicit and testable.
 
-1. `PullRequestModule` – PR lifecycle, commits, events.
-2. `DiffModule` – diff calculation via Radicle/git.
-3. `ReviewEngineModule` – LLM-based review over diffs.
-4. `ReviewSchedulerModule` – orchestrator that triggers ReviewEngine runs and persists outputs.
-5. UI integration – PR list/detail, diff viewer, timeline, comments.
-
-### 3.1. PullRequestModule
-
-File: `src/modules/pullRequest/index.ts`
-
-Responsibilities:
-
-- CRUD for PRs.
-- Track commits for a PR (via Radicle/git).
-- Emit PR events (opened, updates, merged, etc).
-- Provide PR views for API/UI.
-
-Key API:
+### 3.1 Pull Request Module (`src/modules/pullRequest/index.ts`)
 
 ```ts
-class PullRequestModule {
-  constructor(
-    private prRepo: PullRequestRepository,
-    private commitRepo: PullRequestCommitRepository,
-    private eventRepo: PullRequestEventRepository,
-    private radicle: RadicleModule
-  ) {}
+export type PullRequestModule = ReturnType<typeof createPullRequestModule>
 
-  async createPullRequest(params: {
-    projectId: string
-    title: string
-    description?: string
-    sourceBranch: string
-    targetBranch: string
-    authorUserId: string
-    radiclePatchId?: string
-  }): Promise<PullRequest> {
-    // validate branches exist via radicle
-    // compute initial commit set
-    // persist PR + commits + "opened" event
+export function createPullRequestModule(deps: {
+  prRepo: PullRequestRepository
+  commitRepo: PullRequestCommitRepository
+  eventRepo: PullRequestEventRepository
+  radicle: RadicleModule
+}) {
+  return {
+    createPullRequest,
+    listPullRequests,
+    getPullRequestWithCommits,
+    updatePullRequestCommits,
+    mergePullRequest,
+    closePullRequest
   }
 
-  async updatePullRequestCommits(prId: PullRequestId): Promise<void> {
-    // recompute commit list from Radicle branch range
-    // insert new ones, emit "commit_added" events
-  }
-
-  async listPullRequests(projectId: string): Promise<PullRequest[]> {
+  async function createPullRequest(input: CreatePullRequestInput): Promise<PullRequest> {
     /* ... */
   }
-
-  async getPullRequestWithCommits(prId: PullRequestId): Promise<{
-    pullRequest: PullRequest
-    commits: PullRequestCommit[]
-    events: PullRequestEvent[]
-  }> {
+  async function listPullRequests(projectId: string): Promise<PullRequest[]> {
     /* ... */
   }
-
-  async mergePullRequest(prId: PullRequestId, actorUserId: string): Promise<void> {
-    // call Radicle module to merge source into target
-    // update PR status, add events
+  async function getPullRequestWithCommits(id: string): Promise<PullRequestDetail> {
+    /* ... */
   }
-
-  async closePullRequest(prId: PullRequestId, actorUserId: string): Promise<void> {
-    // status -> closed, event
+  async function updatePullRequestCommits(id: string): Promise<void> {
+    /* ... */
+  }
+  async function mergePullRequest(id: string, actorUserId: string): Promise<void> {
+    /* ... */
+  }
+  async function closePullRequest(id: string, actorUserId: string): Promise<void> {
+    /* ... */
   }
 }
 ```
 
-### 3.2. DiffModule
+Responsibilities: validate Radicle branches, compute commit deltas via `radicle.repoManager`, persist events, and expose PR detail aggregations for the API.
 
-Uses `RadicleModule` and git to compute diffs for PRs.
-
-File: `src/modules/diff/index.ts`
+### 3.2 Diff Module (`src/modules/diff/index.ts`)
 
 ```ts
-class DiffModule {
-  constructor(private radicle: RadicleModule) {}
+export function createDiffModule(radicle: RadicleModule) {
+  return { getPullRequestDiff }
 
-  async getPullRequestDiff(pr: PullRequest): Promise<FileDiff[]> {
-    // use radicle.repoManager.getDiffForBranch(pr.sourceBranch, pr.targetBranch)
-    // parse into FileDiff[]
+  async function getPullRequestDiff(pr: PullRequest): Promise<FileDiff[]> {
+    const diff = await radicle.getDiffForBranch(pr.sourceBranch, pr.targetBranch)
+    return parseUnifiedDiff(diff.diffText)
   }
 }
 ```
 
-This is shared by:
+The parsed diff feeds both the UI diff viewer and the review engine.
 
-- PR UI (diff viewer).
-- ReviewEngine (LLM input).
-
----
-
-## 4. Review engine
-
-### 4.1. ReviewEngineModule
-
-This is your LLM agent that does the code review.
-
-File: `src/modules/reviewEngine/index.ts`
-
-Responsibilities:
-
-- Given a PR and its diff, produce:
-  - Global summary and high-level findings.
-  - Per-file/per-hunk comments and suggestions.
-
-Shape of result:
+### 3.3 Review Engine Module (`src/modules/reviewEngine/index.ts`)
 
 ```ts
 export interface ReviewEngineResult {
   summary: string
   highLevelFindings: string[]
   riskAssessment: string
-  fileComments: FileReviewResult[]
+  fileComments: Array<{
+    filePath: string
+    hunkComments: Array<{
+      diffHunkHeader: string
+      comment: string
+      severity: 'info' | 'suggestion' | 'warning' | 'critical'
+      suggestedPatch?: string
+    }>
+  }>
 }
 
-export interface FileReviewResult {
-  filePath: string
-  hunkComments: HunkReviewComment[]
-}
+export function createReviewEngineModule(llmClient: LLMClient) {
+  return { reviewPullRequest }
 
-export interface HunkReviewComment {
-  diffHunkHeader: string // or numeric range
-  comment: string
-  severity: 'info' | 'suggestion' | 'warning' | 'critical'
-  suggestedPatch?: string // unified diff snippet limited to that file/hunk
-}
-```
-
-API:
-
-```ts
-class ReviewEngineModule {
-  constructor(private llmClient: LLMClient) {}
-
-  async reviewPullRequest(input: {
-    pullRequest: PullRequest
-    diff: FileDiff[]
-    commits: PullRequestCommit[]
-    context?: {
-      projectPrinciples?: ArchitecturalPrinciple[]
-      codingGuidelines?: string
-    }
-  }): Promise<ReviewEngineResult> {
-    // slice diff into chunks appropriate for LLM
-    // run one or more LLM calls
-    // aggregate into ReviewEngineResult
+  async function reviewPullRequest(input: ReviewEngineInput): Promise<ReviewEngineResult> {
+    // chunk diff, stream through LLM, normalize into structured output
   }
 }
 ```
 
-Internally you can:
-
-- First call: global summary + high-level findings (based on summary of diffs/commits).
-- Second layer: per-file/per-hunk pass, chunked and parallelised.
-
-### 4.2. ReviewSchedulerModule
-
-File: `src/modules/reviewScheduler/index.ts`
-
-Responsibilities:
-
-- Manage `ReviewRun` entities.
-- Queue and execute review runs (could integrate with your existing Workflow worker).
-- Create review threads/comments from engine results.
-- Emit PR events.
-
-API:
+### 3.4 Review Scheduler Module (`src/modules/reviewScheduler/index.ts`)
 
 ```ts
-class ReviewSchedulerModule {
-  constructor(
-    private reviewRunRepo: ReviewRunRepository,
-    private threadRepo: ReviewThreadRepository,
-    private commentRepo: ReviewCommentRepository,
-    private eventRepo: PullRequestEventRepository,
-    private prModule: PullRequestModule,
-    private diffModule: DiffModule,
-    private reviewEngine: ReviewEngineModule
-  ) {}
+export function createReviewSchedulerModule(deps: {
+  reviewRunRepo: ReviewRunRepository
+  threadRepo: ReviewThreadRepository
+  commentRepo: ReviewCommentRepository
+  eventRepo: PullRequestEventRepository
+  prModule: PullRequestModule
+  diffModule: DiffModule
+  reviewEngine: ReviewEngineModule
+  runnerGateway: ReviewRunnerGateway
+}) {
+  return { requestReview, handleRunnerCallback }
 
-  async requestReview(prId: PullRequestId, trigger: ReviewRun['trigger']): Promise<ReviewRun> {
-    const pr = await this.prModule.getPullRequest(prId)
-    const run = await this.reviewRunRepo.create({
+  async function requestReview(prId: PullRequestId, trigger: ReviewRun['trigger']): Promise<ReviewRun> {
+    const run = await reviewRunRepo.create({
       pullRequestId: prId,
       trigger,
+      runnerAgent: 'docker',
       status: 'queued',
       createdAt: new Date().toISOString()
     })
-
-    await this.eventRepo.create({
+    await eventRepo.create({
       pullRequestId: prId,
-      kind: 'review_run_started',
+      kind: 'review_requested',
       createdAt: new Date().toISOString(),
-      data: { reviewRunId: run.id, trigger }
+      data: { runId: run.id, trigger }
     })
-
-    // Could push to a worker queue; for now, call processReviewRun
+    await runnerGateway.enqueue(run.id)
     return run
   }
 
-  async processReviewRun(runId: ReviewRunId): Promise<void> {
-    const run = await this.reviewRunRepo.findById(runId)
-    if (!run) return
+  async function handleRunnerCallback(payload: RunnerCallbackPayload): Promise<void> {
+    if (payload.status === 'failed') {
+      await reviewRunRepo.update(payload.runId, {
+        status: 'failed',
+        logsPath: payload.logsPath
+      })
+      await eventRepo.create({
+        pullRequestId: payload.pullRequestId,
+        kind: 'review_run_completed',
+        createdAt: new Date().toISOString(),
+        data: { runId: payload.runId, status: 'failed' }
+      })
+      return
+    }
 
-    await this.reviewRunRepo.update(runId, { status: 'running' })
+    const { pullRequest, commits } = await prModule.getPullRequestWithCommits(payload.pullRequestId)
+    const diff = await diffModule.getPullRequestDiff(pullRequest)
+    const engineResult = await reviewEngine.reviewPullRequest({ pullRequest, diff, commits })
 
-    const { pullRequest, commits, events } = await this.prModule.getPullRequestWithCommits(run.pullRequestId)
-    const diff = await this.diffModule.getPullRequestDiff(pullRequest)
-
-    const engineResult = await this.reviewEngine.reviewPullRequest({
-      pullRequest,
-      diff,
-      commits,
-      context: {
-        /* e.g. project-level coding guide from planner */
-      }
-    })
-
-    // Persist summary into ReviewRun
-    await this.reviewRunRepo.update(runId, {
+    await reviewRunRepo.update(payload.runId, {
       status: 'completed',
       completedAt: new Date().toISOString(),
       summary: engineResult.summary,
       highLevelFindings: engineResult.highLevelFindings.join('\n'),
-      riskAssessment: engineResult.riskAssessment
+      riskAssessment: engineResult.riskAssessment,
+      logsPath: payload.logsPath
     })
 
-    // Create threads and comments from fileComments
-    for (const fileReview of engineResult.fileComments) {
-      for (const c of fileReview.hunkComments) {
-        const thread = await this.threadRepo.create({
-          pullRequestId: pullRequest.id,
-          reviewRunId: runId,
-          filePath: fileReview.filePath,
-          diffHunkRange: deriveRangeFromHeader(c.diffHunkHeader),
-          resolved: false,
-          createdAt: new Date().toISOString()
+    for (const file of engineResult.fileComments) {
+      for (const comment of file.hunkComments) {
+        const thread = await threadRepo.create({
+          /* map diffHunkHeader -> range */
         })
-
-        await this.commentRepo.create({
+        await commentRepo.create({
           threadId: thread.id,
           authorKind: 'agent',
-          body: c.comment,
-          suggestedPatch: c.suggestedPatch,
+          body: comment.comment,
+          suggestedPatch: comment.suggestedPatch,
           createdAt: new Date().toISOString()
         })
-
-        await this.eventRepo.create({
+        await eventRepo.create({
           pullRequestId: pullRequest.id,
           kind: 'comment_added',
           createdAt: new Date().toISOString(),
-          data: { threadId: thread.id, source: 'review_engine' }
+          data: { threadId: thread.id, runId: payload.runId }
         })
       }
     }
 
-    await this.eventRepo.create({
+    await eventRepo.create({
       pullRequestId: pullRequest.id,
       kind: 'review_run_completed',
       createdAt: new Date().toISOString(),
-      data: { reviewRunId: runId }
+      data: { runId: payload.runId, status: 'completed' }
     })
   }
 }
 ```
 
-You can hook `requestReview` into:
+### 3.5 Threads + Comments Module (`src/modules/reviewComments/index.ts`)
 
-- On PR open (`auto_on_open`).
-- On new commits (`auto_on_update`).
-- Manual “Run review” button in UI (`manual`).
+Provides CRUD helpers for UI actions such as replying, resolving, or applying suggestions. The scheduler depends on this module for persistence, and the UI server calls it directly for human comments.
+
+### 3.6 Review Runner Gateway (`src/modules/reviewRunnerGateway/index.ts`)
+
+Abstraction over Docker orchestration. Minimal interface:
+
+```ts
+export interface ReviewRunnerGateway {
+  enqueue(runId: ReviewRunId): Promise<void>
+}
+```
+
+Implementation details live in section 5; the gateway simply shells out to Docker (or a supervisor) and stores the created container/job id back onto the `ReviewRun` record.
 
 ---
 
-## 5. UI design (GitHub-like PR view)
+## 4. HTTP Surface
 
-### 5.1. PR list
+All routes are served from `ui/server/app.ts` using the existing Fastify-style conventions.
 
-Route: `/projects/:projectId/pulls`
-
-- Columns: PR # (id), title, source → target, status, author, last updated.
-- Filters: open/closed, mine, branch.
-
-Backend endpoint:
-
-- `GET /api/projects/:projectId/pull-requests`
-
-Uses `PullRequestModule.listPullRequests`.
-
-### 5.2. PR detail view
-
-Route: `/projects/:projectId/pulls/:prId`
-
-Layout:
-
-1. **Header:**
-   - Title, status chip, sourceBranch → targetBranch.
-   - Author, created date.
-   - Buttons:
-     - “Merge” (if checks pass).
-     - “Close”.
-     - “Run Review”.
-
-2. **Tabs:**
-   - Conversation
-   - Commits
-   - Files changed (diff)
-
-#### Conversation tab
-
-- Timeline UI built from `PullRequestEvent`:
-  - Opened event (with description).
-  - New commits (“commit_added”).
-  - Review runs (“review_run_started/completed”).
-  - Comments (thread-level).
-  - Resolution events.
-
-- At top: latest review summary:
-  - `ReviewRun.summary`, `highLevelFindings`, `riskAssessment`.
-
-- Comment box for top-level discussion.
-
-Backend endpoints:
-
-- `GET /api/pull-requests/:id` → PR + commits + events + latest review run info.
-- `POST /api/pull-requests/:id/comments` (top-level).
-
-#### Commits tab
-
-- List commits from `PullRequestCommit`:
-  - Hash, message, author, time.
-
-- Clicking a commit:
-  - Show commit diff (via DiffModule with base = previous commit or target branch).
-  - You can also let the LLM review per-commit later if needed.
-
-#### Files changed tab
-
-- File tree left; diff viewer right.
-- Data from `DiffModule.getPullRequestDiff`.
-- Inline comments:
-  - List threads for each file and hunk; annotate lines in diff.
-  - When clicking a line, show existing comments and allow new comment (stored as human `ReviewComment` with `authorKind = 'user'`).
-
-- For LLM comments:
-  - Show them as comments with agent badge and “Apply suggestion” button (if `suggestedPatch` present).
-
-Backend endpoints:
-
-- `GET /api/pull-requests/:id/diff` → `FileDiff[]`.
-- `GET /api/pull-requests/:id/threads` → threads + comments.
-- `POST /api/threads/:threadId/comments` → add comment.
+- `GET /api/projects/:projectId/pull-requests` → list PRs (`PullRequestModule.listPullRequests`).
+- `POST /api/projects/:projectId/pull-requests` → create PR (source/target, title, description).
+- `GET /api/pull-requests/:prId` → PR detail including commits + events + latest review summary.
+- `POST /api/pull-requests/:prId/merge` → merge PR.
+- `POST /api/pull-requests/:prId/close` → close PR.
+- `GET /api/pull-requests/:prId/diff` → `FileDiff[]`.
+- `GET /api/pull-requests/:prId/threads` → threads + comments.
+- `POST /api/threads/:threadId/comments` → add comment (user or agent service).
 - `POST /api/threads/:threadId/resolve` → mark resolved.
+- `POST /api/pull-requests/:prId/reviews` → trigger review (`ReviewSchedulerModule.requestReview`).
+- `POST /api/review-runs/:runId/callback` → runner callback hitting `handleRunnerCallback`.
+
+All endpoints reuse the shared `ProjectAuthContext` (same as workflows) to ensure a project cannot escalate into another workspace.
 
 ---
 
-## 6. Integration with Radicle + agents
+## 5. Docker Runner Architecture
 
-### 6.1. PR creation and patches
+Each review run executes inside a disposable container so the API server remains responsive and failures do not poison global state.
 
-Initially:
+### 5.1 Image & Entry Point
 
-- PR is defined by `sourceBranch` and `targetBranch` in your Radicle repo.
-- When you add Radicle patches:
-  - `radiclePatchId` maps to Radicle’s patch object.
-  - `PullRequestModule` can sync status from/to patch if you integrate CLI later.
+- Base image: official `node:20-bullseye` or an internal derivative that already contains Radicle + git tooling.
+- Layer in project-specific CLI deps using `npm i package@latest` (per instructions) during image build.
+- Entrypoint script `runner/review-entrypoint.ts` bundled into the image via `ts-node` or compiled JS.
 
-### 6.2. Applying suggestions
+### 5.2 Runtime Inputs
 
-For comments with `suggestedPatch`:
+Runner receives everything via environment variables and mounted volumes:
 
-- Backend route: `POST /api/pull-requests/:id/apply-suggestion`
-  - Payload: `threadId`, `commentId`.
+| Variable          | Meaning                                           |
+| ----------------- | ------------------------------------------------- |
+| `REVIEW_RUN_ID`   | ReviewRun primary key                             |
+| `PULL_REQUEST_ID` | PullRequest id                                    |
+| `PROJECT_ID`      | Owning project                                    |
+| `RADICLE_SEED`    | Seed URL to clone                                 |
+| `SOURCE_BRANCH`   | PR head                                           |
+| `TARGET_BRANCH`   | PR base                                           |
+| `CALLBACK_URL`    | Server endpoint for status updates                |
+| `CALLBACK_TOKEN`  | HMAC/shared secret for authentication             |
+| `LLM_PROVIDER`    | Provider slug (reused from workflow agent config) |
+| `LLM_MODEL`       | Model name                                        |
 
-- Flow:
-  - Use `RadicleSession` on `sourceBranch`:
-    - Apply `suggestedPatch` using `git apply` in workspace.
-    - Commit with message referencing the comment/thread.
-    - Push to Radicle.
+The host mounts the Radicle working copy (read-only) plus an ephemeral `/runner/output` directory where logs and artifacts land.
 
-  - Update PR’s commit list.
-  - Optionally re-run review.
+### 5.3 Runner Steps
 
-You can route this either:
+1. Checkout Radicle project (if not already mounted) and fetch source/target branches.
+2. Generate unified diff (`git diff target...source`).
+3. Package payload for the API server (diff metadata, commit list) and optionally cache to disk for debugging.
+4. Call `POST CALLBACK_URL` with `{ runId, pullRequestId, status: 'started' }` once containers boot.
+5. Execute `reviewEngine.reviewPullRequest` (inside the container) using the same shared modules so parity between in-process tests and runner execution is maintained.
+6. Write detailed logs to `/runner/output/review.log` and include path in callback.
+7. On success, send `{ status: 'completed', logsPath }`; on failure send `{ status: 'failed', error, logsPath }`.
 
-- Directly via `RadicleModule` in a small helper.
-- Or as a `workflow_step` executed by the workflow worker (if you want full auditability).
+### 5.4 Gateway Implementation Sketch
 
-### 6.3. Planner and architecture context
+```ts
+export function createDockerReviewRunnerGateway(deps: {
+  docker: DockerClient
+  projectsDir: string
+  callbackUrl: string
+  callbackToken: string
+}) {
+  return { enqueue }
 
-Feed planner outputs (architecture + guidelines) into ReviewEngine:
-
-- Project-level:
-  - Store `ImplementationGuides` and `ArchitectureOverview` in `projects` or `planner_runs`.
-
-- When calling `ReviewEngineModule.reviewPullRequest`, include:
-  - Principles.
-  - Coding guidelines.
-  - Key architectural decisions.
-
-This gives you “architecture-aware” review, not just localized diff linting.
+  async function enqueue(runId: ReviewRunId) {
+    const run = await deps.reviewRunRepo.getById(runId)
+    const pr = await deps.pullRequestRepo.getById(run.pullRequestId)
+    const container = await deps.docker.run({
+      image: 'hyperagent/review-runner:latest',
+      env: buildEnv(pr, run),
+      mounts: [
+        `${deps.projectsDir}/${pr.projectId}:/workspace:ro`,
+        `/var/log/hyperagent/reviews/${run.id}:/runner/output`
+      ]
+    })
+    await deps.reviewRunRepo.update(runId, {
+      status: 'running',
+      runnerInstanceId: container.id,
+      logsPath: `/var/log/hyperagent/reviews/${run.id}`
+    })
+  }
+}
+```
 
 ---
 
-## 7. Persistence and parallel workflows
+## 6. Review Flow (End-to-End)
 
-Because your platform now has a workflow runtime and DB:
+1. User opens PR detail UI and clicks **Run Review** (or auto-trigger fires on creation/update).
+2. Server calls `requestReview`, inserts `ReviewRun`, emits event, enqueues Docker job.
+3. Runner container starts, clones repo (or uses mounted workspace), sends `review_run_started` callback.
+4. Runner executes review logic, stores artifacts, and posts completion payload.
+5. Scheduler handles callback, runs ReviewEngine in-process (optional optimization: execute engine fully inside container, then callback with serialized result), persists summary + inline comments, emits `review_run_completed`.
+6. UI subscribes via existing polling/stream channels and renders latest review summary and inline comments.
 
-- `PullRequest`, `ReviewRun`, `ReviewThread`, `ReviewComment`, and `PullRequestEvent` are just more persistent tables.
-- Reviews can be run in parallel:
-  - `ReviewSchedulerModule.requestReview` inserts a `ReviewRun` with `status = 'queued'`.
-  - Your worker picks up queued runs (similar to workflow steps), calls `processReviewRun`, and updates DB.
-
-- On server restart:
-  - Existing PRs, comments, review runs are all intact.
-  - Any `ReviewRun` stuck in `running` can be marked as `failed` or `queued` again on startup.
+Parallel runs are safe because each run has an isolated Docker container and persistence row; scheduling can simply look for `status = 'queued'` entries on boot to resume work.
 
 ---
 
-## 8. Summary of modules
+## 7. Failure & Retry Semantics
 
-To keep things small and modular:
+- Runner crash or timeout → callback never arrives; a watchdog marks the run `failed` after `RUNNER_TIMEOUT_MS` and exposes logs to the UI.
+- User can re-trigger review; a new run row is created, leaving historical runs intact for auditing.
+- If scheduler crashes mid-processing, unhandled callbacks can be retried because callback payloads are idempotent (`runId` is unique).
 
-- `pullRequest` module
-  - PR lifecycle, commits, events, merge/close.
+---
 
-- `diff` module
-  - Compute diffs between source/target branches using Radicle/git.
+## 8. UI Integration Notes
 
-- `reviewEngine` module
-  - LLM-based code review, returning structured suggestions.
+- `web/src/pages/WorkflowDetailPage.tsx` already fetches workflow data; mirror that approach for PR pages using the HTTP routes above.
+- Inline comments use the same `DiffViewer` component; agent comments show an "Agent" badge and an **Apply suggestion** button that issues a `POST /api/pull-requests/:id/apply-suggestion` call which applies the patch via the Radicle session and commits with metadata referencing `reviewCommentId`.
+- Review summaries appear at the top of the conversation tab, populated from the latest completed `ReviewRun` record.
 
-- `reviewScheduler` module
-  - Manage `ReviewRun` lifecycle, persist summaries, create threads/comments, emit events.
+---
 
-- `comments` module (optional separate)
-  - CRUD for `ReviewThread` + `ReviewComment`, used by both humans and agent.
-
-- UI layer
-  - PR list + detail (timeline, commits, diff + comments), “Run Review” and “Apply suggestion” actions.
-
-This will give you a first-class, Radicle-native PR review system with a GitHub-like UI and advanced review suggestions, fully integrated with your agents and workflows.
+This specification keeps the implementation modular, activates new functionality without feature flags, and guarantees tests will fail if any module deviates from the contracts described above.
