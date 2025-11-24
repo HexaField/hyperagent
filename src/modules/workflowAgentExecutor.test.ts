@@ -93,6 +93,7 @@ function buildExecutorArgs(sessionDir: string): AgentExecutorArgs {
         instructions: 'Tighten up the parser implementation and add tests.'
       },
       result: null,
+      runnerInstanceId: null,
       updatedAt: now
     },
     workspace: {

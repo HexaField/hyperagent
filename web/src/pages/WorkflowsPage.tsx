@@ -19,6 +19,7 @@ type WorkflowStep = {
   sequence: number
   data: Record<string, unknown>
   result: Record<string, unknown> | null
+  runnerInstanceId: string | null
 }
 
 type WorkflowSummary = {
@@ -100,6 +101,9 @@ export default function WorkflowsPage() {
                               </p>
                               <span class="text-xs text-[var(--text-muted)]">{step.status}</span>
                             </div>
+                            <Show when={runnerStatus(step)}>
+                              {(label) => <p class="mt-1 text-xs text-[var(--text-muted)]">{label()}</p>}
+                            </Show>
                           </li>
                         )}
                       </For>
@@ -140,4 +144,14 @@ export default function WorkflowsPage() {
       </Show>
     </div>
   )
+}
+
+function runnerStatus(step: WorkflowStep): string | null {
+  if (step.status !== 'running') return null
+  if (!step.runnerInstanceId) return 'Waiting for Docker runner'
+  return `Runner ${shortToken(step.runnerInstanceId)}`
+}
+
+function shortToken(token: string): string {
+  return token.length <= 14 ? token : `${token.slice(0, 6)}…${token.slice(-4)}`
 }

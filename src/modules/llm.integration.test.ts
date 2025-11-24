@@ -3,14 +3,14 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { callLLM } from './llm'
+import { callLLM, type Provider } from './llm'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
   return res.status === 0
 }
 
-const providers: Array<{ provider: string; cmd: string; model: string }> = [
+const providers: Array<{ provider: Provider; cmd: string; model: string }> = [
   { provider: 'ollama-cli', cmd: 'ollama', model: 'llama3.2' },
   { provider: 'opencode', cmd: 'opencode', model: 'github-copilot/gpt-5-mini' },
   { provider: 'goose', cmd: 'goose', model: 'github_copilot/gpt-5-mini' }

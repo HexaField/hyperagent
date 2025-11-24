@@ -26,6 +26,7 @@ import type { Provider } from '../../src/modules/llm'
 import { createAgentWorkflowExecutor } from '../../src/modules/workflowAgentExecutor'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import { createTerminalModule, type LiveTerminalSession, type TerminalModule } from '../../src/modules/terminal'
+import { createDockerWorkflowRunnerGateway } from '../../src/modules/workflowRunnerGateway'
 import {
   createWorkflowRuntime,
   type PlannerRun,
@@ -44,8 +45,9 @@ const DEFAULT_PORT = Number(process.env.UI_SERVER_PORT || 5556)
 const CODE_SERVER_HOST = process.env.CODE_SERVER_HOST || '127.0.0.1'
 const GRAPH_BRANCH_LIMIT = Math.max(Number(process.env.REPO_GRAPH_BRANCH_LIMIT ?? 6) || 6, 1)
 const GRAPH_COMMITS_PER_BRANCH = Math.max(Number(process.env.REPO_GRAPH_COMMITS_PER_BRANCH ?? 25) || 25, 1)
-const WORKFLOW_AGENT_PROVIDER = normalizeWorkflowProvider(process.env.WORKFLOW_AGENT_PROVIDER)
-const WORKFLOW_AGENT_MODEL = process.env.WORKFLOW_AGENT_MODEL
+const WORKFLOW_AGENT_PROVIDER =
+  normalizeWorkflowProvider(process.env.WORKFLOW_AGENT_PROVIDER) ?? ('opencode' as Provider)
+const WORKFLOW_AGENT_MODEL = process.env.WORKFLOW_AGENT_MODEL ?? 'github-copilot/gpt-5-mini'
 const WORKFLOW_AGENT_MAX_ROUNDS = parsePositiveInteger(process.env.WORKFLOW_AGENT_MAX_ROUNDS)
 
 function normalizeWorkflowProvider(raw?: string | null): Provider | undefined {
@@ -231,6 +233,17 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     maxRounds: WORKFLOW_AGENT_MAX_ROUNDS
   })
 
+  const workflowCallbackBaseUrl =
+    process.env.WORKFLOW_CALLBACK_BASE_URL ?? `http://host.docker.internal:${defaultPort}`
+  const workflowRunnerToken = process.env.WORKFLOW_RUNNER_TOKEN ?? process.env.WORKFLOW_CALLBACK_TOKEN ?? null
+  const workflowRunnerGateway = createDockerWorkflowRunnerGateway({
+    dockerBinary: process.env.WORKFLOW_DOCKER_BINARY,
+    image: process.env.WORKFLOW_RUNNER_IMAGE,
+    callbackBaseUrl: workflowCallbackBaseUrl,
+    callbackToken: workflowRunnerToken ?? undefined,
+    timeoutMs: process.env.WORKFLOW_RUNNER_TIMEOUT ? Number(process.env.WORKFLOW_RUNNER_TIMEOUT) : undefined
+  })
+
   const manageWorkerLifecycle = !options.workflowRuntime
   const workflowRuntime =
     options.workflowRuntime ??
@@ -239,7 +252,8 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       pollIntervalMs: options.workflowPollIntervalMs,
       radicle: radicleModule,
       commitAuthor,
-      agentExecutor: workflowAgentExecutor
+      agentExecutor: workflowAgentExecutor,
+      runnerGateway: workflowRunnerGateway
     })
   if (manageWorkerLifecycle) {
     workflowRuntime.startWorker()
@@ -314,10 +328,77 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
     return resolveUserIdFromHeaders(req.headers)
   }
 
-  const validateRunnerToken = (req: Request): boolean => {
+  const validateReviewRunnerToken = (req: Request): boolean => {
     if (!reviewRunnerToken) return true
     const value = pickUserIdValue(req.headers['x-review-runner-token'])
     return value === reviewRunnerToken
+  }
+
+  const validateWorkflowRunnerToken = (req: Request): boolean => {
+    if (!workflowRunnerToken) return true
+    const value = pickUserIdValue(req.headers['x-workflow-runner-token'])
+    return value === workflowRunnerToken
+  }
+
+  const MAX_WORKSPACE_ENTRIES = 75
+
+  const readWorkspacePathFromResult = (result: Record<string, unknown> | null | undefined): string | null => {
+    if (!result || typeof result !== 'object') return null
+    const workspace = (result as any).workspace
+    if (workspace && typeof workspace.workspacePath === 'string') {
+      return workspace.workspacePath
+    }
+    return null
+  }
+
+  const readLogsPathFromResult = (result: Record<string, unknown> | null | undefined): string | null => {
+    if (!result || typeof result !== 'object') return null
+    const provenance = (result as any).provenance
+    if (provenance && typeof provenance.logsPath === 'string') {
+      return provenance.logsPath
+    }
+    if (typeof (result as any).logsPath === 'string') {
+      return (result as any).logsPath
+    }
+    return null
+  }
+
+  const deriveLogsPathForStep = (
+    step: { id: string; result: Record<string, unknown> | null },
+    runs: Array<{ workflowStepId: string | null; logsPath: string | null }>
+  ): string | null => {
+    const direct = readLogsPathFromResult(step.result)
+    if (direct) return direct
+    const run = runs.find((entry) => entry.workflowStepId === step.id && typeof entry.logsPath === 'string')
+    return typeof run?.logsPath === 'string' ? (run as { logsPath: string }).logsPath : null
+  }
+
+  const safeParseJson = (raw: string): unknown | null => {
+    try {
+      return JSON.parse(raw)
+    } catch {
+      return null
+    }
+  }
+
+  const collectWorkspaceEntries = async (workspacePath: string | null): Promise<Array<{ name: string; kind: 'file' | 'directory' }>> => {
+    if (!workspacePath) return []
+    try {
+      const dirents = await fs.readdir(workspacePath, { withFileTypes: true })
+      return dirents
+        .sort((a, b) => {
+          const aDir = a.isDirectory()
+          const bDir = b.isDirectory()
+          if (aDir !== bDir) {
+            return aDir ? -1 : 1
+          }
+          return a.name.localeCompare(b.name)
+        })
+        .slice(0, MAX_WORKSPACE_ENTRIES)
+        .map((entry) => ({ name: entry.name, kind: entry.isDirectory() ? 'directory' : 'file' }))
+    } catch {
+      return []
+    }
   }
 
   function ensureEphemeralProject(sessionId: string, sessionDir: string): ProjectRecord {
@@ -1364,7 +1445,7 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       res.status(400).json({ error: 'runId is required' })
       return
     }
-    if (!validateRunnerToken(req)) {
+    if (!validateReviewRunnerToken(req)) {
       res.status(401).json({ error: 'Invalid runner token' })
       return
     }
@@ -1428,6 +1509,84 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
       return
     }
     res.json(detail)
+  }
+
+  const workflowStepProvenanceHandler: RequestHandler = async (req, res) => {
+    const workflowId = req.params.workflowId
+    const stepId = req.params.stepId
+    if (!workflowId || !stepId) {
+      res.status(400).json({ error: 'workflowId and stepId are required' })
+      return
+    }
+    const detail = workflowRuntime.getWorkflowDetail(workflowId)
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown workflow' })
+      return
+    }
+    const step = detail.steps.find((entry) => entry.id === stepId)
+    if (!step) {
+      res.status(404).json({ error: 'Unknown workflow step' })
+      return
+    }
+    const logsPath = deriveLogsPathForStep(step, detail.runs)
+    if (!logsPath) {
+      res.status(404).json({ error: 'Provenance file not available for this step' })
+      return
+    }
+    try {
+      const raw = await fs.readFile(logsPath, 'utf8')
+      const workspacePath = readWorkspacePathFromResult(step.result)
+      const workspaceEntries = await collectWorkspaceEntries(workspacePath)
+      res.json({
+        logsPath,
+        workspacePath,
+        content: raw,
+        parsed: safeParseJson(raw),
+        workspaceEntries
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load provenance file'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const workflowRunnerCallbackHandler: RequestHandler = async (req, res) => {
+    const workflowId = req.params.workflowId
+    const stepId = req.params.stepId
+    if (!workflowId || !stepId) {
+      res.status(400).json({ error: 'workflowId and stepId are required' })
+      return
+    }
+    if (!validateWorkflowRunnerToken(req)) {
+      res.status(401).json({ error: 'Invalid workflow runner token' })
+      return
+    }
+    const runnerInstanceId =
+      typeof req.body?.runnerInstanceId === 'string' ? req.body.runnerInstanceId.trim() : ''
+    if (!runnerInstanceId.length) {
+      res.status(400).json({ error: 'runnerInstanceId is required' })
+      return
+    }
+    try {
+      await workflowRuntime.runStepById({ workflowId, stepId, runnerInstanceId })
+      res.json({ ok: true })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to execute workflow step'
+      const normalized = message.toLowerCase()
+      if (normalized.includes('unknown workflow step')) {
+        res.status(404).json({ error: message })
+        return
+      }
+      if (normalized.includes('not running') || normalized.includes('runner token')) {
+        res.status(409).json({ error: message })
+        return
+      }
+      if (normalized.includes('does not belong')) {
+        res.status(400).json({ error: message })
+        return
+      }
+      res.status(500).json({ error: message })
+    }
   }
 
   const listCodeSessionsHandler: RequestHandler = (_req, res) => {
@@ -1505,7 +1664,9 @@ export function createServerApp(options: CreateServerOptions = {}): ServerInstan
   app.post('/api/workflows', createWorkflowHandler)
   app.post('/api/workflows/:workflowId/start', startWorkflowHandler)
   app.get('/api/workflows/:workflowId', workflowDetailHandler)
+  app.post('/api/workflows/:workflowId/steps/:stepId/callback', workflowRunnerCallbackHandler)
   app.get('/api/workflows/:workflowId/steps/:stepId/diff', workflowStepDiffHandler)
+  app.get('/api/workflows/:workflowId/steps/:stepId/provenance', workflowStepProvenanceHandler)
   app.get('/api/code-server/sessions', listCodeSessionsHandler)
   app.get('/api/terminal/sessions', listTerminalSessionsHandler)
   app.post('/api/terminal/sessions', createTerminalSessionHandler)

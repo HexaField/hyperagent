@@ -20,12 +20,24 @@ type WorkflowStep = {
   sequence: number
   data: Record<string, unknown>
   result: Record<string, unknown> | null
+  runnerInstanceId: string | null
   updatedAt: string
 }
 
 type WorkflowDetail = {
   workflow: WorkflowRecord
   steps: WorkflowStep[]
+  runs: AgentRunRecord[]
+}
+
+type AgentRunRecord = {
+  id: string
+  workflowStepId: string | null
+  logsPath: string | null
+  status: string
+  branch: string
+  startedAt: string
+  finishedAt: string | null
 }
 
 type DiffPayload = {
@@ -89,6 +101,22 @@ type WorkflowStepResult = {
   instructions?: string
   note?: string
   error?: string
+  provenance?: {
+    logsPath?: string | null
+  }
+}
+
+type WorkspaceEntry = {
+  name: string
+  kind: 'file' | 'directory'
+}
+
+type ProvenancePayload = {
+  logsPath: string | null
+  workspacePath: string | null
+  content: string | null
+  parsed: unknown
+  workspaceEntries: WorkspaceEntry[]
 }
 
 type WorkflowDetailViewProps = {
@@ -99,12 +127,16 @@ type WorkflowDetailViewProps = {
 export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
   const [selectedStepId, setSelectedStepId] = createSignal<string | null>(null)
   const [diffError, setDiffError] = createSignal<string | null>(null)
+  const [provenanceOpen, setProvenanceOpen] = createSignal(false)
+  const [provenanceError, setProvenanceError] = createSignal<string | null>(null)
 
   createEffect(() => {
     // reset local state when workflow changes
     void props.workflowId
     setSelectedStepId(null)
     setDiffError(null)
+    setProvenanceOpen(false)
+    setProvenanceError(null)
   })
 
   const [detail] = createResource(
@@ -153,6 +185,12 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
     }
   })
 
+  createEffect(() => {
+    selectedStepId()
+    setProvenanceOpen(false)
+    setProvenanceError(null)
+  })
+
   const [diff] = createResource(
     () => {
       const workflowId = props.workflowId
@@ -171,6 +209,48 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
       }
     }
   )
+
+  const [provenance] = createResource(
+    () => {
+      if (!provenanceOpen()) return null
+      const workflowId = props.workflowId
+      const stepId = selectedStepId()
+      if (!workflowId || !stepId) return null
+      return { workflowId, stepId }
+    },
+    async (params) => {
+      if (!params) return null
+      setProvenanceError(null)
+      try {
+        return await fetchJson<ProvenancePayload>(
+          `/api/workflows/${params.workflowId}/steps/${params.stepId}/provenance`
+        )
+      } catch (error) {
+        setProvenanceError(error instanceof Error ? error.message : 'Failed to load provenance data')
+        return null
+      }
+    }
+  )
+
+  const formattedProvenance = createMemo(() => {
+    const payload = provenance()
+    if (!payload) return null
+    if (payload.parsed) {
+      try {
+        return JSON.stringify(payload.parsed, null, 2)
+      } catch {
+        // ignore and fall back to raw content
+      }
+    }
+    if (payload.content) {
+      try {
+        return JSON.stringify(JSON.parse(payload.content), null, 2)
+      } catch {
+        return payload.content
+      }
+    }
+    return null
+  })
 
   const renderActions = () => {
     if (!props.actions) return null
@@ -222,6 +302,9 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                         </div>
                         <Show when={hasCommit(step)}>
                           <p class="text-xs opacity-70">Commit ready</p>
+                        </Show>
+                        <Show when={runnerStatus(step)}>
+                          {(label) => <p class="text-xs text-[var(--text-muted)]">{label()}</p>}
                         </Show>
                       </button>
                     </li>
@@ -325,6 +408,87 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
               </Show>
             </div>
           </section>
+
+          <section class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
+            <button
+              type="button"
+              class="flex items-center justify-between gap-2 text-left text-lg font-semibold text-[var(--text)]"
+              onClick={() => setProvenanceOpen((prev) => !prev)}
+              disabled={!selectedStepId()}
+              aria-expanded={provenanceOpen()}
+            >
+              <span>Provenance & workspace</span>
+              <span class="text-sm text-[var(--text-muted)]">{provenanceOpen() ? 'Hide' : 'Show'}</span>
+            </button>
+            <Show when={provenanceOpen()}>
+              <div class="space-y-3 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--bg-muted)] p-4 text-sm">
+                <Show when={provenance.loading}>
+                  <p class="text-[var(--text-muted)]">Loading provenance…</p>
+                </Show>
+                <Show when={provenanceError()}>
+                  {(message) => <p class="text-red-500">{message()}</p>}
+                </Show>
+                <Show
+                  when={provenance()}
+                  fallback={
+                    <p class="text-[var(--text-muted)]">
+                      {provenanceError() ?? 'Select a workflow step and expand this panel to view provenance details.'}
+                    </p>
+                  }
+                >
+                  {(payload) => (
+                    <div class="grid gap-4 lg:grid-cols-2">
+                      <div class="space-y-2">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                          Provenance file
+                        </p>
+                        <code class="block truncate rounded bg-[var(--bg-card)] px-2 py-1 text-xs text-[var(--text)]">
+                          {payload().logsPath ?? 'Not recorded'}
+                        </code>
+                        <div class="max-h-64 overflow-auto rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3 text-xs text-[var(--text)]">
+                          <Show
+                            when={formattedProvenance()}
+                            fallback={<p class="text-[var(--text-muted)]">Provenance file is empty or unavailable.</p>}
+                          >
+                            {(body) => (
+                              <pre class="whitespace-pre-wrap font-mono leading-snug">{body()}</pre>
+                            )}
+                          </Show>
+                        </div>
+                      </div>
+                      <div class="space-y-2">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                          Workspace folder
+                        </p>
+                        <code class="block truncate rounded bg-[var(--bg-card)] px-2 py-1 text-xs text-[var(--text)]">
+                          {payload().workspacePath ?? 'Workspace no longer available'}
+                        </code>
+                        <Show
+                          when={(payload().workspaceEntries?.length ?? 0) > 0}
+                          fallback={
+                            <p class="text-xs text-[var(--text-muted)]">
+                              Workspace directory listing unavailable or cleaned up.
+                            </p>
+                          }
+                        >
+                          <ul class="max-h-64 overflow-auto rounded-xl border border-[var(--border)] bg-[var(--bg-card)] text-xs">
+                            <For each={payload().workspaceEntries}>
+                              {(entry) => (
+                                <li class="flex items-center justify-between border-b border-[var(--border)] px-3 py-2 last:border-b-0">
+                                  <span class="font-mono text-[var(--text)]">{entry.name}</span>
+                                  <span class="text-[var(--text-muted)]">{entry.kind === 'directory' ? 'dir' : 'file'}</span>
+                                </li>
+                              )}
+                            </For>
+                          </ul>
+                        </Show>
+                      </div>
+                    </div>
+                  )}
+                </Show>
+              </div>
+            </Show>
+          </section>
         </div>
       </div>
     </div>
@@ -334,6 +498,16 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
 function hasCommit(step: WorkflowStep): boolean {
   const commitPayload = (step.result as WorkflowStepResult | null)?.commit
   return typeof commitPayload?.commitHash === 'string'
+}
+
+function runnerStatus(step: WorkflowStep): string | null {
+  if (step.status !== 'running') return null
+  if (!step.runnerInstanceId) return 'Waiting for Docker runner'
+  return `Runner ${shortToken(step.runnerInstanceId)}`
+}
+
+function shortToken(token: string): string {
+  return token.length <= 14 ? token : `${token.slice(0, 6)}…${token.slice(-4)}`
 }
 
 function shortHash(hash: string): string {

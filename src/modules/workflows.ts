@@ -9,6 +9,7 @@ import type {
   RadicleSessionHandle,
   WorkspaceInfo as RadicleWorkspaceInfo
 } from './radicle/types'
+import type { WorkflowRunnerGateway } from './workflowRunnerGateway'
 
 export type WorkflowStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
 export type WorkflowKind = 'new_project' | 'refactor' | 'bugfix' | 'custom'
@@ -44,6 +45,7 @@ export type WorkflowStepRecord = {
   dependsOn: string[]
   data: Record<string, unknown>
   result: Record<string, unknown> | null
+  runnerInstanceId: string | null
   updatedAt: Timestamp
 }
 
@@ -67,7 +69,8 @@ export type WorkflowStepsRepository = {
   listByWorkflow: (workflowId: string) => WorkflowStepRecord[]
   findReady: (limit?: number) => WorkflowStepRecord[]
   claim: (stepId: string) => boolean
-  update: (stepId: string, patch: Partial<Pick<WorkflowStepRecord, 'status' | 'result'>>) => void
+  update: (stepId: string, patch: Partial<Pick<WorkflowStepRecord, 'status' | 'result' | 'runnerInstanceId'>>) => void
+  getById: (stepId: string) => WorkflowStepRecord | null
 }
 
 export type WorkflowsBindings = {
@@ -130,6 +133,7 @@ export type WorkflowRuntimeOptions = {
     name: string
     email: string
   }
+  runnerGateway: WorkflowRunnerGateway
 }
 
 export type WorkflowRuntime = {
@@ -141,6 +145,7 @@ export type WorkflowRuntime = {
   listWorkflows: (projectId?: string) => WorkflowRecord[]
   startWorker: () => void
   stopWorker: () => Promise<void>
+  runStepById: (input: { workflowId: string; stepId: string; runnerInstanceId: string }) => Promise<void>
 }
 
 export function createWorkflowRuntime(options: WorkflowRuntimeOptions): WorkflowRuntime {
@@ -152,6 +157,7 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
     name: 'Hyperagent Workflow',
     email: 'workflow@hyperagent.local'
   }
+  const runnerGateway = options.runnerGateway
 
   let workerRunning = false
   let workerPromise: Promise<void> | null = null
@@ -219,21 +225,59 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
 
   async function runWorkerLoop() {
     while (workerRunning) {
-      await processReadySteps(persistence.workflowSteps, agentExecutor)
+      await processReadySteps(persistence.workflowSteps)
       await delay(pollInterval)
     }
   }
 
-  async function processReadySteps(stepsRepo: WorkflowStepsRepository, executor: AgentExecutor): Promise<void> {
+  async function processReadySteps(stepsRepo: WorkflowStepsRepository): Promise<void> {
     const readySteps = stepsRepo.findReady()
     for (const step of readySteps) {
       const claimed = stepsRepo.claim(step.id)
       if (!claimed) continue
-      await executeStep(step, executor)
+      await enqueueStepRun(step)
     }
   }
 
-  async function executeStep(step: WorkflowStepRecord, executor: AgentExecutor): Promise<void> {
+  async function enqueueStepRun(step: WorkflowStepRecord): Promise<void> {
+    if (!runnerGateway) {
+      throw new Error('Workflow runner gateway is required')
+    }
+    const latest = persistence.workflowSteps.getById(step.id)
+    if (!latest) return
+    if (latest.runnerInstanceId) return
+    const runnerInstanceId = `wf-runner-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    persistence.workflowSteps.update(step.id, { runnerInstanceId })
+    try {
+      await runnerGateway.enqueue({ workflowId: latest.workflowId, stepId: latest.id, runnerInstanceId })
+    } catch (error) {
+      persistence.workflowSteps.update(step.id, { runnerInstanceId: null })
+      throw error
+    }
+  }
+
+  async function runStepById(input: { workflowId: string; stepId: string; runnerInstanceId: string }): Promise<void> {
+    const { workflowId, stepId, runnerInstanceId } = input
+    const step = persistence.workflowSteps.getById(stepId)
+    if (!step) {
+      throw new Error('Unknown workflow step')
+    }
+    if (step.workflowId !== workflowId) {
+      throw new Error('Workflow step does not belong to requested workflow')
+    }
+    if (step.status !== 'running') {
+      throw new Error('Workflow step is not running')
+    }
+    if (!step.runnerInstanceId) {
+      throw new Error('Workflow step has no runner assigned')
+    }
+    if (step.runnerInstanceId !== runnerInstanceId) {
+      throw new Error('Workflow runner token mismatch')
+    }
+    await executeStep(step)
+  }
+
+  async function executeStep(step: WorkflowStepRecord): Promise<void> {
     const workflow = persistence.workflows.getById(step.workflowId)
     if (!workflow) return
     if (workflow.status !== 'running') return
@@ -251,6 +295,7 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
     let workspace: RadicleWorkspaceInfo | undefined
     let radicleSession: RadicleSessionHandle | undefined
     let commitResult: CommitResult | null = null
+    let provenanceLogsPath: string | null = null
 
     try {
       if (radicle) {
@@ -269,7 +314,8 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
         workspace = await radicleSession.start()
       }
 
-      const result = await executor({ project, workflow, step, workspace, radicleSession })
+      const result = await agentExecutor({ project, workflow, step, workspace, radicleSession })
+      provenanceLogsPath = result.logsPath ?? null
 
       if (radicleSession) {
         if (result.skipCommit) {
@@ -286,11 +332,13 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
       const enrichedResult = {
         ...baseResult,
         ...(workspace ? { workspace } : {}),
-        ...(commitResult ? { commit: commitResult } : {})
+        ...(commitResult ? { commit: commitResult } : {}),
+        ...(provenanceLogsPath ? { provenance: { logsPath: provenanceLogsPath } } : {})
       }
       persistence.workflowSteps.update(step.id, {
         status: 'completed',
-        result: enrichedResult
+        result: enrichedResult,
+        runnerInstanceId: null
       })
       persistence.agentRuns.update(agentRun.id, {
         status: 'succeeded',
@@ -301,11 +349,16 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
       if (radicleSession) {
         await radicleSession.abort().catch(() => undefined)
       }
+      const failureResult: Record<string, unknown> = {
+        error: error instanceof Error ? error.message : String(error)
+      }
+      if (provenanceLogsPath) {
+        failureResult.provenance = { logsPath: provenanceLogsPath }
+      }
       persistence.workflowSteps.update(step.id, {
         status: 'failed',
-        result: {
-          error: error instanceof Error ? error.message : String(error)
-        }
+        result: failureResult,
+        runnerInstanceId: null
       })
       persistence.agentRuns.update(agentRun.id, {
         status: 'failed',
@@ -324,7 +377,8 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
     getWorkflowDetail,
     listWorkflows,
     startWorker,
-    stopWorker
+    stopWorker,
+    runStepById
   }
 }
 
@@ -422,9 +476,17 @@ export const workflowsPersistence: PersistenceModule<WorkflowsBindings> = {
         depends_on TEXT NOT NULL,
         data TEXT NOT NULL,
         result TEXT,
+        runner_instance_id TEXT,
         updated_at TEXT NOT NULL
       );
     `)
+    const workflowStepColumns = db
+      .prepare("PRAGMA table_info('workflow_steps')")
+      .all() as Array<{ name: string }>
+    const hasRunnerInstanceId = workflowStepColumns.some((column) => column.name === 'runner_instance_id')
+    if (!hasRunnerInstanceId) {
+      db.exec('ALTER TABLE workflow_steps ADD COLUMN runner_instance_id TEXT')
+    }
   },
   createBindings: ({ db }: PersistenceContext) => ({
     workflows: createWorkflowsRepository(db),
@@ -477,8 +539,8 @@ function createWorkflowStepsRepository(db: Database.Database): WorkflowStepsRepo
   return {
     insertMany: (workflowId, steps) => {
       const insert = db.prepare(
-        `INSERT INTO workflow_steps (id, workflow_id, task_id, status, sequence, depends_on, data, result, updated_at)
-         VALUES (@id, @workflowId, @taskId, @status, @sequence, @dependsOn, @data, NULL, @updatedAt)`
+        `INSERT INTO workflow_steps (id, workflow_id, task_id, status, sequence, depends_on, data, result, runner_instance_id, updated_at)
+         VALUES (@id, @workflowId, @taskId, @status, @sequence, @dependsOn, @data, NULL, NULL, @updatedAt)`
       )
       const now = new Date().toISOString()
       const records: WorkflowStepRecord[] = []
@@ -545,7 +607,7 @@ function createWorkflowStepsRepository(db: Database.Database): WorkflowStepsRepo
       const res = db
         .prepare(
           `UPDATE workflow_steps
-           SET status = 'running', updated_at = ?
+           SET status = 'running', runner_instance_id = NULL, updated_at = ?
            WHERE id = ? AND status = 'pending'`
         )
         .run(new Date().toISOString(), stepId)
@@ -555,12 +617,19 @@ function createWorkflowStepsRepository(db: Database.Database): WorkflowStepsRepo
       const current = db.prepare('SELECT * FROM workflow_steps WHERE id = ?').get(stepId) as any
       if (!current) return
       const nextStatus = patch.status ?? current.status
-      const nextResult = patch.result ? JSON.stringify(patch.result) : current.result
+      const nextResult =
+        patch.result === undefined ? current.result : patch.result ? JSON.stringify(patch.result) : null
+      const nextRunnerInstanceId =
+        patch.runnerInstanceId === undefined ? current.runner_instance_id ?? null : patch.runnerInstanceId
       db.prepare(
         `UPDATE workflow_steps
-         SET status = ?, result = ?, updated_at = ?
+         SET status = ?, result = ?, runner_instance_id = ?, updated_at = ?
          WHERE id = ?`
-      ).run(nextStatus, nextResult, new Date().toISOString(), stepId)
+      ).run(nextStatus, nextResult, nextRunnerInstanceId, new Date().toISOString(), stepId)
+    },
+    getById: (stepId) => {
+      const row = db.prepare('SELECT * FROM workflow_steps WHERE id = ?').get(stepId)
+      return row ? mapWorkflowStep(row) : null
     }
   }
 }
@@ -588,6 +657,7 @@ function mapWorkflowStep(row: any): WorkflowStepRecord {
     dependsOn: parseJsonField<string[]>(row.depends_on, []),
     data: parseJsonField<Record<string, unknown>>(row.data, {}),
     result: row.result ? parseJsonField<Record<string, unknown>>(row.result, {}) : null,
+    runnerInstanceId: row.runner_instance_id ?? null,
     updatedAt: row.updated_at
   }
 }

@@ -38,6 +38,7 @@ describe('WorkflowsPage', () => {
           sequence: 1,
           updatedAt: new Date('2024-01-01T00:00:00Z').toISOString(),
           data: { title: 'Investigate issue' },
+          runnerInstanceId: null,
           result: {
             commit: {
               commitHash: 'abc123'
