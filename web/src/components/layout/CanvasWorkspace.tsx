@@ -51,8 +51,9 @@ type CanvasWorkspaceSnapshot = {
 
 const DEFAULT_WIDGET_SIZE: CanvasSize = { width: 640, height: 420 }
 const DEFAULT_TRANSFORM: CanvasTransform = { x: 0, y: 0, scale: 1 }
-const MIN_SCALE = 0.5
-const MAX_SCALE = 1.75
+const MIN_SCALE = 0.2
+const MAX_SCALE = 2.5
+const ZOOM_SENSITIVITY = 900
 
 export default function CanvasWorkspace(props: CanvasWorkspaceProps) {
   const widgetList = createMemo(() => props.widgets ?? [])
@@ -62,10 +63,14 @@ export default function CanvasWorkspace(props: CanvasWorkspaceProps) {
   const [zIndices, setZIndices] = createSignal<Record<string, number>>({})
   const [zCursor, setZCursor] = createSignal(25)
   const [transform, setTransform] = createSignal<CanvasTransform>({ ...DEFAULT_TRANSFORM })
+  let canvasElement: HTMLDivElement | null = null
   let pendingSnapshot: CanvasWorkspaceSnapshot | null = null
   let panPointerId: number | null = null
   let panAnchorPoint: CanvasVector | null = null
   let panAnchorTransform: CanvasTransform | null = null
+  const activeTouchPoints = new Map<number, CanvasVector>()
+  let pinchStartDistance: number | null = null
+  let pinchStartScale = DEFAULT_TRANSFORM.scale
 
   const persistableState = createMemo<CanvasWorkspaceSnapshot>(() => {
     const snapshot: CanvasWorkspaceSnapshot = {
@@ -172,6 +177,9 @@ export default function CanvasWorkspace(props: CanvasWorkspaceProps) {
   onMount(() => {
     setHydrated(true)
     loadFromStorage()
+    window.addEventListener('pointermove', handleTouchPointerMove)
+    window.addEventListener('pointerup', handleTouchPointerUp)
+    window.addEventListener('pointercancel', handleTouchPointerUp)
   })
 
   createEffect(() => {
@@ -338,15 +346,88 @@ export default function CanvasWorkspace(props: CanvasWorkspaceProps) {
     window.addEventListener('pointerup', stop)
   }
 
+  const zoomToScale = (nextScale: number, anchor?: CanvasVector) => {
+    setTransform((prev) => {
+      const clamped = clamp(nextScale, MIN_SCALE, MAX_SCALE)
+      if (!anchor) return { ...prev, scale: clamped }
+      const worldX = (anchor.x - prev.x) / prev.scale
+      const worldY = (anchor.y - prev.y) / prev.scale
+      return {
+        scale: clamped,
+        x: anchor.x - worldX * clamped,
+        y: anchor.y - worldY * clamped
+      }
+    })
+  }
+
+  const releasePan = () => {
+    window.removeEventListener('pointermove', handlePanMove)
+    window.removeEventListener('pointerup', handlePanPointerUp)
+    window.removeEventListener('pointercancel', handlePanPointerUp)
+    panPointerId = null
+    panAnchorPoint = null
+    panAnchorTransform = null
+  }
+
+  const registerTouchPoint = (event: PointerEvent) => {
+    if (event.pointerType !== 'touch') return
+    if (!activeTouchPoints.has(event.pointerId) && activeTouchPoints.size >= 2) return
+    activeTouchPoints.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    if (activeTouchPoints.size === 2) {
+      const points = Array.from(activeTouchPoints.values())
+      pinchStartDistance = distanceBetween(points[0], points[1])
+      pinchStartScale = transform().scale
+      releasePan()
+    }
+  }
+
+  const handleTouchPointerMove = (event: PointerEvent) => {
+    if (event.pointerType !== 'touch') return
+    if (!activeTouchPoints.has(event.pointerId)) return
+    activeTouchPoints.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    if (!pinchStartDistance || activeTouchPoints.size < 2) return
+    const points = Array.from(activeTouchPoints.values())
+    const currentDistance = distanceBetween(points[0], points[1])
+    if (currentDistance <= 0) return
+    const center = midpoint(points[0], points[1])
+    const nextScale = pinchStartScale * (currentDistance / pinchStartDistance)
+    zoomToScale(nextScale, center)
+  }
+
+  const handleTouchPointerUp = (event: PointerEvent) => {
+    if (event.pointerType !== 'touch') return
+    if (!activeTouchPoints.has(event.pointerId)) return
+    activeTouchPoints.delete(event.pointerId)
+    if (activeTouchPoints.size < 2) {
+      pinchStartDistance = null
+      pinchStartScale = transform().scale
+    } else {
+      const points = Array.from(activeTouchPoints.values())
+      pinchStartDistance = distanceBetween(points[0], points[1])
+      pinchStartScale = transform().scale
+    }
+  }
+
   const handleCanvasPointerDown = (event: PointerEvent) => {
+    if (event.pointerType === 'touch') {
+      registerTouchPoint(event)
+      if (activeTouchPoints.size >= 2) {
+        event.preventDefault()
+        return
+      }
+    }
     const target = event.target as HTMLElement
     if (target.closest('[data-widget-id]')) return
-    if (event.button !== 0) return
+    if (event.pointerType !== 'touch' && event.button !== 0) return
+    if (event.pointerType === 'touch') {
+      event.preventDefault()
+    }
     panPointerId = event.pointerId
     panAnchorPoint = { x: event.clientX, y: event.clientY }
     panAnchorTransform = { ...transform() }
     window.addEventListener('pointermove', handlePanMove)
-    window.addEventListener('pointerup', stopPan)
+    window.addEventListener('pointerup', handlePanPointerUp)
+    window.addEventListener('pointercancel', handlePanPointerUp)
   }
 
   const handlePanMove = (event: PointerEvent) => {
@@ -361,34 +442,48 @@ export default function CanvasWorkspace(props: CanvasWorkspaceProps) {
     }))
   }
 
-  const stopPan = (event: PointerEvent) => {
+  const handlePanPointerUp = (event: PointerEvent) => {
     if (event.pointerId !== panPointerId) return
-    window.removeEventListener('pointermove', handlePanMove)
-    window.removeEventListener('pointerup', stopPan)
-    panPointerId = null
-    panAnchorPoint = null
-    panAnchorTransform = null
+    releasePan()
+  }
+
+  const shouldAllowScroll = (event: WheelEvent) => {
+    if (!canvasElement) return false
+    const element = resolveEventTarget(event.target)
+    if (!element) return false
+    let current: HTMLElement | null = element
+    while (current && current !== canvasElement) {
+      if (elementCanScroll(current)) {
+        return true
+      }
+      current = current.parentElement
+    }
+    return false
   }
 
   const handleWheel = (event: WheelEvent) => {
-    const target = event.target as HTMLElement
-    if (target.closest('[data-widget-id]')) return
+    if (shouldAllowScroll(event)) {
+      return
+    }
     event.preventDefault()
-    const delta = event.deltaY > 0 ? -0.08 : 0.08
-    setTransform((prev) => ({
-      ...prev,
-      scale: clamp(prev.scale + delta, MIN_SCALE, MAX_SCALE)
-    }))
+    const scaleFactor = Math.exp(-event.deltaY / ZOOM_SENSITIVITY)
+    const nextScale = transform().scale * scaleFactor
+    zoomToScale(nextScale, { x: event.clientX, y: event.clientY })
   }
 
   onCleanup(() => {
-    window.removeEventListener('pointermove', handlePanMove)
-    window.removeEventListener('pointerup', stopPan)
+    releasePan()
+    window.removeEventListener('pointermove', handleTouchPointerMove)
+    window.removeEventListener('pointerup', handleTouchPointerUp)
+    window.removeEventListener('pointercancel', handleTouchPointerUp)
   })
 
   return (
     <div
-      class={`relative h-full w-full overflow-hidden bg-[var(--bg-app)] ${props.class ?? ''}`}
+      class={`relative h-full min-h-[100dvh] w-full overflow-hidden bg-[var(--bg-app)] touch-none ${props.class ?? ''}`}
+      ref={(el) => {
+        canvasElement = el
+      }}
       onPointerDown={handleCanvasPointerDown}
       onWheel={handleWheel}
     >
@@ -495,4 +590,31 @@ const normalizeTransform = (value: CanvasTransform): CanvasTransform => ({
 const clamp = (value: number, min: number, max: number) => {
   if (Number.isNaN(value)) return min
   return Math.min(Math.max(value, min), max)
+}
+
+const distanceBetween = (a: CanvasVector, b: CanvasVector) => Math.hypot(a.x - b.x, a.y - b.y)
+
+const midpoint = (a: CanvasVector, b: CanvasVector): CanvasVector => ({
+  x: (a.x + b.x) / 2,
+  y: (a.y + b.y) / 2
+})
+
+const resolveEventTarget = (target: EventTarget | null): HTMLElement | null => {
+  if (!target) return null
+  if (target instanceof HTMLElement) return target
+  if (target instanceof SVGElement) return target as unknown as HTMLElement
+  if (target instanceof Node) return target.parentElement
+  return null
+}
+
+const elementCanScroll = (element: HTMLElement) => {
+  if (typeof window === 'undefined') return false
+  const style = window.getComputedStyle(element)
+  const overflowY = style.overflowY
+  const overflowX = style.overflowX
+  const vertical =
+    (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') && element.scrollHeight > element.clientHeight + 1
+  const horizontal =
+    (overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'overlay') && element.scrollWidth > element.clientWidth + 1
+  return vertical || horizontal
 }

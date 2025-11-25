@@ -10,10 +10,9 @@ body,
   margin: 0;
 }
 
-/* Allow the page to scroll normally so longer layouts remain accessible. */
+/* Lock the document to the viewport; individual panels manage their own scrolling. */
 body {
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
 }
 
 #root {
