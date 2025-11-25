@@ -1,0 +1,38 @@
+export type WidgetTemplateId =
+  | 'workspace-summary'
+  | 'workspace-workflows'
+  | 'workspace-terminal'
+  | 'workspace-sessions'
+
+export type WidgetTemplate = {
+  id: WidgetTemplateId
+  label: string
+  description: string
+}
+
+export type WidgetAddEventDetail = {
+  templateId: WidgetTemplateId
+}
+
+export const WIDGET_TEMPLATES: WidgetTemplate[] = [
+  {
+    id: 'workspace-summary',
+    label: 'Workspace overview',
+    description: 'Repository details and quick actions'
+  },
+  {
+    id: 'workspace-workflows',
+    label: 'Workflows',
+    description: 'Run history and queue'
+  },
+  {
+    id: 'workspace-terminal',
+    label: 'Terminal',
+    description: 'Shell access scoped to this workspace'
+  },
+  {
+    id: 'workspace-sessions',
+    label: 'Opencode sessions',
+    description: 'Background activity feed'
+  }
+]

@@ -4,8 +4,9 @@ import { For, Show, createResource, createSignal, type JSX } from 'solid-js'
 import { fetchJson } from './lib/http'
 import WorkspacePage from './pages/WorkspacePage'
 import { CanvasNavigatorContext, useCanvasNavigator } from './contexts/CanvasNavigatorContext'
-import { WorkspaceSelectionProvider, useWorkspaceSelection } from './contexts/WorkspaceSelectionContext'
+import { WorkspaceSelectionProvider } from './contexts/WorkspaceSelectionContext'
 import RepositoryNavigator from './components/navigation/RepositoryNavigator'
+import { WIDGET_TEMPLATES, type WidgetAddEventDetail } from './constants/widgetTemplates'
 
 type RadicleStatus = {
   reachable: boolean
@@ -54,26 +55,20 @@ export default function App() {
 
 function CanvasChrome() {
   const navigator = useCanvasNavigator()
-  const selection = useWorkspaceSelection()
-  const [opsMenuOpen, setOpsMenuOpen] = createSignal(false)
-  const systemActions = [
-    {
-      label: 'Launch workflow',
-      description: 'Open the workflow launcher modal',
-      onSelect: () => {
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('workspace:launch-workflow'))
-        }
-      }
-    },
-    {
-      label: 'Refresh workspace list',
-      description: 'Fetch the latest repository metadata',
-      onSelect: () => {
-        void selection.refetchWorkspaces()
-      }
+  const [widgetMenuOpen, setWidgetMenuOpen] = createSignal(false)
+
+  const widgetActions = WIDGET_TEMPLATES.map((template) => ({
+    label: template.label,
+    description: template.description,
+    onSelect: () => {
+      if (typeof window === 'undefined') return
+      window.dispatchEvent(
+        new CustomEvent<WidgetAddEventDetail>('workspace:add-widget', {
+          detail: { templateId: template.id }
+        })
+      )
     }
-  ]
+  }))
 
   const stopCanvasPropagation = (event: PointerEvent) => event.stopPropagation()
   const toggleWorkspaceMenu = () => (navigator.isOpen() ? navigator.close() : navigator.open())
@@ -101,17 +96,17 @@ function CanvasChrome() {
         <button
           type="button"
           class="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-card)]/90 px-4 py-2 text-sm font-semibold text-[var(--text)] shadow-[0_18px_30px_rgba(15,23,42,0.12)]"
-          onClick={() => setOpsMenuOpen((value) => !value)}
+          onClick={() => setWidgetMenuOpen((value) => !value)}
         >
-          Systems
+          Widgets
           <span class="text-lg">☰</span>
         </button>
-        <Show when={opsMenuOpen()}>
+        <Show when={widgetMenuOpen()}>
           <ChromePanel
-            title="Systems"
-            actions={systemActions}
+            title="Widget library"
+            actions={widgetActions}
             alignment="end"
-            onNavigate={() => setOpsMenuOpen(false)}
+            onNavigate={() => setWidgetMenuOpen(false)}
           />
         </Show>
       </div>

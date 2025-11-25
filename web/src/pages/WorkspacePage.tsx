@@ -17,8 +17,11 @@ import WorkflowDetailView from '../components/WorkflowDetailView'
 import WorkflowLaunchModal from '../components/WorkflowLaunchModal'
 import CanvasWorkspace, { type CanvasWidgetConfig } from '../components/layout/CanvasWorkspace'
 import OpencodeConsole from '../components/OpencodeConsole'
-import { useCanvasNavigator } from '../contexts/CanvasNavigatorContext'
+import { useCanvasNavigator, type CanvasNavigatorController } from '../contexts/CanvasNavigatorContext'
 import { useWorkspaceSelection, type WorkspaceRecord } from '../contexts/WorkspaceSelectionContext'
+import { WIDGET_TEMPLATES, type WidgetAddEventDetail, type WidgetTemplateId } from '../constants/widgetTemplates'
+
+const TEMPLATE_ID_SET = new Set<WidgetTemplateId>(WIDGET_TEMPLATES.map((template) => template.id))
 import { fetchJson } from '../lib/http'
 import {
   closeTerminalSession,
@@ -63,52 +66,95 @@ export default function WorkspacePage() {
   const selection = useWorkspaceSelection()
   const navigator = useCanvasNavigator()
   const activeWorkspace = selection.currentWorkspace
+  const [extraWidgets, setExtraWidgets] = createSignal<{ templateId: WidgetTemplateId; instanceId: string }[]>([])
 
   const widgets = createMemo<CanvasWidgetConfig[]>(() => {
     const workspace = activeWorkspace()
     if (!workspace) return []
-    return [
-      {
-        id: 'workspace-summary',
-        title: 'Workspace overview',
-        description: 'Repository details and quick actions',
-        icon: '🧭',
-        initialPosition: { x: -300, y: -140 },
-        initialSize: { width: 480, height: 400 },
-        startOpen: true,
-        content: () => <WorkspaceSummary workspace={workspace} onOpenNavigator={navigator.open} />
-      },
-      {
-        id: 'workspace-workflows',
-        title: 'Workflows',
-        description: 'Run history and queue',
-        icon: '🧩',
-        initialPosition: { x: 280, y: -100 },
-        initialSize: { width: 920, height: 760 },
-        startOpen: true,
-        content: () => <WorkflowsWidget workspaceId={workspace.id} workspaceName={workspace.name} />
-      },
-      {
-        id: 'workspace-terminal',
-        title: 'Terminal',
-        description: 'Shell access scoped to this workspace',
-        icon: '🖥️',
-        initialPosition: { x: -320, y: 420 },
-        initialSize: { width: 720, height: 520 },
-        startOpen: true,
-        content: () => <WorkspaceTerminalWidget workspacePath={workspace.repositoryPath} />
-      },
-      {
-        id: 'workspace-sessions',
-        title: 'Opencode sessions',
-        description: 'Background activity feed',
-        icon: '🕘',
-        initialPosition: { x: 460, y: 520 },
-        initialSize: { width: 720, height: 520 },
-        startOpen: true,
-        content: () => <SessionsWidget workspacePath={workspace.repositoryPath} />
+    const baseWidgets = WIDGET_TEMPLATES.map((template) =>
+      createWidgetConfig({
+        templateId: template.id,
+        workspace,
+        instanceId: template.id,
+        offsetIndex: 0,
+        navigator,
+        removable: true
+      })
+    )
+    const offsetTracker = new Map<WidgetTemplateId, number>()
+    WIDGET_TEMPLATES.forEach((template) => offsetTracker.set(template.id, 0))
+    const dynamicWidgets = extraWidgets().map((instance) => {
+      const currentOffset = offsetTracker.get(instance.templateId) ?? 0
+      const nextOffset = currentOffset + 1
+      offsetTracker.set(instance.templateId, nextOffset)
+      return createWidgetConfig({
+        templateId: instance.templateId,
+        workspace,
+        instanceId: instance.instanceId,
+        offsetIndex: nextOffset,
+        navigator,
+        removable: true
+      })
+    })
+    return [...baseWidgets, ...dynamicWidgets]
+  })
+
+  const widgetStorageKey = (workspaceId: string) => `workspace:${workspaceId}:extra-widgets`
+
+  createEffect(() => {
+    const workspace = activeWorkspace()
+    if (!workspace) return
+    if (typeof window === 'undefined') return
+    try {
+      const raw = window.localStorage.getItem(widgetStorageKey(workspace.id))
+      if (!raw) {
+        setExtraWidgets([])
+        return
       }
-    ]
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        const filtered = parsed.filter(
+          (entry): entry is { templateId: WidgetTemplateId; instanceId: string } =>
+            Boolean(
+              entry &&
+                typeof entry.instanceId === 'string' &&
+                typeof entry.templateId === 'string' &&
+                TEMPLATE_ID_SET.has(entry.templateId as WidgetTemplateId)
+            )
+        )
+        setExtraWidgets(filtered)
+      } else {
+        setExtraWidgets([])
+      }
+    } catch {
+      setExtraWidgets([])
+    }
+  })
+
+  createEffect(() => {
+    const workspace = activeWorkspace()
+    if (!workspace) return
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(widgetStorageKey(workspace.id), JSON.stringify(extraWidgets()))
+    } catch {
+      // ignore storage errors
+    }
+  })
+
+  onMount(() => {
+    if (typeof window === 'undefined') return
+    const handleAddWidget = (event: Event) => {
+      const custom = event as CustomEvent<WidgetAddEventDetail>
+      const detail = custom.detail
+      if (!detail || !TEMPLATE_ID_SET.has(detail.templateId)) return
+      const workspace = activeWorkspace()
+      if (!workspace) return
+      const instanceId = generateWidgetInstanceId(detail.templateId)
+      setExtraWidgets((prev) => [...prev, { templateId: detail.templateId, instanceId }])
+    }
+    window.addEventListener('workspace:add-widget', handleAddWidget)
+    onCleanup(() => window.removeEventListener('workspace:add-widget', handleAddWidget))
   })
 
   return (
@@ -116,12 +162,105 @@ export default function WorkspacePage() {
       <Show when={!selection.isLoading()} fallback={<WorkspaceLoadingState />}>
         <Show when={activeWorkspace()} fallback={<WorkspaceEmptyState onOpenNavigator={navigator.open} />}>
           {(workspace) => (
-            <CanvasWorkspace storageKey={`workspace:${workspace().id}`} widgets={widgets()} />
+            <CanvasWorkspace
+              storageKey={`workspace:${workspace().id}`}
+              widgets={widgets()}
+              onRemoveWidget={(id) => {
+                setExtraWidgets((prev) => prev.filter((entry) => entry.instanceId !== id))
+              }}
+            />
           )}
         </Show>
       </Show>
     </div>
   )
+}
+
+function offsetPosition(base: { x: number; y: number }, offsetIndex: number) {
+  const step = 40
+  return {
+    x: base.x + step * offsetIndex,
+    y: base.y + step * offsetIndex
+  }
+}
+
+type CreateWidgetConfigOptions = {
+  templateId: WidgetTemplateId
+  workspace: WorkspaceRecord
+  instanceId: string
+  offsetIndex: number
+  navigator: CanvasNavigatorController
+  removable: boolean
+}
+
+function createWidgetConfig(options: CreateWidgetConfigOptions): CanvasWidgetConfig {
+  const { templateId, workspace, instanceId, offsetIndex, navigator, removable } = options
+  switch (templateId) {
+    case 'workspace-summary':
+      return {
+        id: instanceId,
+        title: 'Workspace overview',
+        description: 'Repository details and quick actions',
+        icon: '🧭',
+        initialPosition: offsetPosition({ x: -300, y: -140 }, offsetIndex),
+        initialSize: { width: 480, height: 400 },
+        startOpen: true,
+        removable,
+        content: () => <WorkspaceSummary workspace={workspace} onOpenNavigator={navigator.open} />
+      }
+    case 'workspace-workflows':
+      return {
+        id: instanceId,
+        title: 'Workflows',
+        description: 'Run history and queue',
+        icon: '🧩',
+        initialPosition: offsetPosition({ x: 280, y: -100 }, offsetIndex),
+        initialSize: { width: 920, height: 760 },
+        startOpen: true,
+        removable,
+        content: () => <WorkflowsWidget workspaceId={workspace.id} workspaceName={workspace.name} />
+      }
+    case 'workspace-terminal':
+      return {
+        id: instanceId,
+        title: 'Terminal',
+        description: 'Shell access scoped to this workspace',
+        icon: '🖥️',
+        initialPosition: offsetPosition({ x: -320, y: 420 }, offsetIndex),
+        initialSize: { width: 720, height: 520 },
+        startOpen: true,
+        removable,
+        content: () => <WorkspaceTerminalWidget workspacePath={workspace.repositoryPath} />
+      }
+    case 'workspace-sessions':
+      return {
+        id: instanceId,
+        title: 'Opencode sessions',
+        description: 'Background activity feed',
+        icon: '🕘',
+        initialPosition: offsetPosition({ x: 460, y: 520 }, offsetIndex),
+        initialSize: { width: 720, height: 520 },
+        startOpen: true,
+        removable,
+        content: () => <SessionsWidget workspacePath={workspace.repositoryPath} />
+      }
+    default:
+      return {
+        id: instanceId,
+        title: templateId,
+        initialPosition: offsetPosition({ x: 0, y: 0 }, offsetIndex),
+        removable,
+        content: () => <div>Unknown widget</div>
+      }
+  }
+}
+
+function generateWidgetInstanceId(templateId: WidgetTemplateId) {
+  const uniqueSegment =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+  return `${templateId}-${uniqueSegment}`
 }
 
 function WorkspaceLoadingState() {

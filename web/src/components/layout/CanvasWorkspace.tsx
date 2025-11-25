@@ -22,18 +22,20 @@ export type CanvasWidgetConfig = {
   icon?: string
   headerActions?: () => JSX.Element
   content: () => JSX.Element
+  removable?: boolean
 }
 
 export type CanvasWorkspaceProps = {
   storageKey: string
   widgets: CanvasWidgetConfig[]
   class?: string
+  onRemoveWidget?: (id: string) => void
 }
 
 type CanvasWidgetState = {
   position: CanvasVector
   size: CanvasSize
-  visible: boolean
+  collapsed: boolean
 }
 
 type CanvasTransform = {
@@ -75,7 +77,7 @@ export default function CanvasWorkspace(props: CanvasWorkspaceProps) {
       snapshot.widgets![widgetId] = {
         position: { ...entries[widgetId].position },
         size: { ...entries[widgetId].size },
-        visible: entries[widgetId].visible
+        collapsed: entries[widgetId].collapsed
       }
     })
     return snapshot
@@ -94,7 +96,7 @@ export default function CanvasWorkspace(props: CanvasWorkspaceProps) {
           next[widget.id] = {
             position: sanitizeVector(stored.position, widget.initialPosition),
             size: sanitizeSize(stored.size, widget),
-            visible: typeof stored.visible === 'boolean' ? stored.visible : widget.startOpen !== false
+            collapsed: typeof stored.collapsed === 'boolean' ? stored.collapsed : widget.startOpen === false
           }
         })
         return next
@@ -132,31 +134,34 @@ export default function CanvasWorkspace(props: CanvasWorkspaceProps) {
 
   createEffect(() => {
     const widgets = widgetList()
-    if (!widgets.length) return
     setWidgetState((prev) => {
-      let changed = false
-      const next = { ...prev }
+      const next: Record<string, CanvasWidgetState> = {}
       widgets.forEach((widget) => {
-        if (!next[widget.id]) {
-          next[widget.id] = {
-            position: { ...widget.initialPosition },
-            size: { ...(widget.initialSize ?? DEFAULT_WIDGET_SIZE) },
-            visible: widget.startOpen !== false
-          }
-          changed = true
+        const existing = prev[widget.id]
+        if (existing) {
+          next[widget.id] = existing
+          return
+        }
+        next[widget.id] = {
+          position: { ...widget.initialPosition },
+          size: { ...(widget.initialSize ?? DEFAULT_WIDGET_SIZE) },
+          collapsed: widget.startOpen === false
         }
       })
-      return changed ? next : prev
+      return next
     })
     setZIndices((prev) => {
-      let changed = false
       const next = { ...prev }
       widgets.forEach((widget, index) => {
         if (next[widget.id]) return
         next[widget.id] = index + 1
-        changed = true
       })
-      return changed ? next : prev
+      Object.keys(next).forEach((key) => {
+        if (!widgets.some((widget) => widget.id === key)) {
+          delete next[key]
+        }
+      })
+      return next
     })
     if (pendingSnapshot) {
       applySnapshot(pendingSnapshot)
@@ -190,43 +195,50 @@ export default function CanvasWorkspace(props: CanvasWorkspaceProps) {
       return {
         position: { x: 0, y: 0 },
         size: { ...DEFAULT_WIDGET_SIZE },
-        visible: true
+        collapsed: false
       }
     }
     return {
       position: { ...fallback.initialPosition },
       size: { ...(fallback.initialSize ?? DEFAULT_WIDGET_SIZE) },
-      visible: fallback.startOpen !== false
+      collapsed: fallback.startOpen === false
     }
   }
 
-  const setWidgetVisibility = (id: string, visible: boolean) => {
+  const setWidgetCollapsed = (id: string, collapsed: boolean) => {
     setWidgetState((prev) => {
-      const current = getWidgetState(id)
-      return {
-        ...prev,
-        [id]: {
-          ...current,
-          visible
-        }
+      const current = prev[id] ?? getWidgetState(id)
+      const next = { ...prev }
+      next[id] = {
+        ...current,
+        collapsed
       }
+      return next
     })
   }
 
-  const closeWidget = (id: string) => setWidgetVisibility(id, false)
-
-  const openWidget = (id: string) => {
-    setWidgetVisibility(id, true)
-    bringToFront(id)
+  const toggleWidgetCollapsed = (id: string) => {
+    const current = getWidgetState(id)
+    setWidgetCollapsed(id, !current.collapsed)
+    if (current.collapsed) {
+      bringToFront(id)
+    }
   }
 
-  const toggleWidgetVisibility = (id: string) => {
-    const current = getWidgetState(id)
-    if (current.visible) {
-      closeWidget(id)
-    } else {
-      openWidget(id)
-    }
+  const removeWidget = (id: string) => {
+    props.onRemoveWidget?.(id)
+    setWidgetState((prev) => {
+      if (!(id in prev)) return prev
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    setZIndices((prev) => {
+      if (!(id in prev)) return prev
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
   }
 
   const setWidgetPosition = (id: string, position: CanvasVector) => {
@@ -376,11 +388,10 @@ export default function CanvasWorkspace(props: CanvasWorkspaceProps) {
 
   return (
     <div
-      class={`relative h-full w-full overflow-hidden bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 ${props.class ?? ''}`}
+      class={`relative h-full w-full overflow-hidden bg-[var(--bg-app)] ${props.class ?? ''}`}
       onPointerDown={handleCanvasPointerDown}
       onWheel={handleWheel}
     >
-      <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,rgba(255,255,255,0.12)_1px,transparent_0)] bg-[length:80px_80px] opacity-60" />
       <div
         class="absolute inset-0"
         style={{
@@ -392,41 +403,52 @@ export default function CanvasWorkspace(props: CanvasWorkspaceProps) {
           {(widget) => {
             const state = () => getWidgetState(widget.id)
             const zIndex = () => zIndices()[widget.id] ?? 1
+            const contentVisible = () => !state().collapsed
+            const widgetHeight = () => (contentVisible() ? `${state().size.height}px` : undefined)
             return (
-              <Show when={state().visible}>
-                <div
-                  data-widget-id={widget.id}
-                  class="absolute flex flex-col rounded-[1.25rem] border border-[var(--border)] bg-[var(--bg-card)]/95 p-5 text-[var(--text)] shadow-[0_18px_30px_rgba(15,23,42,0.45)] backdrop-blur"
-                  style={{
-                    left: `${state().position.x}px`,
-                    top: `${state().position.y}px`,
-                    width: `${state().size.width}px`,
-                    height: `${state().size.height}px`,
-                    'z-index': zIndex()
-                  }}
-                  onPointerDown={() => bringToFront(widget.id)}
+              <div
+                data-widget-id={widget.id}
+                class="absolute flex flex-col rounded-[1.25rem] border border-[var(--border)] bg-[var(--bg-card)]/95 p-5 text-[var(--text)] shadow-[0_18px_30px_rgba(15,23,42,0.45)] backdrop-blur"
+                style={{
+                  left: `${state().position.x}px`,
+                  top: `${state().position.y}px`,
+                  width: `${state().size.width}px`,
+                  height: widgetHeight(),
+                  'z-index': zIndex()
+                }}
+                onPointerDown={() => bringToFront(widget.id)}
+              >
+                <header
+                  class="mb-4 flex cursor-move flex-wrap items-start justify-between gap-3"
+                  onPointerDown={(event) => startWidgetDrag(widget, event)}
                 >
-                  <header
-                    class="mb-4 flex cursor-move flex-wrap items-start justify-between gap-3"
-                    onPointerDown={(event) => startWidgetDrag(widget, event)}
-                  >
-                    <div class="space-y-1">
-                      <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">{widget.title}</p>
-                      <Show when={widget.description}>
-                        {(desc) => <p class="text-sm text-[var(--text-muted)]">{desc()}</p>}
-                      </Show>
-                    </div>
-                    <div class="flex flex-wrap items-center gap-2" onPointerDown={(event) => event.stopPropagation()}>
-                      {widget.headerActions && widget.headerActions()}
+                  <div class="space-y-1">
+                    <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">{widget.title}</p>
+                    <Show when={widget.description}>
+                      {(desc) => <p class="text-sm text-[var(--text-muted)]">{desc()}</p>}
+                    </Show>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2" onPointerDown={(event) => event.stopPropagation()}>
+                    {widget.headerActions && widget.headerActions()}
+                    <button
+                      type="button"
+                      class="rounded-full border border-[var(--border)] px-2 py-1 text-xs font-semibold"
+                      onClick={() => toggleWidgetCollapsed(widget.id)}
+                    >
+                      {contentVisible() ? 'Collapse' : 'Expand'}
+                    </button>
+                    <Show when={widget.removable !== false}>
                       <button
                         type="button"
-                        class="rounded-full border border-[var(--border)] px-2 py-1 text-xs font-semibold"
-                        onClick={() => closeWidget(widget.id)}
+                        class="rounded-full border border-[var(--border)] px-2 py-1 text-xs font-semibold text-red-500"
+                        onClick={() => removeWidget(widget.id)}
                       >
-                        Close
+                        Remove
                       </button>
-                    </div>
-                  </header>
+                    </Show>
+                  </div>
+                </header>
+                <Show when={contentVisible()}>
                   <div class="flex-1 overflow-auto">{widget.content()}</div>
                   <button
                     type="button"
@@ -436,31 +458,11 @@ export default function CanvasWorkspace(props: CanvasWorkspaceProps) {
                   >
                     ⇲
                   </button>
-                </div>
-              </Show>
+                </Show>
+              </div>
             )
           }}
         </For>
-      </div>
-      <div class="pointer-events-none absolute inset-x-0 bottom-6 flex justify-center">
-        <div class="pointer-events-auto flex flex-wrap items-center gap-3 rounded-full border border-[var(--border)] bg-[var(--bg-card)]/90 px-5 py-3 text-sm text-[var(--text)] shadow-[0_18px_30px_rgba(15,23,42,0.2)] backdrop-blur">
-          <For each={widgetList()}>
-            {(widget) => {
-              const state = () => getWidgetState(widget.id)
-              return (
-                <button
-                  type="button"
-                  class="flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1"
-                  classList={{ 'bg-blue-600 text-white': state().visible }}
-                  onClick={() => toggleWidgetVisibility(widget.id)}
-                >
-                  <span class="text-base">{widget.icon ?? '◎'}</span>
-                  <span class="text-xs font-semibold uppercase tracking-[0.2em]">{widget.title}</span>
-                </button>
-              )
-            }}
-          </For>
-        </div>
       </div>
     </div>
   )
