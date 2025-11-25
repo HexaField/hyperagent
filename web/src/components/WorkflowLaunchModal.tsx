@@ -11,6 +11,7 @@ type Project = {
 
 type WorkflowLaunchModalProps = {
   onClose: () => void
+  defaultProjectId?: string | null
 }
 
 export default function WorkflowLaunchModal(props: WorkflowLaunchModalProps) {
@@ -30,7 +31,13 @@ export default function WorkflowLaunchModal(props: WorkflowLaunchModalProps) {
 
   createEffect(() => {
     const list = projects()
-    if (list && list.length && !form().projectId) {
+    if (!list || !list.length) return
+    const preferred = props.defaultProjectId
+    if (preferred && list.some((project) => project.id === preferred)) {
+      setForm((prev) => (prev.projectId === preferred ? prev : { ...prev, projectId: preferred }))
+      return
+    }
+    if (!form().projectId) {
       setForm((prev) => ({ ...prev, projectId: list[0].id }))
     }
   })

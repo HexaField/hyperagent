@@ -1,8 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@solidjs/testing-library'
 import { Route, Router } from '@solidjs/router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import RepositoriesPage from '../RepositoriesPage'
-import { fetchJson } from '../../lib/http'
+import RepositoryNavigator from '../RepositoryNavigator'
+import { fetchJson } from '../../../lib/http'
 
 type ProjectPayload = {
   id: string
@@ -20,7 +20,7 @@ type RadicleEntryPayload = {
   git: Record<string, unknown> | null
 }
 
-vi.mock('../../lib/http', () => ({
+vi.mock('../../../lib/http', () => ({
   fetchJson: vi.fn()
 }))
 
@@ -57,38 +57,43 @@ function setupApiMocks(params?: { projects?: ProjectPayload[]; radicle?: Radicle
     if (input === '/api/radicle/repositories') {
       return { repositories: radicle }
     }
+    if (input === '/api/radicle/register') {
+      return { status: 'ok' }
+    }
+    if (input === '/api/workflows') {
+      return { workflow: { id: 'wf-1' } }
+    }
     throw new Error(`Unhandled request: ${input}`)
   })
   return { projects, radicle }
 }
 
-function renderPage() {
-  window.history.replaceState({}, '', '/repositories')
+function renderNavigator() {
+  window.history.replaceState({}, '', '/')
   return render(() => (
     <Router root={(props) => <>{props.children}</>}>
-      <Route path="/repositories" component={RepositoriesPage} />
+      <Route path="/" component={RepositoryNavigator} />
     </Router>
   ))
 }
 
-describe('RepositoriesPage', () => {
+describe('RepositoryNavigator', () => {
   afterEach(() => {
     cleanup()
     vi.clearAllMocks()
   })
 
-  it('opens the New repository modal and submits the form', async () => {
+  it('creates a Hyperagent project from the drawer', async () => {
     setupApiMocks()
-    renderPage()
+    renderNavigator()
 
     const trigger = await screen.findByRole('button', { name: /new repository/i })
     fireEvent.click(trigger)
 
-    const nameInput = await screen.findByLabelText('Name')
-    fireEvent.input(nameInput, { target: { value: 'My Repo' } })
-    fireEvent.input(screen.getByLabelText('Repository path'), { target: { value: '/tmp/my-repo' } })
+    fireEvent.input(await screen.findByLabelText('Name'), { target: { value: 'Drawer Repo' } })
+    fireEvent.input(screen.getByLabelText('Repository path'), { target: { value: '/tmp/drawer' } })
     fireEvent.input(screen.getByLabelText('Default branch'), { target: { value: 'develop' } })
-    fireEvent.input(screen.getByLabelText('Description (optional)'), { target: { value: 'Testing repo' } })
+    fireEvent.input(screen.getByLabelText('Description (optional)'), { target: { value: 'Via drawer' } })
 
     fireEvent.submit(screen.getByTestId('new-repo-form'))
 
@@ -98,15 +103,15 @@ describe('RepositoriesPage', () => {
       const [, init] = postCall!
       const payload = JSON.parse(init!.body as string)
       expect(payload).toMatchObject({
-        name: 'My Repo',
-        repositoryPath: '/tmp/my-repo',
+        name: 'Drawer Repo',
+        repositoryPath: '/tmp/drawer',
         defaultBranch: 'develop',
-        description: 'Testing repo'
+        description: 'Via drawer'
       })
     })
   })
 
-  it('converts a Radicle-only repository into a Hyperagent project', async () => {
+  it('converts a Radicle-only entry into a Hyperagent project', async () => {
     const syntheticProject: ProjectPayload = {
       id: 'rad-only-sample',
       name: 'Rad Repo',
@@ -131,7 +136,7 @@ describe('RepositoriesPage', () => {
       ]
     })
 
-    renderPage()
+    renderNavigator()
 
     const convertButton = await screen.findByRole('button', { name: /convert to hyperagent project/i })
     fireEvent.click(convertButton)

@@ -1,14 +1,11 @@
 import type { RouteSectionProps } from '@solidjs/router'
-import { A, Navigate, Route, Router } from '@solidjs/router'
-import { Show, createResource } from 'solid-js'
+import { Route, Router } from '@solidjs/router'
+import { For, Show, createResource, createSignal, type JSX } from 'solid-js'
 import { fetchJson } from './lib/http'
-import RepositoriesPage from './pages/RepositoriesPage'
-import ProjectRepositoriesPage from './pages/ProjectRepositoriesPage'
-import RepositoryGraphPage from './pages/RepositoryGraphPage'
-import SessionsPage from './pages/SessionsPage'
-import TerminalPage from './pages/TerminalPage'
-import WorkflowDetailPage from './pages/WorkflowDetailPage'
-import WorkflowsPage from './pages/WorkflowsPage'
+import WorkspacePage from './pages/WorkspacePage'
+import { CanvasNavigatorContext, useCanvasNavigator } from './contexts/CanvasNavigatorContext'
+import { WorkspaceSelectionProvider, useWorkspaceSelection } from './contexts/WorkspaceSelectionContext'
+import RepositoryNavigator from './components/navigation/RepositoryNavigator'
 
 type RadicleStatus = {
   reachable: boolean
@@ -18,25 +15,25 @@ type RadicleStatus = {
   message?: string | null
 }
 
-const RedirectHome = () => <Navigate href="/repositories" />
-
-const AppShell = (props: RouteSectionProps) => (
-  <main class="mx-auto flex min-h-screen w-full max-w-[1200px] flex-col gap-6 px-4 pb-12 pt-8 sm:px-6 lg:px-10">
-    <header class="flex flex-wrap items-center justify-between gap-4 rounded-[1.25rem] border border-[var(--border)] bg-[var(--bg-card)] px-6 py-4 shadow-[0_18px_30px_rgba(15,23,42,0.08)]">
-      <div>
-        <p class="text-xs uppercase tracking-[0.35em] text-[var(--text-muted)]">Hyperagent</p>
-        <h1 class="text-2xl font-semibold text-[var(--text)]">Operations console</h1>
-      </div>
-      <nav class="flex flex-wrap items-center gap-3 text-sm font-semibold">
-        <NavLink href="/repositories">Repositories</NavLink>
-        <NavLink href="/workflows">Workflows</NavLink>
-        <NavLink href="/terminal">Terminal</NavLink>
-        <NavLink href="/sessions">Sessions</NavLink>
-      </nav>
-    </header>
-    <section class="flex-1">{props.children}</section>
-  </main>
-)
+const AppShell = (props: RouteSectionProps) => {
+  const [navigatorOpen, setNavigatorOpen] = createSignal(false)
+  const navigatorController = {
+    isOpen: navigatorOpen,
+    open: () => setNavigatorOpen(true),
+    close: () => setNavigatorOpen(false),
+    toggle: () => setNavigatorOpen((value) => !value)
+  }
+  return (
+    <WorkspaceSelectionProvider>
+      <CanvasNavigatorContext.Provider value={navigatorController}>
+        <main class="relative flex min-h-screen w-full flex-col bg-[var(--bg-app)]">
+          <section class="relative flex-1 overflow-auto">{props.children}</section>
+          <CanvasChrome />
+        </main>
+      </CanvasNavigatorContext.Provider>
+    </WorkspaceSelectionProvider>
+  )
+}
 
 export default function App() {
   const [radicleStatus, { refetch: refetchRadicleStatus }] = createResource(fetchRadicleStatus)
@@ -49,34 +46,119 @@ export default function App() {
   return (
     <Show when={isReady()} fallback={<RadicleGate status={radicleStatus()} onRetry={() => refetchRadicleStatus()} />}>
       <Router root={AppShell}>
-        <Route path="/" component={RedirectHome} />
-        <Route path="/repositories" component={RepositoriesPage} />
-        <Route path="/repositories/:projectId/graph" component={RepositoryGraphPage} />
-        <Route path="/repositories/:projectId" component={ProjectRepositoriesPage} />
-        <Route path="/workflows" component={WorkflowsPage} />
-        <Route path="/workflows/:workflowId" component={WorkflowDetailPage} />
-        <Route path="/terminal" component={TerminalPage} />
-        <Route path="/sessions" component={SessionsPage} />
+        <Route path="/" component={WorkspacePage} />
       </Router>
     </Show>
   )
 }
 
-type NavLinkProps = {
-  href: string
-  children: string
+function CanvasChrome() {
+  const navigator = useCanvasNavigator()
+  const selection = useWorkspaceSelection()
+  const [opsMenuOpen, setOpsMenuOpen] = createSignal(false)
+  const systemActions = [
+    {
+      label: 'Launch workflow',
+      description: 'Open the workflow launcher modal',
+      onSelect: () => {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('workspace:launch-workflow'))
+        }
+      }
+    },
+    {
+      label: 'Refresh workspace list',
+      description: 'Fetch the latest repository metadata',
+      onSelect: () => {
+        void selection.refetchWorkspaces()
+      }
+    }
+  ]
+
+  const stopCanvasPropagation = (event: PointerEvent) => event.stopPropagation()
+  const toggleWorkspaceMenu = () => (navigator.isOpen() ? navigator.close() : navigator.open())
+
+  return (
+    <div class="absolute inset-x-0 top-0 flex justify-between px-6 py-6" onPointerDown={stopCanvasPropagation}>
+      <div class="pointer-events-auto flex flex-col gap-3">
+        <button
+          type="button"
+          class="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-card)]/90 px-4 py-2 text-sm font-semibold text-[var(--text)] shadow-[0_18px_30px_rgba(15,23,42,0.12)]"
+          onClick={toggleWorkspaceMenu}
+        >
+          <span class="text-lg">☰</span>
+          Workspace
+        </button>
+        <Show when={navigator.isOpen()}>
+          <ChromePanel title="Workspace" onNavigate={() => navigator.close()} widthClass="w-[36rem]">
+            <div class="max-h-[70vh] overflow-y-auto pr-1">
+              <RepositoryNavigator />
+            </div>
+          </ChromePanel>
+        </Show>
+      </div>
+      <div class="pointer-events-auto flex flex-col items-end gap-3">
+        <button
+          type="button"
+          class="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-card)]/90 px-4 py-2 text-sm font-semibold text-[var(--text)] shadow-[0_18px_30px_rgba(15,23,42,0.12)]"
+          onClick={() => setOpsMenuOpen((value) => !value)}
+        >
+          Systems
+          <span class="text-lg">☰</span>
+        </button>
+        <Show when={opsMenuOpen()}>
+          <ChromePanel
+            title="Systems"
+            actions={systemActions}
+            alignment="end"
+            onNavigate={() => setOpsMenuOpen(false)}
+          />
+        </Show>
+      </div>
+    </div>
+  )
 }
 
-function NavLink(props: NavLinkProps) {
+type ChromePanelProps = {
+  title: string
+  actions?: { label: string; description?: string; onSelect: () => void }[]
+  alignment?: 'start' | 'end'
+  onNavigate?: () => void
+  children?: JSX.Element
+  widthClass?: string
+}
+
+function ChromePanel(props: ChromePanelProps) {
+  const panelWidth = props.widthClass ?? 'w-72'
   return (
-    <A
-      href={props.href}
-      class="rounded-xl px-3 py-1.5 text-[var(--text-muted)]"
-      activeClass="bg-blue-600 text-white"
-      end
+    <div
+      class={`flex ${panelWidth} flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)]/95 p-4 text-[var(--text)] shadow-[0_18px_30px_rgba(15,23,42,0.15)] backdrop-blur`}
+      classList={{ 'self-end text-right': props.alignment === 'end' }}
     >
-      {props.children}
-    </A>
+      <p class="text-xs uppercase tracking-[0.35em] text-[var(--text-muted)]">{props.title}</p>
+      <Show
+        when={props.actions?.length}
+        fallback={<div class="rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-left text-[var(--text)]">{props.children}</div>}
+      >
+        <For each={props.actions}>
+          {(action) => (
+            <button
+              type="button"
+              class="rounded-xl border border-transparent px-3 py-2 text-left text-[var(--text)] transition hover:border-[var(--border)]"
+              onClick={() => {
+                action.onSelect()
+                props.onNavigate?.()
+              }}
+            >
+              <p class="text-sm font-semibold">{action.label}</p>
+              <Show when={action.description}>
+                {(desc) => <p class="text-xs text-[var(--text-muted)]">{desc()}</p>}
+              </Show>
+            </button>
+          )}
+        </For>
+      </Show>
+    </div>
   )
 }
 
