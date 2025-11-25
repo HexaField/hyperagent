@@ -1,5 +1,9 @@
+import fs from 'fs/promises'
+import os from 'os'
+import path from 'path'
 import { describe, expect, it } from 'vitest'
 import { createPersistence, type Persistence } from './database'
+import type { ProjectRecord } from './projects'
 import { createWorkflowRuntime, type AgentExecutor, type PlannerRun } from './workflows'
 import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from './workflowRunnerGateway'
 
@@ -49,12 +53,27 @@ describe('workflow runtime docker runner integration', () => {
     })
   }
 
+  const createProjectFixture = async (persistence: Persistence, name: string): Promise<{
+    project: ProjectRecord
+    repoPath: string
+  }> => {
+    const repoPath = await fs.mkdtemp(path.join(os.tmpdir(), 'workflow-runtime-'))
+    await fs.mkdir(path.join(repoPath, '.hyperagent'), { recursive: true })
+    persistence.radicleRegistrations.upsert({
+      repositoryPath: repoPath,
+      name,
+      defaultBranch: 'main'
+    })
+    const project = persistence.projects.getByRepositoryPath(repoPath)
+    if (!project) {
+      throw new Error('Failed to register project fixture')
+    }
+    return { project, repoPath }
+  }
+
   it('enqueues workflow steps through the runner gateway and executes via callback', async () => {
     const persistence = createPersistence({ file: ':memory:' })
-    const project = persistence.projects.upsert({
-      name: 'demo',
-      repositoryPath: '/tmp/demo-repo'
-    })
+    const { project, repoPath } = await createProjectFixture(persistence, 'demo')
     const runnerCalls: WorkflowRunnerPayload[] = []
     const runnerGateway: WorkflowRunnerGateway = {
       enqueue: async (payload) => {
@@ -77,16 +96,14 @@ describe('workflow runtime docker runner integration', () => {
       expect(detail?.steps[0].result?.summary).toBe('completed')
     } finally {
       await runtime.stopWorker()
+      await fs.rm(repoPath, { recursive: true, force: true })
       persistence.db.close()
     }
   })
 
   it('marks workflow and agent run as failed when agent outcome is not approved', async () => {
     const persistence = createPersistence({ file: ':memory:' })
-    const project = persistence.projects.upsert({
-      name: 'demo',
-      repositoryPath: '/tmp/demo-repo'
-    })
+    const { project, repoPath } = await createProjectFixture(persistence, 'demo')
     const runnerCalls: WorkflowRunnerPayload[] = []
     const runnerGateway: WorkflowRunnerGateway = {
       enqueue: async (payload) => {
@@ -118,16 +135,14 @@ describe('workflow runtime docker runner integration', () => {
       expect(runs[0]?.status).toBe('failed')
     } finally {
       await runtime.stopWorker()
+      await fs.rm(repoPath, { recursive: true, force: true })
       persistence.db.close()
     }
   })
 
   it('rejects callbacks with mismatched runner instance ids', async () => {
     const persistence = createPersistence({ file: ':memory:' })
-    const project = persistence.projects.upsert({
-      name: 'demo',
-      repositoryPath: '/tmp/demo-repo'
-    })
+    const { project, repoPath } = await createProjectFixture(persistence, 'demo')
     const runnerGateway: WorkflowRunnerGateway = {
       enqueue: async () => {}
     }
@@ -147,6 +162,7 @@ describe('workflow runtime docker runner integration', () => {
       ).rejects.toThrow('Workflow runner token mismatch')
     } finally {
       await runtime.stopWorker()
+      await fs.rm(repoPath, { recursive: true, force: true })
       persistence.db.close()
     }
   })

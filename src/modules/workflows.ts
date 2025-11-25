@@ -474,7 +474,7 @@ export const workflowsPersistence: PersistenceModule<WorkflowsBindings> = {
     db.exec(`
       CREATE TABLE IF NOT EXISTS workflows (
         id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL REFERENCES projects(id),
+        project_id TEXT NOT NULL,
         planner_run_id TEXT,
         kind TEXT NOT NULL,
         status TEXT NOT NULL,

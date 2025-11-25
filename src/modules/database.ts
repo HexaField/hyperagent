@@ -17,13 +17,7 @@ import {
   type CodeServerSessionsBindings,
   type CodeServerSessionsRepository
 } from './codeServer'
-import {
-  projectsPersistence,
-  type ProjectInput,
-  type ProjectRecord,
-  type ProjectsBindings,
-  type ProjectsRepository
-} from './projects'
+import { createProjectsRepository, type ProjectRecord, type ProjectsRepository } from './projects'
 import {
   radicleRegistrationsPersistence,
   type RadicleRegistrationInput,
@@ -101,7 +95,6 @@ function ensureParentDir(file: string): void {
 }
 
 const defaultModules: readonly PersistenceModule<Record<string, unknown>>[] = [
-  projectsPersistence,
   workflowsPersistence,
   agentRunsPersistence,
   codeServerSessionsPersistence,
@@ -110,15 +103,14 @@ const defaultModules: readonly PersistenceModule<Record<string, unknown>>[] = [
   reviewPersistence
 ]
 
-type DefaultBindings = ProjectsBindings &
-  WorkflowsBindings &
+type DefaultBindings = WorkflowsBindings &
   AgentRunsBindings &
   CodeServerSessionsBindings &
   RadicleRegistrationsBindings &
   TerminalSessionsBindings &
   ReviewBindings
 
-export type Persistence = { db: Database.Database } & DefaultBindings
+export type Persistence = { db: Database.Database; projects: ProjectsRepository } & DefaultBindings
 
 export function createPersistence(options: PersistenceOptions = {}): Persistence {
   const db = createDatabase(options)
@@ -128,7 +120,8 @@ export function createPersistence(options: PersistenceOptions = {}): Persistence
     (acc, module) => Object.assign(acc, module.createBindings(ctx)),
     {} as DefaultBindings
   )
-  return { db, ...bindings }
+  const projects = createProjectsRepository({ radicleRegistrations: bindings.radicleRegistrations })
+  return { db, projects, ...bindings }
 }
 
 export type {
@@ -140,7 +133,6 @@ export type {
   CodeServerSessionRecord,
   CodeServerSessionStatus,
   CodeServerSessionsRepository,
-  ProjectInput,
   ProjectRecord,
   ProjectsRepository,
   RadicleRegistrationInput,

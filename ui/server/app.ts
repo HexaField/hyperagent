@@ -529,6 +529,43 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       throw new Error('Project repository path is not a directory')
     }
   }
+
+  const initializeWorkspaceRepository = async (dirPath: string, defaultBranch: string): Promise<string> => {
+    const resolved = path.resolve(dirPath)
+    await fs.mkdir(resolved, { recursive: true })
+    const stats = await fs.stat(resolved)
+    if (!stats.isDirectory()) {
+      throw new Error('Workspace path is not a directory')
+    }
+    let gitExists = true
+    try {
+      await fs.access(path.join(resolved, '.git'))
+    } catch {
+      gitExists = false
+    }
+    if (!gitExists) {
+      await runGitCommand(['init'], resolved)
+      const branch = defaultBranch.trim()
+      if (branch.length) {
+        const ref = `refs/heads/${branch}`
+        try {
+          await runGitCommand(['symbolic-ref', 'HEAD', ref], resolved)
+        } catch (symbolicError) {
+          try {
+            await runGitCommand(['checkout', '-B', branch], resolved)
+          } catch (checkoutError) {
+            const reason = checkoutError instanceof Error
+              ? checkoutError.message
+              : symbolicError instanceof Error
+                ? symbolicError.message
+                : 'unknown failure'
+            throw new Error(`Failed to set default branch "${branch}": ${reason}`)
+          }
+        }
+      }
+    }
+    return resolved
+  }
   const terminalWsServer: WebSocketServerType = new WebSocketServerCtor({ noServer: true })
   const DEFAULT_TERMINAL_USER_ID = process.env.TERMINAL_DEFAULT_USER_ID ?? 'anonymous'
   const USER_ID_HEADER_KEYS = ['x-user-id', 'x-user', 'x-hyperagent-user'] as const
@@ -637,12 +674,15 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   }
 
   function ensureEphemeralProject(sessionId: string, sessionDir: string): ProjectRecord {
-    return persistence.projects.upsert({
+    return {
       id: `session-${sessionId}`,
       name: `Session ${sessionId}`,
+      description: null,
       repositoryPath: sessionDir,
-      defaultBranch: 'main'
-    })
+      repositoryProvider: 'ephemeral',
+      defaultBranch: 'main',
+      createdAt: new Date().toISOString()
+    }
   }
 
   function normalizePlannerTasks(raw: unknown): PlannerTask[] {
@@ -1579,18 +1619,52 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 
-  const createProjectHandler: RequestHandler = (req, res) => {
-    const { name, repositoryPath, description, defaultBranch } = req.body ?? {}
+  const createProjectHandler: RequestHandler = async (req, res) => {
+    const { name, repositoryPath, description, defaultBranch, visibility } = req.body ?? {}
     if (!name || typeof name !== 'string' || !repositoryPath || typeof repositoryPath !== 'string') {
       res.status(400).json({ error: 'name and repositoryPath are required' })
       return
     }
-    const project = persistence.projects.upsert({
-      name: name.trim(),
-      repositoryPath: repositoryPath.trim(),
-      description: typeof description === 'string' ? description.trim() : undefined,
-      defaultBranch: typeof defaultBranch === 'string' && defaultBranch.trim().length ? defaultBranch.trim() : 'main'
-    })
+    const normalizedName = name.trim()
+    const normalizedBranch = typeof defaultBranch === 'string' && defaultBranch.trim().length ? defaultBranch.trim() : 'main'
+    const normalizedDescription = typeof description === 'string' && description.trim().length ? description.trim() : undefined
+    const normalizedPath = repositoryPath.trim()
+    const normalizedVisibility = visibility === 'public' || visibility === 'private' ? visibility : 'private'
+    let resolvedPath: string
+    try {
+      resolvedPath = await initializeWorkspaceRepository(normalizedPath, normalizedBranch)
+      await fs.mkdir(path.join(resolvedPath, '.hyperagent'), { recursive: true })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to initialize workspace directory'
+      res.status(500).json({ error: message })
+      return
+    }
+
+    try {
+      const registration = await radicleModule.registerRepository({
+        repositoryPath: resolvedPath,
+        name: normalizedName,
+        description: normalizedDescription,
+        visibility: normalizedVisibility
+      })
+      persistence.radicleRegistrations.upsert({
+        repositoryPath: resolvedPath,
+        name: normalizedName,
+        description: normalizedDescription ?? null,
+        visibility: normalizedVisibility,
+        defaultBranch: registration.defaultBranch ?? normalizedBranch
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to register repository with Radicle'
+      res.status(500).json({ error: message })
+      return
+    }
+
+    const project = persistence.projects.getByRepositoryPath(resolvedPath)
+    if (!project) {
+      res.status(500).json({ error: 'Workspace is not eligible for Hyperagent (missing .hyperagent folder)' })
+      return
+    }
     res.status(201).json(project)
   }
 

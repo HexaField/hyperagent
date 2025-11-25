@@ -867,6 +867,28 @@ describe('createServerApp', () => {
     }
   })
 
+  it('initializes workspace directories and git repositories for new projects', async () => {
+    const harness = await createIntegrationHarness()
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-new-workspace-'))
+    const repoPath = path.join(workspaceRoot, 'fresh-project')
+    try {
+      const projectResponse = await fetch(`${harness.baseUrl}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Fresh Project', repositoryPath: repoPath, defaultBranch: 'trunk' })
+      })
+      expect(projectResponse.status).toBe(201)
+      const stats = await fs.stat(repoPath)
+      expect(stats.isDirectory()).toBe(true)
+      await fs.access(path.join(repoPath, '.git'))
+      const branch = execFileSync('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: repoPath }).toString().trim()
+      expect(branch).toBe('trunk')
+    } finally {
+      await harness.close()
+      await fs.rm(workspaceRoot, { recursive: true, force: true })
+    }
+  })
+
   it('manages projects and workflows via REST APIs', { timeout: 15000 }, async () => {
     const harness = await createIntegrationHarness()
     try {
@@ -1160,10 +1182,14 @@ describe('opencode session endpoints', () => {
   })
 
   it('proxies runner lifecycle operations and session detail lookups', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-opencode-workspace-'))
+    const workspacePath = path.join(workspaceRoot, 'repo-alpha')
+    await fs.mkdir(workspacePath, { recursive: true })
+
     const summary: OpencodeSessionSummary = {
       id: 'ses_alpha',
       title: 'Alpha Session',
-      workspacePath: '/workspace/repo-alpha',
+      workspacePath,
       projectId: 'hash-alpha',
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
@@ -1177,31 +1203,34 @@ describe('opencode session endpoints', () => {
     const runnerStub = createFakeOpencodeRunnerStub()
     const harness = await createIntegrationHarness({ opencodeStorage: storageStub, opencodeRunner: runnerStub })
 
-    const startRes = await fetch(`${harness.baseUrl}/api/opencode/sessions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspacePath: summary.workspacePath, prompt: 'Ship it' })
-    })
-    expect(startRes.status).toBe(202)
-    expect(runnerStub.startRun).toHaveBeenCalledWith(
-      expect.objectContaining({ workspacePath: summary.workspacePath, prompt: 'Ship it' })
-    )
+    try {
+      const startRes = await fetch(`${harness.baseUrl}/api/opencode/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspacePath: summary.workspacePath, prompt: 'Ship it' })
+      })
+      expect(startRes.status).toBe(202)
+      expect(runnerStub.startRun).toHaveBeenCalledWith(
+        expect.objectContaining({ workspacePath: summary.workspacePath, prompt: 'Ship it' })
+      )
 
-    const detailRes = await fetch(`${harness.baseUrl}/api/opencode/sessions/${summary.id}`)
-    expect(detailRes.status).toBe(200)
-    const detailPayload = (await detailRes.json()) as OpencodeSessionDetail
-    expect(detailPayload.session.id).toBe(summary.id)
+      const detailRes = await fetch(`${harness.baseUrl}/api/opencode/sessions/${summary.id}`)
+      expect(detailRes.status).toBe(200)
+      const detailPayload = (await detailRes.json()) as OpencodeSessionDetail
+      expect(detailPayload.session.id).toBe(summary.id)
 
-    const runsRes = await fetch(`${harness.baseUrl}/api/opencode/runs`)
-    expect(runsRes.status).toBe(200)
-    const runsPayload = (await runsRes.json()) as { runs: unknown[] }
-    expect(Array.isArray(runsPayload.runs)).toBe(true)
+      const runsRes = await fetch(`${harness.baseUrl}/api/opencode/runs`)
+      expect(runsRes.status).toBe(200)
+      const runsPayload = (await runsRes.json()) as { runs: unknown[] }
+      expect(Array.isArray(runsPayload.runs)).toBe(true)
 
-    const killRes = await fetch(`${harness.baseUrl}/api/opencode/sessions/${summary.id}/kill`, { method: 'POST' })
-    expect(killRes.status).toBe(200)
-    expect(runnerStub.killRun).toHaveBeenCalledWith(summary.id)
-
-    await harness.close()
+      const killRes = await fetch(`${harness.baseUrl}/api/opencode/sessions/${summary.id}/kill`, { method: 'POST' })
+      expect(killRes.status).toBe(200)
+      expect(runnerStub.killRun).toHaveBeenCalledWith(summary.id)
+    } finally {
+      await harness.close()
+      await fs.rm(workspaceRoot, { recursive: true, force: true })
+    }
   })
 })
 

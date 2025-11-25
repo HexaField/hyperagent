@@ -21,7 +21,6 @@ import { useCanvasNavigator, type CanvasNavigatorController } from '../contexts/
 import { useWorkspaceSelection, type WorkspaceRecord } from '../contexts/WorkspaceSelectionContext'
 import { WIDGET_TEMPLATES, type WidgetAddEventDetail, type WidgetTemplateId } from '../constants/widgetTemplates'
 
-const TEMPLATE_ID_SET = new Set<WidgetTemplateId>(WIDGET_TEMPLATES.map((template) => template.id))
 import { fetchJson } from '../lib/http'
 import {
   closeTerminalSession,
@@ -30,6 +29,13 @@ import {
   listTerminalSessions,
   type TerminalSession
 } from '../lib/terminal'
+
+const TEMPLATE_ID_SET = new Set<WidgetTemplateId>(WIDGET_TEMPLATES.map((template) => template.id))
+
+type WidgetInstance = {
+  templateId: WidgetTemplateId
+  instanceId: string
+}
 
 export type WorkflowRecord = {
   id: string
@@ -66,69 +72,34 @@ export default function WorkspacePage() {
   const selection = useWorkspaceSelection()
   const navigator = useCanvasNavigator()
   const activeWorkspace = selection.currentWorkspace
-  const [extraWidgets, setExtraWidgets] = createSignal<{ templateId: WidgetTemplateId; instanceId: string }[]>([])
+  const [widgetInstances, setWidgetInstances] = createSignal<WidgetInstance[]>([])
 
   const widgets = createMemo<CanvasWidgetConfig[]>(() => {
     const workspace = activeWorkspace()
     if (!workspace) return []
-    const baseWidgets = WIDGET_TEMPLATES.map((template) =>
-      createWidgetConfig({
-        templateId: template.id,
-        workspace,
-        instanceId: template.id,
-        offsetIndex: 0,
-        navigator,
-        removable: true
-      })
-    )
     const offsetTracker = new Map<WidgetTemplateId, number>()
-    WIDGET_TEMPLATES.forEach((template) => offsetTracker.set(template.id, 0))
-    const dynamicWidgets = extraWidgets().map((instance) => {
+    return widgetInstances().map((instance) => {
       const currentOffset = offsetTracker.get(instance.templateId) ?? 0
-      const nextOffset = currentOffset + 1
-      offsetTracker.set(instance.templateId, nextOffset)
+      offsetTracker.set(instance.templateId, currentOffset + 1)
       return createWidgetConfig({
         templateId: instance.templateId,
         workspace,
         instanceId: instance.instanceId,
-        offsetIndex: nextOffset,
+        offsetIndex: currentOffset,
         navigator,
         removable: true
       })
     })
-    return [...baseWidgets, ...dynamicWidgets]
   })
-
-  const widgetStorageKey = (workspaceId: string) => `workspace:${workspaceId}:extra-widgets`
 
   createEffect(() => {
     const workspace = activeWorkspace()
     if (!workspace) return
-    if (typeof window === 'undefined') return
-    try {
-      const raw = window.localStorage.getItem(widgetStorageKey(workspace.id))
-      if (!raw) {
-        setExtraWidgets([])
-        return
-      }
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) {
-        const filtered = parsed.filter(
-          (entry): entry is { templateId: WidgetTemplateId; instanceId: string } =>
-            Boolean(
-              entry &&
-                typeof entry.instanceId === 'string' &&
-                typeof entry.templateId === 'string' &&
-                TEMPLATE_ID_SET.has(entry.templateId as WidgetTemplateId)
-            )
-        )
-        setExtraWidgets(filtered)
-      } else {
-        setExtraWidgets([])
-      }
-    } catch {
-      setExtraWidgets([])
+    if (typeof window === 'undefined') {
+      setWidgetInstances(createDefaultWidgetInstances())
+      return
     }
+    setWidgetInstances(loadWorkspaceWidgetInstances(workspace.id))
   })
 
   createEffect(() => {
@@ -136,7 +107,7 @@ export default function WorkspacePage() {
     if (!workspace) return
     if (typeof window === 'undefined') return
     try {
-      window.localStorage.setItem(widgetStorageKey(workspace.id), JSON.stringify(extraWidgets()))
+      window.localStorage.setItem(widgetInstanceStorageKey(workspace.id), JSON.stringify(widgetInstances()))
     } catch {
       // ignore storage errors
     }
@@ -151,7 +122,7 @@ export default function WorkspacePage() {
       const workspace = activeWorkspace()
       if (!workspace) return
       const instanceId = generateWidgetInstanceId(detail.templateId)
-      setExtraWidgets((prev) => [...prev, { templateId: detail.templateId, instanceId }])
+      setWidgetInstances((prev) => [...prev, { templateId: detail.templateId, instanceId }])
     }
     window.addEventListener('workspace:add-widget', handleAddWidget)
     onCleanup(() => window.removeEventListener('workspace:add-widget', handleAddWidget))
@@ -166,7 +137,7 @@ export default function WorkspacePage() {
               storageKey={`workspace:${workspace().id}`}
               widgets={widgets()}
               onRemoveWidget={(id) => {
-                setExtraWidgets((prev) => prev.filter((entry) => entry.instanceId !== id))
+                setWidgetInstances((prev) => prev.filter((entry) => entry.instanceId !== id))
               }}
             />
           )}
@@ -176,12 +147,80 @@ export default function WorkspacePage() {
   )
 }
 
+const widgetInstanceStorageKey = (workspaceId: string) => `workspace:${workspaceId}:widgets`
+const legacyExtraWidgetStorageKey = (workspaceId: string) => `workspace:${workspaceId}:extra-widgets`
+
 function offsetPosition(base: { x: number; y: number }, offsetIndex: number) {
   const step = 40
   return {
     x: base.x + step * offsetIndex,
     y: base.y + step * offsetIndex
   }
+}
+
+function createDefaultWidgetInstances(): WidgetInstance[] {
+  return WIDGET_TEMPLATES.map((template) => ({ templateId: template.id, instanceId: template.id }))
+}
+
+function parseWidgetInstanceList(value: unknown): WidgetInstance[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => {
+      if (
+        entry &&
+        typeof entry === 'object' &&
+        'instanceId' in entry &&
+        'templateId' in entry &&
+        typeof entry.instanceId === 'string' &&
+        typeof entry.templateId === 'string' &&
+        TEMPLATE_ID_SET.has(entry.templateId as WidgetTemplateId)
+      ) {
+        return {
+          templateId: entry.templateId as WidgetTemplateId,
+          instanceId: entry.instanceId
+        }
+      }
+      return null
+    })
+    .filter((entry): entry is WidgetInstance => Boolean(entry))
+}
+
+function loadLegacyExtraWidgets(workspaceId: string): WidgetInstance[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(legacyExtraWidgetStorageKey(workspaceId))
+    if (!raw) return []
+    const parsed = parseWidgetInstanceList(JSON.parse(raw))
+    return parsed
+  } catch {
+    return []
+  } finally {
+    try {
+      window.localStorage.removeItem(legacyExtraWidgetStorageKey(workspaceId))
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function loadWorkspaceWidgetInstances(workspaceId: string): WidgetInstance[] {
+  if (typeof window === 'undefined') return createDefaultWidgetInstances()
+  try {
+    const raw = window.localStorage.getItem(widgetInstanceStorageKey(workspaceId))
+    if (raw) {
+      const parsed = parseWidgetInstanceList(JSON.parse(raw))
+      if (parsed.length) return parsed
+    }
+    const legacyExtras = loadLegacyExtraWidgets(workspaceId)
+    if (legacyExtras.length) {
+      const combined = [...createDefaultWidgetInstances(), ...legacyExtras]
+      window.localStorage.setItem(widgetInstanceStorageKey(workspaceId), JSON.stringify(combined))
+      return combined
+    }
+  } catch {
+    // ignore and fall back below
+  }
+  return createDefaultWidgetInstances()
 }
 
 type CreateWidgetConfigOptions = {

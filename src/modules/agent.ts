@@ -415,7 +415,7 @@ export const agentRunsPersistence: PersistenceModule<AgentRunsBindings> = {
       CREATE TABLE IF NOT EXISTS agent_runs (
         id TEXT PRIMARY KEY,
         workflow_step_id TEXT REFERENCES workflow_steps(id),
-        project_id TEXT NOT NULL REFERENCES projects(id),
+          project_id TEXT NOT NULL,
         branch TEXT NOT NULL,
         type TEXT NOT NULL,
         status TEXT NOT NULL,
