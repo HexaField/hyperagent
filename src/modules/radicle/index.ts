@@ -1,3 +1,4 @@
+import fs from 'fs'
 import { spawn } from 'child_process'
 import path from 'path'
 import type { PersistenceContext, PersistenceModule, Timestamp } from '../database'
@@ -416,10 +417,11 @@ export const radicleRegistrationsPersistence: PersistenceModule<RadicleRegistrat
 }
 
 function createRadicleRegistrationsRepository(db: PersistenceContext['db']): RadicleRegistrationsRepository {
+  normalizeExistingRadicleRegistrations(db)
   return {
     upsert: (input) => {
       const now = new Date().toISOString()
-      const resolvedPath = path.resolve(input.repositoryPath)
+      const resolvedPath = canonicalizeRepositoryPath(input.repositoryPath)
       db.prepare(
         `INSERT INTO radicle_registrations (repository_path, name, description, visibility, default_branch, registered_at)
          VALUES (@repositoryPath, @name, @description, @visibility, @defaultBranch, @registeredAt)
@@ -456,4 +458,55 @@ function mapRadicleRegistration(row: any): RadicleRegistrationRecord {
     defaultBranch: row.default_branch ?? null,
     registeredAt: row.registered_at
   }
+}
+
+function canonicalizeRepositoryPath(repositoryPath: string): string {
+  const resolved = path.resolve(repositoryPath)
+  const real = resolveRealpath(resolved)
+  return real ?? resolved
+}
+
+function resolveRealpath(target: string): string | null {
+  try {
+    if (typeof fs.realpathSync.native === 'function') {
+      return fs.realpathSync.native(target)
+    }
+  } catch {
+    // ignore native realpath errors and fall back below
+  }
+  try {
+    return fs.realpathSync(target)
+  } catch {
+    return null
+  }
+}
+
+function normalizeExistingRadicleRegistrations(db: PersistenceContext['db']): void {
+  let rows: any[] = []
+  try {
+    rows = db.prepare('SELECT * FROM radicle_registrations ORDER BY registered_at DESC').all()
+  } catch {
+    return
+  }
+  if (!rows.length) return
+  const latestByPath = new Map<string, any>()
+  rows.forEach((row) => {
+    const canonicalPath = canonicalizeRepositoryPath(row.repository_path)
+    if (latestByPath.has(canonicalPath)) return
+    latestByPath.set(canonicalPath, {
+      ...row,
+      repository_path: canonicalPath
+    })
+  })
+  const insertStatement = db.prepare(`
+    INSERT INTO radicle_registrations (repository_path, name, description, visibility, default_branch, registered_at)
+    VALUES (@repository_path, @name, @description, @visibility, @default_branch, @registered_at)
+  `)
+  const reset = db.transaction(() => {
+    db.prepare('DELETE FROM radicle_registrations').run()
+    latestByPath.forEach((row) => {
+      insertStatement.run(row)
+    })
+  })
+  reset()
 }
