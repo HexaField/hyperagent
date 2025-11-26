@@ -2771,12 +2771,10 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         existing.messages
           .slice()
           .reverse()
-          .map((message) => (typeof message.modelId === 'string' ? message.modelId.trim() : ''))
+          .filter((message) => !!message.modelId && !!message.providerId)
+          .map((message) => `${message.providerId!.trim()}/${message.modelId!.trim()}`)
           .find((candidate) => candidate.length) ?? DEFAULT_OPENCODE_MODEL
-      const cliArgs = ['run', text, '--session', sessionId, '--format', 'json']
-      if (resolvedModel && resolvedModel.length) {
-        cliArgs.push('--model', resolvedModel)
-      }
+      const cliArgs = ['run', text, '-m', resolvedModel, '--format', 'json', '--session', sessionId]
       await opencodeCommandRunner(cliArgs, { cwd: existing.session.workspacePath })
       const updated = await opencodeStorage.getSession(sessionId)
       res.status(201).json(updated ?? existing)
