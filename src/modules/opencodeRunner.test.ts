@@ -6,7 +6,7 @@ import os from 'os'
 import path from 'path'
 import { PassThrough } from 'stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createOpencodeRunner } from './opencodeRunner'
+import { createOpencodeRunner, DEFAULT_OPENCODE_MODEL } from './opencodeRunner'
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough()
@@ -36,12 +36,19 @@ describe('createOpencodeRunner', () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'opencode-runner-ws-'))
     const metadataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opencode-runner-meta-'))
     const child = new FakeChild()
-    const spawnFn = vi
-      .fn((command: string) => child as unknown as ChildProcessWithoutNullStreams)
-      .mockName('spawn') as unknown as typeof realSpawn
+    const spawnMock = vi
+      .fn((..._args: any[]) => child as unknown as ChildProcessWithoutNullStreams)
+      .mockName('spawn')
+    const spawnFn = spawnMock as unknown as typeof realSpawn
 
     const runner = createOpencodeRunner({ metadataDir, logsDir: path.join(metadataDir, 'logs'), spawnFn })
     const startPromise = runner.startRun({ workspacePath: workspace, prompt: 'Run tests' })
+
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1))
+    const call = spawnMock.mock.calls[0]
+    expect(call?.[0]).toBe('opencode')
+    expect(call?.[1]).toEqual(expect.arrayContaining(['--model', DEFAULT_OPENCODE_MODEL]))
+    expect(call?.[2]).toMatchObject({ cwd: workspace })
 
     child.stdout.emit('data', Buffer.from('{"sessionID":"ses_test"}'))
     child.emit('exit', 0, null)
@@ -49,6 +56,7 @@ describe('createOpencodeRunner', () => {
     const record = await startPromise
     expect(record.sessionId).toBe('ses_test')
     expect(record.status).toBe('running')
+    expect(record.model).toBe(DEFAULT_OPENCODE_MODEL)
 
     const runs = await runner.listRuns()
     expect(runs).toHaveLength(1)
@@ -59,13 +67,17 @@ describe('createOpencodeRunner', () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'opencode-runner-ws-'))
     const metadataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opencode-runner-meta-'))
     const child = new FakeChild()
-    const spawnFn = vi
-      .fn((command: string) => child as unknown as ChildProcessWithoutNullStreams)
-      .mockName('spawn') as unknown as typeof realSpawn
+    const spawnMock = vi
+      .fn((..._args: any[]) => child as unknown as ChildProcessWithoutNullStreams)
+      .mockName('spawn')
+    const spawnFn = spawnMock as unknown as typeof realSpawn
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => undefined as any)
 
     const runner = createOpencodeRunner({ metadataDir, logsDir: path.join(metadataDir, 'logs'), spawnFn })
     const startPromise = runner.startRun({ workspacePath: workspace, prompt: 'Refactor' })
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1))
+    const call = spawnMock.mock.calls[0]
+    expect(call?.[1]).toEqual(expect.arrayContaining(['--model', DEFAULT_OPENCODE_MODEL]))
     child.stdout.emit('data', Buffer.from('{"sessionID":"ses_kill"}'))
     await startPromise
 

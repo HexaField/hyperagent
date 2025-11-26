@@ -8,6 +8,8 @@ import {
 import os from 'os'
 import path from 'path'
 
+export const DEFAULT_OPENCODE_MODEL = 'github-copilot/gpt-5-mini'
+
 export type OpencodeRunStatus = 'starting' | 'running' | 'exited' | 'failed' | 'terminated'
 
 export type OpencodeRunRecord = {
@@ -68,8 +70,9 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
   const startRun = async (input: StartRunInput): Promise<OpencodeRunRecord> => {
     await ensureReady()
     await assertWorkspaceExists(input.workspacePath)
+    const resolvedModel = resolveModel(input.model)
     const env = { ...process.env }
-    const args = buildRunArgs(input)
+    const args = buildRunArgs({ ...input, model: resolvedModel })
     const child = spawnFn('opencode', args, {
       cwd: input.workspacePath,
       detached: true,
@@ -108,7 +111,7 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
             workspacePath: input.workspacePath,
             prompt: input.prompt,
             title: input.title?.trim() || null,
-            model: input.model?.trim() || null,
+            model: resolvedModel,
             logFile,
             startedAt,
             updatedAt: startedAt,
@@ -160,7 +163,7 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
                 workspacePath: input.workspacePath,
                 prompt: input.prompt,
                 title: input.title?.trim() || null,
-                model: input.model?.trim() || null,
+                model: resolvedModel,
                 logFile,
                 startedAt,
                 updatedAt: new Date().toISOString(),
@@ -235,10 +238,19 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
     if (input.title?.trim()) {
       args.push('--title', input.title.trim())
     }
-    if (input.model?.trim()) {
-      args.push('--model', input.model.trim())
+    const model = resolveModel(input.model)
+    if (model) {
+      args.push('--model', model)
     }
     return args
+  }
+
+  function resolveModel(candidate?: string | null): string {
+    if (typeof candidate !== 'string') {
+      return DEFAULT_OPENCODE_MODEL
+    }
+    const trimmed = candidate.trim()
+    return trimmed.length ? trimmed : DEFAULT_OPENCODE_MODEL
   }
 
   function createJsonAccumulator(onObject: (event: any) => void): JsonAccumulator {

@@ -27,6 +27,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@github/copilot": "^0.0.365",
     "@solidjs/router": "^0.15.4",
     "@solidjs/testing-library": "^0.8.10",
     "@xterm/addon-fit": "^0.10.0",

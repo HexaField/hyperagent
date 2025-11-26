@@ -13,6 +13,7 @@ import {
 } from '../lib/opencode'
 
 const REFRESH_INTERVAL_MS = 4000
+const OPENCODE_MODEL = 'github-copilot/gpt-5-mini'
 type SessionState = 'running' | 'waiting' | 'completed' | 'failed' | 'terminated'
 
 type SessionRow = OpencodeSessionSummary & {
@@ -137,7 +138,12 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     setSubmitting(true)
     setError(null)
     try {
-      const run = await startOpencodeRun({ workspacePath, prompt: runPrompt, title: title().trim() || undefined })
+      const run = await startOpencodeRun({
+        workspacePath,
+        prompt: runPrompt,
+        title: title().trim() || undefined,
+        model: OPENCODE_MODEL
+      })
       setPrompt('')
       setTitle('')
       await Promise.all([refetchSessions(), refetchRuns()])

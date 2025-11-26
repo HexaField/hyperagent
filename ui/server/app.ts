@@ -80,7 +80,7 @@ import {
 } from '../../src/modules/database'
 import { listBranchCommits, listGitBranches } from '../../src/modules/git'
 import type { Provider } from '../../src/modules/llm'
-import { createOpencodeRunner, type OpencodeRunner } from '../../src/modules/opencodeRunner'
+import { createOpencodeRunner, DEFAULT_OPENCODE_MODEL, type OpencodeRunner } from '../../src/modules/opencodeRunner'
 import { createOpencodeStorage, type OpencodeStorage } from '../../src/modules/opencodeStorage'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import { createDiffModule } from '../../src/modules/review/diff'
@@ -1352,7 +1352,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   }
 
   const startOpencodeSessionHandler: RequestHandler = async (req, res) => {
-    const { workspacePath, prompt, title, model } = req.body ?? {}
+    const { workspacePath, prompt, title } = req.body ?? {}
     if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
       res.status(400).json({ error: 'workspacePath is required' })
       return
@@ -1374,7 +1374,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         workspacePath: normalizedWorkspace,
         prompt: prompt.trim(),
         title: typeof title === 'string' ? title : undefined,
-        model: typeof model === 'string' ? model : undefined
+        model: DEFAULT_OPENCODE_MODEL
       })
       res.status(202).json({ run })
     } catch (error) {
@@ -1754,6 +1754,94 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     } catch (error) {
       const text = error instanceof Error ? error.message : 'Failed to commit changes'
       res.status(500).json({ error: text })
+    }
+  }
+
+  const generateCommitMessageHandler: RequestHandler = async (req, res) => {
+    const project = getProjectOr404(req.params.projectId, res)
+    if (!project) return
+
+    try {
+      // Build the prompt for GitHub Copilot
+      let prompt = 'Generate a concise git commit message following conventional commit format (type: description). '
+
+      // Get git diff to provide context
+      let diffContext = ''
+      try {
+        // Try to get staged diff first, then unstaged if no staged changes
+        diffContext = await runGitCommand(['diff', '--staged'], project.repositoryPath)
+        if (!diffContext.trim()) {
+          diffContext = await runGitCommand(['diff'], project.repositoryPath)
+        }
+      } catch {
+        // If git commands fail, continue without diff context
+      }
+
+      if (diffContext.trim()) {
+        prompt += `Here are the changes:\n\n${diffContext}\n\n`
+      } else {
+        prompt += 'Analyze the repository changes and generate an appropriate commit message. '
+      }
+
+      prompt += 'Only return the commit message, nothing else.'
+
+      // Call GitHub Copilot CLI
+      const { spawn } = await import('child_process')
+      const result = await new Promise<string>((resolve, reject) => {
+        const args = [
+          'copilot',
+          '-p',
+          prompt,
+          '--add-dir',
+          project.repositoryPath,
+          '--allow-tool',
+          'shell(git:status)',
+          '--allow-tool',
+          'shell(git:diff)',
+          '--allow-tool',
+          'shell(git:diff --staged)',
+          '--silent'
+        ]
+
+        const child = spawn('npx', args, {
+          cwd: project.repositoryPath,
+          stdio: ['pipe', 'pipe', 'pipe']
+        })
+
+        let stdout = ''
+        let stderr = ''
+
+        child.stdout?.on('data', (data) => {
+          stdout += data.toString()
+        })
+
+        child.stderr?.on('data', (data) => {
+          stderr += data.toString()
+        })
+
+        child.on('error', (error) => {
+          reject(new Error(`Failed to spawn copilot: ${error.message}`))
+        })
+
+        child.on('close', (code) => {
+          if (code === 0) {
+            const message = stdout.trim()
+            if (message) {
+              resolve(message)
+            } else {
+              reject(new Error('No commit message generated'))
+            }
+          } else {
+            const errorMsg = stderr.trim() || `copilot exited with code ${code}`
+            reject(new Error(`Failed to generate commit message: ${errorMsg}`))
+          }
+        })
+      })
+
+      res.json({ commitMessage: result })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to generate commit message'
+      res.status(500).json({ error: message })
     }
   }
 
@@ -2572,6 +2660,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   app.post('/api/projects/:projectId/git/stage', gitStageHandler)
   app.post('/api/projects/:projectId/git/discard', gitDiscardHandler)
   app.post('/api/projects/:projectId/git/commit', gitCommitHandler)
+  app.post('/api/projects/:projectId/git/generate-commit-message', generateCommitMessageHandler)
   app.post('/api/projects/:projectId/git/checkout', gitCheckoutHandler)
   app.post('/api/projects/:projectId/git/stash', gitStashHandler)
   app.post('/api/projects/:projectId/git/unstash', gitUnstashHandler)

@@ -61,3 +61,14 @@ export async function pushGitRemote(projectId: string, remote: string, branch?: 
   }
   return await postGitAction(projectId, 'push', payload)
 }
+
+export async function generateCommitMessage(projectId: string): Promise<string> {
+  const response = await fetchJson<{ commitMessage: string }>(
+    `/api/projects/${projectId}/git/generate-commit-message`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    }
+  )
+  return response.commitMessage
+}

@@ -30,6 +30,7 @@ import {
   checkoutGitRef,
   commitGitChanges,
   discardGitPath,
+  generateCommitMessage,
   pullGitRemote,
   pushGitRemote,
   stageGitPaths,
@@ -701,6 +702,20 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
     }
   }
 
+  const handleGenerateCommitMessage = async () => {
+    setPendingAction('generate-commit')
+    setGitError(null)
+    try {
+      const message = await generateCommitMessage(workspace().id)
+      setCommitMessage(message)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to generate commit message'
+      setGitError(message)
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
   const handleCheckout = async () => {
     const ref = checkoutTarget().trim()
     if (!ref || ref === branchLabel()) return
@@ -871,14 +886,27 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
           >
             Commit message
           </label>
-          <input
-            id="workspace-commit-message"
-            class="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2"
-            type="text"
-            placeholder="Describe your changes"
-            value={commitMessage()}
-            onInput={(event) => setCommitMessage(event.currentTarget.value)}
-          />
+          <div class="relative">
+            <input
+              id="workspace-commit-message"
+              class="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2 pr-10"
+              type="text"
+              placeholder="Describe your changes"
+              value={commitMessage()}
+              onInput={(event) => setCommitMessage(event.currentTarget.value)}
+            />
+            <button
+              type="button"
+              class="absolute right-2 top-1/2 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-muted)] hover:text-blue-600 disabled:opacity-50"
+              onClick={handleGenerateCommitMessage}
+              disabled={pendingAction() === 'generate-commit' || (!stagedChanges().length && !workingChanges().length)}
+              title="Generate commit message with GitHub Copilot"
+            >
+              <Show when={pendingAction() === 'generate-commit'} fallback="✨">
+                <div class="h-3 w-3 animate-spin rounded-full border border-[var(--text-muted)] border-t-transparent" />
+              </Show>
+            </button>
+          </div>
           <button
             class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
             type="submit"
