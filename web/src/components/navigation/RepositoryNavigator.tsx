@@ -3,6 +3,7 @@ import { For, Show, createEffect, createMemo, createResource, createSignal, onMo
 import { fetchJson } from '../../lib/http'
 import { buildSessionWorkflowPayload } from '../../lib/sessions'
 import { useWorkspaceSelection } from '../../contexts/WorkspaceSelectionContext'
+import type { GitInfo } from '../../types/git'
 
 const BROWSER_PAGE_SIZE = 10
 const BROWSER_STATE_STORAGE_KEY = 'hyperagent:repoBrowser'
@@ -15,17 +16,6 @@ export type Project = {
   defaultBranch: string
   createdAt: string
   git?: GitInfo | null
-}
-
-export type GitInfo = {
-  repositoryPath: string
-  branch: string | null
-  commit: {
-    hash: string | null
-    message: string | null
-    timestamp: string | null
-  } | null
-  remotes: Array<{ name: string; url: string }>
 }
 
 type RadicleRepositoryEntry = {

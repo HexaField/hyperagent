@@ -1,5 +1,5 @@
-import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup } from 'solid-js'
 import type { JSX } from 'solid-js'
+import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup } from 'solid-js'
 import {
   fetchOpencodeRuns,
   fetchOpencodeSessionDetail,
@@ -124,7 +124,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
 
   const handleStartRun: JSX.EventHandlerUnion<HTMLFormElement, SubmitEvent> = async (event) => {
     event.preventDefault()
-    const workspacePath = (props.lockWorkspace ? props.workspaceFilter ?? '' : workspaceValue()).trim()
+    const workspacePath = (props.lockWorkspace ? (props.workspaceFilter ?? '') : workspaceValue()).trim()
     const runPrompt = prompt().trim()
     if (!workspacePath) {
       setError('Workspace path is required')
@@ -173,22 +173,6 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
 
   return (
     <section class={wrapperClass()}>
-      <Show when={!props.hideHeader}>
-        <header class="flex flex-wrap items-start justify-between gap-4">
-          <div class="flex-1 space-y-2">
-            <p class="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">Opencode sessions</p>
-            <h2 class="text-2xl font-semibold text-[var(--text)]">{props.heading ?? 'Opencode workspace console'}</h2>
-            <p class="text-[var(--text-muted)]">
-              {props.description ??
-                'Launch opencode runs as detached background jobs and inspect their session timelines even after server restarts.'}
-            </p>
-          </div>
-          <Show when={props.headerActions} keyed>
-            {(actions) => <div class="flex items-center gap-2">{actions}</div>}
-          </Show>
-        </header>
-      </Show>
-
       <div class="grid gap-6 lg:grid-cols-[320px,1fr]">
         <section class="flex flex-col gap-5">
           <form class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] p-4" onSubmit={handleStartRun}>
@@ -249,7 +233,10 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
               <span>Sessions</span>
               <span class="text-xs font-normal text-[var(--text-muted)]">Updates continuously</span>
             </header>
-            <Show when={sessionRows().length > 0} fallback={<p class="text-sm text-[var(--text-muted)]">No sessions yet.</p>}>
+            <Show
+              when={sessionRows().length > 0}
+              fallback={<p class="text-sm text-[var(--text-muted)]">No sessions yet.</p>}
+            >
               <ul class="flex max-h-[420px] flex-col gap-2 overflow-y-auto text-sm">
                 <For each={sessionRows()}>
                   {(session) => (
@@ -259,18 +246,19 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
                         class="w-full rounded-xl border border-[var(--border)] px-3 py-2 text-left transition hover:border-blue-400"
                         classList={{
                           'border-blue-500 bg-blue-50 dark:bg-blue-950/30': selectedSessionId() === session.id,
-                          'border-emerald-500 ring-2 ring-emerald-200 dark:ring-emerald-900': session.state === 'running'
+                          'border-emerald-500 ring-2 ring-emerald-200 dark:ring-emerald-900':
+                            session.state === 'running'
                         }}
                         onClick={() => setSelectedSessionId(session.id)}
                       >
                         <div class="flex items-start justify-between gap-3">
                           <div class="min-w-0">
                             <p class="truncate font-semibold text-[var(--text)]">{session.title || session.id}</p>
-                            <p class="text-xs text-[var(--text-muted)]">
-                              {session.workspacePath}
-                            </p>
+                            <p class="text-xs text-[var(--text-muted)]">{session.workspacePath}</p>
                           </div>
-                          <span class={`rounded-full px-2 py-0.5 text-xs font-semibold ${sessionStateBadgeClass(session.state)}`}>
+                          <span
+                            class={`rounded-full px-2 py-0.5 text-xs font-semibold ${sessionStateBadgeClass(session.state)}`}
+                          >
                             {sessionStateLabel(session.state)}
                           </span>
                         </div>
@@ -290,10 +278,16 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p class="text-sm font-semibold text-[var(--text-muted)]">Session detail</p>
-              <Show when={selectedDetail()} keyed fallback={<p class="text-xs text-[var(--text-muted)]">Select a session to inspect its transcript.</p>}>
+              <Show
+                when={selectedDetail()}
+                keyed
+                fallback={<p class="text-xs text-[var(--text-muted)]">Select a session to inspect its transcript.</p>}
+              >
                 {(detail) => (
                   <div class="flex items-center gap-3">
-                    <h3 class="text-xl font-semibold text-[var(--text)]">{detail.session.title || detail.session.id}</h3>
+                    <h3 class="text-xl font-semibold text-[var(--text)]">
+                      {detail.session.title || detail.session.id}
+                    </h3>
                     <Show when={selectedSessionMeta()?.state} keyed>
                       {(state) => (
                         <span class={`rounded-full px-2 py-0.5 text-xs font-semibold ${sessionStateBadgeClass(state)}`}>
@@ -315,7 +309,10 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
             </button>
           </div>
 
-          <Show when={messages().length > 0} fallback={<p class="text-sm text-[var(--text-muted)]">No transcript yet.</p>}>
+          <Show
+            when={messages().length > 0}
+            fallback={<p class="text-sm text-[var(--text-muted)]">No transcript yet.</p>}
+          >
             <div class="flex max-h-[520px] flex-col gap-3 overflow-y-auto pr-1">
               <For each={messages()}>
                 {(message) => (

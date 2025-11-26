@@ -1,6 +1,7 @@
 import { useSearchParams } from '@solidjs/router'
 import { Accessor, Component, JSX, createContext, createEffect, createMemo, createResource, useContext } from 'solid-js'
 import { fetchJson } from '../lib/http'
+import type { GitInfo } from '../types/git'
 
 export type WorkspaceRecord = {
   id: string
@@ -9,6 +10,7 @@ export type WorkspaceRecord = {
   repositoryPath: string
   defaultBranch: string
   createdAt: string
+  git?: GitInfo | null
 }
 
 type WorkspaceSelectionValue = {

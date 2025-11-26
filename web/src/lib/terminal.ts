@@ -17,8 +17,9 @@ export type CreateTerminalSessionInput = {
   projectId?: string | null
 }
 
-export async function listTerminalSessions(): Promise<TerminalSession[]> {
-  const payload = await fetchJson<{ sessions: TerminalSession[] }>('/api/terminal/sessions')
+export async function listTerminalSessions(projectId?: string | null): Promise<TerminalSession[]> {
+  const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
+  const payload = await fetchJson<{ sessions: TerminalSession[] }>(`/api/terminal/sessions${query}`)
   return payload.sessions
 }
 

@@ -2,24 +2,14 @@ import { useSearchParams } from '@solidjs/router'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createResource,
-  createSignal,
-  onCleanup,
-  onMount,
-  type JSX
-} from 'solid-js'
-import WorkflowDetailView from '../components/WorkflowDetailView'
-import WorkflowLaunchModal from '../components/WorkflowLaunchModal'
+import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
 import CanvasWorkspace, { type CanvasWidgetConfig } from '../components/layout/CanvasWorkspace'
 import OpencodeConsole from '../components/OpencodeConsole'
+import WorkflowDetailView from '../components/WorkflowDetailView'
+import WorkflowLaunchModal from '../components/WorkflowLaunchModal'
+import { WIDGET_TEMPLATES, type WidgetAddEventDetail, type WidgetTemplateId } from '../constants/widgetTemplates'
 import { useCanvasNavigator, type CanvasNavigatorController } from '../contexts/CanvasNavigatorContext'
 import { useWorkspaceSelection, type WorkspaceRecord } from '../contexts/WorkspaceSelectionContext'
-import { WIDGET_TEMPLATES, type WidgetAddEventDetail, type WidgetTemplateId } from '../constants/widgetTemplates'
 
 import { fetchJson } from '../lib/http'
 import {
@@ -269,7 +259,7 @@ function createWidgetConfig(options: CreateWidgetConfigOptions): CanvasWidgetCon
         initialSize: { width: 720, height: 520 },
         startOpen: true,
         removable,
-        content: () => <WorkspaceTerminalWidget workspacePath={workspace.repositoryPath} />
+        content: () => <WorkspaceTerminalWidget workspaceId={workspace.id} workspacePath={workspace.repositoryPath} />
       }
     case 'workspace-sessions':
       return {
@@ -316,10 +306,14 @@ function WorkspaceEmptyState(props: { onOpenNavigator: () => void }) {
       <p class="text-sm uppercase tracking-[0.35em] text-[var(--text-muted)]">No workspaces yet</p>
       <h1 class="text-3xl font-semibold">Create your first workspace</h1>
       <p class="max-w-lg text-[var(--text-muted)]">
-        Use the canvas navigator drawer to register a repository. Once a workspace exists, it becomes the center of every
-        workflow, terminal session, and opencode transcript.
+        Use the canvas navigator drawer to register a repository. Once a workspace exists, it becomes the center of
+        every workflow, terminal session, and opencode transcript.
       </p>
-      <button class="rounded-2xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white" type="button" onClick={props.onOpenNavigator}>
+      <button
+        class="rounded-2xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white"
+        type="button"
+        onClick={props.onOpenNavigator}
+      >
         Open navigator
       </button>
     </div>
@@ -328,25 +322,112 @@ function WorkspaceEmptyState(props: { onOpenNavigator: () => void }) {
 
 function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: () => void }) {
   const workspace = () => props.workspace
+  const git = () => workspace().git ?? null
+  const branchLabel = () => git()?.branch ?? workspace().defaultBranch
+  const status = () => git()?.status ?? null
+  const commit = () => git()?.commit ?? null
+  const remotes = () => git()?.remotes ?? []
+  const remoteCount = () => remotes().length
+
   return (
-    <div class="flex h-full flex-col gap-4 p-6 text-[var(--text)]">
-      <div>
-        <p class="text-xs uppercase tracking-[0.35em] text-[var(--text-muted)]">Workspace</p>
-        <h2 class="mt-2 text-3xl font-semibold">{workspace().name}</h2>
-        <p class="text-sm text-[var(--text-muted)]">{workspace().description ?? 'No description yet.'}</p>
-      </div>
-      <div class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 text-sm">
-        <p class="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">Repository path</p>
-        <code class="mt-2 block overflow-hidden text-ellipsis whitespace-nowrap rounded-xl bg-[var(--bg-muted)] px-3 py-2">
-          {workspace().repositoryPath}
-        </code>
-        <div class="mt-3 grid gap-3 text-xs text-[var(--text-muted)]">
-          <span>Default branch: {workspace().defaultBranch}</span>
-          <span>Created: {new Date(workspace().createdAt).toLocaleString()}</span>
+    <div class="flex h-full flex-col gap-5 p-6 text-[var(--text)]">
+      <div class="space-y-2">
+        <div class="flex flex-wrap items-center gap-3">
+          <h2 class="text-3xl font-semibold">{workspace().name}</h2>
+          <span class="rounded-full border border-[var(--border)] px-3 py-1 text-xs uppercase tracking-wide text-[var(--text-muted)]">
+            {branchLabel() ?? 'unknown'}
+          </span>
         </div>
+        {workspace().description && <p class="text-sm text-[var(--text-muted)]">{workspace().description}</p>}
       </div>
+
+      <div class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 text-sm">
+        <dl class="grid gap-4 sm:grid-cols-2">
+          <div>
+            <dt class="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">Repository</dt>
+            <dd class="mt-1">
+              <code class="block overflow-hidden text-ellipsis whitespace-nowrap rounded-xl bg-[var(--bg-muted)] px-3 py-2">
+                {workspace().repositoryPath}
+              </code>
+            </dd>
+          </div>
+          <div>
+            <dt class="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">Created</dt>
+            <dd class="mt-1 text-[var(--text)]">{new Date(workspace().createdAt).toLocaleString()}</dd>
+          </div>
+          <div>
+            <dt class="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">Default branch</dt>
+            <dd class="mt-1 text-[var(--text)]">{workspace().defaultBranch}</dd>
+          </div>
+          <Show when={commit()}>
+            {(latest) => (
+              <div>
+                <dt class="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">Latest commit</dt>
+                <dd class="mt-1 text-[var(--text)]">
+                  <p class="font-semibold">{latest().message ?? 'No commit message'}</p>
+                  <p class="text-xs text-[var(--text-muted)]">
+                    {latest().hash?.slice(0, 8) ?? 'unknown'} · {formatTimestamp(latest().timestamp)}
+                  </p>
+                </dd>
+              </div>
+            )}
+          </Show>
+        </dl>
+      </div>
+
+      <div class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 text-sm">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p class="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">Git status</p>
+            <p class="text-base font-semibold text-[var(--text)]">
+              {status()?.isClean
+                ? 'Clean working tree'
+                : `${status()?.changedFiles ?? 0} pending change${(status()?.changedFiles ?? 0) === 1 ? '' : 's'}`}
+            </p>
+          </div>
+          <Show when={remoteCount() > 0}>
+            <span class="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--text-muted)]">
+              {remoteCount()} remote{remoteCount() === 1 ? '' : 's'}
+            </span>
+          </Show>
+        </div>
+        <Show when={status()?.summary}>
+          {(summary) => (
+            <pre class="mt-3 max-h-40 overflow-auto rounded-2xl bg-[var(--bg-muted)] px-3 py-2 text-xs text-[var(--text-muted)]">
+              {summary()}
+            </pre>
+          )}
+        </Show>
+        <Show when={git()?.diffStat}>
+          {(stat) => (
+            <pre class="mt-3 max-h-40 overflow-auto rounded-2xl bg-[var(--bg-muted)] px-3 py-2 text-xs text-[var(--text-muted)]">
+              {stat()}
+            </pre>
+          )}
+        </Show>
+        <Show when={remoteCount() > 0}>
+          <div class="mt-3 space-y-2">
+            <For each={remotes().slice(0, 3)}>
+              {(remote) => (
+                <div class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2">
+                  <p class="text-xs uppercase tracking-wide text-[var(--text-muted)]">{remote.name}</p>
+                  <p class="text-sm text-[var(--text)]">{remote.url}</p>
+                </div>
+              )}
+            </For>
+            <Show when={remoteCount() > 3}>
+              <p class="text-xs text-[var(--text-muted)]">{remoteCount() - 3} more remote(s) hidden.</p>
+            </Show>
+          </div>
+        </Show>
+      </div>
+
       <div class="mt-auto flex flex-wrap gap-3">
-        <button class="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white" type="button" onClick={props.onOpenNavigator}>
+        <button
+          class="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white"
+          type="button"
+          onClick={props.onOpenNavigator}
+        >
           Manage workspaces
         </button>
       </div>
@@ -376,7 +457,8 @@ function WorkflowsWidget(props: { workspaceId: string; workspaceName: string }) 
   )
 
   createEffect(() => {
-    const linkParam = typeof searchParams.sessionId === 'string' && searchParams.sessionId.length ? searchParams.sessionId : null
+    const linkParam =
+      typeof searchParams.sessionId === 'string' && searchParams.sessionId.length ? searchParams.sessionId : null
     if (linkParam) {
       setFocusedWorkflowId(linkParam)
     }
@@ -408,20 +490,25 @@ function WorkflowsWidget(props: { workspaceId: string; workspaceName: string }) 
 
   return (
     <div class="flex h-full flex-col gap-4 p-6 text-[var(--text)]">
-      <header class="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p class="text-xs uppercase tracking-[0.35em] text-[var(--text-muted)]">Workflows</p>
-          <h2 class="text-3xl font-semibold">Runs for {props.workspaceName}</h2>
-        </div>
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <h2 class="text-3xl font-semibold">Runs for {props.workspaceName}</h2>
         <div class="flex flex-wrap items-center gap-2">
-          <button class="rounded-2xl border border-[var(--border)] px-4 py-2 text-sm" type="button" onClick={() => refetch()}>
+          <button
+            class="rounded-2xl border border-[var(--border)] px-4 py-2 text-sm"
+            type="button"
+            onClick={() => refetch()}
+          >
             Refresh
           </button>
-          <button class="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white" type="button" onClick={() => setLaunchOpen(true)}>
+          <button
+            class="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white"
+            type="button"
+            onClick={() => setLaunchOpen(true)}
+          >
             Launch workflow
           </button>
         </div>
-      </header>
+      </div>
       <section class="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
         <div class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 text-sm">
           <p class="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">Status breakdown</p>
@@ -451,9 +538,13 @@ function WorkflowsWidget(props: { workspaceId: string; workspaceName: string }) 
                 >
                   <div class="flex items-center justify-between text-sm">
                     <span class="font-semibold">{summary.workflow.kind}</span>
-                    <span class="text-xs text-[var(--text-muted)]">{new Date(summary.workflow.updatedAt).toLocaleString()}</span>
+                    <span class="text-xs text-[var(--text-muted)]">
+                      {new Date(summary.workflow.updatedAt).toLocaleString()}
+                    </span>
                   </div>
-                  <p class="text-xs text-[var(--text-muted)]">{STATUS_LABELS[summary.workflow.status] ?? summary.workflow.status}</p>
+                  <p class="text-xs text-[var(--text-muted)]">
+                    {STATUS_LABELS[summary.workflow.status] ?? summary.workflow.status}
+                  </p>
                 </button>
               )}
             </For>
@@ -477,8 +568,14 @@ function WorkflowsWidget(props: { workspaceId: string; workspaceName: string }) 
         )}
       </Show>
       <Show when={launchOpen()}>
-        <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" onClick={() => setLaunchOpen(false)}>
-          <div class="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-3xl border border-[var(--border)] bg-[var(--bg-card)] p-6" onClick={(event) => event.stopPropagation()}>
+        <div
+          class="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setLaunchOpen(false)}
+        >
+          <div
+            class="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-3xl border border-[var(--border)] bg-[var(--bg-card)] p-6"
+            onClick={(event) => event.stopPropagation()}
+          >
             <WorkflowLaunchModal defaultProjectId={props.workspaceId} onClose={() => setLaunchOpen(false)} />
           </div>
         </div>
@@ -487,14 +584,16 @@ function WorkflowsWidget(props: { workspaceId: string; workspaceName: string }) 
   )
 }
 
-function WorkspaceTerminalWidget(props: { workspacePath: string }) {
+function WorkspaceTerminalWidget(props: { workspaceId: string; workspacePath: string }) {
   const [sessions, setSessions] = createSignal<TerminalSession[]>([])
   const [activeSessionId, setActiveSessionId] = createSignal<string | null>(null)
   const [statusMessage, setStatusMessage] = createSignal('Select or start a session to begin.')
   const [cwdInput, setCwdInput] = createSignal('')
   const [shellInput, setShellInput] = createSignal('')
   const [isCreatingSession, setIsCreatingSession] = createSignal(false)
-  const [connectionState, setConnectionState] = createSignal<'idle' | 'connecting' | 'open' | 'closed' | 'error'>('idle')
+  const [connectionState, setConnectionState] = createSignal<'idle' | 'connecting' | 'open' | 'closed' | 'error'>(
+    'idle'
+  )
 
   let terminalContainer: HTMLDivElement | undefined
   let term: Terminal | null = null
@@ -513,7 +612,7 @@ function WorkspaceTerminalWidget(props: { workspacePath: string }) {
 
   const refreshSessions = async () => {
     try {
-      const list = await listTerminalSessions()
+      const list = await listTerminalSessions(props.workspaceId)
       list.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       setSessions(list)
       const currentSelection = activeSessionId()
@@ -526,6 +625,11 @@ function WorkspaceTerminalWidget(props: { workspacePath: string }) {
       } else if (!list.some((session) => session.id === currentSelection)) {
         setActiveSessionId(null)
         term?.reset()
+      }
+      if (!list.length) {
+        setActiveSessionId(null)
+        term?.reset()
+        setStatusMessage('Start a session to connect.')
       }
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Unable to load terminal sessions')
@@ -638,7 +742,8 @@ function WorkspaceTerminalWidget(props: { workspacePath: string }) {
     try {
       const session = await createTerminalSession({
         cwd: sanitizeInput(cwdInput()),
-        shell: sanitizeInput(shellInput())
+        shell: sanitizeInput(shellInput()),
+        projectId: props.workspaceId
       })
       setShellInput('')
       if (session) {
@@ -664,7 +769,8 @@ function WorkspaceTerminalWidget(props: { workspacePath: string }) {
     }
   }
 
-  onMount(() => {
+  createEffect(() => {
+    props.workspaceId
     void refreshSessions()
   })
 
@@ -681,53 +787,24 @@ function WorkspaceTerminalWidget(props: { workspacePath: string }) {
 
   return (
     <div class="flex h-full flex-col gap-4 p-6 text-[var(--text)]">
-      <header>
-        <p class="text-xs uppercase tracking-[0.35em] text-[var(--text-muted)]">Terminal</p>
-        <h2 class="text-2xl font-semibold">Sessions</h2>
-      </header>
       <section class="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <form class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 text-sm" onSubmit={handleStartSession}>
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="workspace-terminal-cwd">
-            Working directory
-          </label>
-          <input
-            id="workspace-terminal-cwd"
-            class="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2"
-            type="text"
-            value={cwdInput()}
-            onInput={(event) => setCwdInput(event.currentTarget.value)}
-          />
-          <label class="mt-3 text-xs font-semibold text-[var(--text-muted)]" for="workspace-terminal-shell">
-            Shell (optional)
-          </label>
-          <input
-            id="workspace-terminal-shell"
-            class="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2"
-            type="text"
-            value={shellInput()}
-            onInput={(event) => setShellInput(event.currentTarget.value)}
-            placeholder="/bin/zsh"
-          />
-          <button class="mt-4 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60" type="submit" disabled={isCreatingSession()}>
-            {isCreatingSession() ? 'Starting…' : 'Start session'}
-          </button>
-          <p class="mt-2 text-xs text-[var(--text-muted)]">{statusMessage()}</p>
-        </form>
-        <div class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
-          <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">Active sessions</p>
-              <p class="text-xs text-[var(--text-muted)]">Select a session to attach the terminal.</p>
-            </div>
-            <button class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs" type="button" onClick={() => void refreshSessions()}>
+        <div class="flex h-full flex-col gap-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 text-sm">
+          <div class="flex items-center justify-between gap-3">
+            <p class="text-sm font-semibold text-[var(--text)]">Sessions for {props.workspacePath}</p>
+            <button
+              class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs"
+              type="button"
+              onClick={() => void refreshSessions()}
+            >
               Refresh
             </button>
           </div>
-          <div class="grid gap-2">
+          <p class="text-xs text-[var(--text-muted)]">Select a session to attach the terminal.</p>
+          <div class="flex-1 space-y-2 overflow-auto pr-1">
             <For each={sessions()}>
               {(session) => (
                 <button
-                  class="flex flex-col rounded-2xl border px-3 py-2 text-left text-sm"
+                  class="w-full rounded-2xl border px-3 py-2 text-left"
                   classList={{
                     'border-blue-500 bg-blue-950/30': activeSessionId() === session.id,
                     'border-[var(--border)] bg-[var(--bg-muted)]': activeSessionId() !== session.id
@@ -735,8 +812,13 @@ function WorkspaceTerminalWidget(props: { workspacePath: string }) {
                   type="button"
                   onClick={() => connectToSession(session.id)}
                 >
-                  <span class="font-semibold">{session.id.slice(0, 8)}</span>
-                  <span class="text-xs text-[var(--text-muted)]">{session.status}</span>
+                  <div class="flex items-center justify-between text-sm">
+                    <span class="font-semibold">{session.id.slice(0, 8)}</span>
+                    <span class="text-xs text-[var(--text-muted)]">{session.status}</span>
+                  </div>
+                  <p class="text-xs text-[var(--text-muted)]">{session.shellCommand || 'Default shell'}</p>
+                  <p class="text-xs text-[var(--text-muted)]">{session.initialCwd || 'Inherited directory'}</p>
+                  <p class="text-xs text-[var(--text-muted)]">Started {formatTimestamp(session.createdAt)}</p>
                 </button>
               )}
             </For>
@@ -744,19 +826,79 @@ function WorkspaceTerminalWidget(props: { workspacePath: string }) {
               <p class="text-sm text-[var(--text-muted)]">No sessions yet.</p>
             </Show>
           </div>
-          <div class="mt-3 flex items-center gap-2">
-            <button class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs" type="button" disabled={!activeSession()} onClick={() => void handleCloseSession()}>
-              Close session
+          <form
+            class="space-y-3 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--bg-muted)] p-3"
+            onSubmit={handleStartSession}
+          >
+            <p class="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">New session</p>
+            <label class="text-xs font-semibold text-[var(--text-muted)]" for="workspace-terminal-cwd">
+              Working directory
+            </label>
+            <input
+              id="workspace-terminal-cwd"
+              class="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-2"
+              type="text"
+              value={cwdInput()}
+              onInput={(event) => setCwdInput(event.currentTarget.value)}
+            />
+            <label class="text-xs font-semibold text-[var(--text-muted)]" for="workspace-terminal-shell">
+              Shell (optional)
+            </label>
+            <input
+              id="workspace-terminal-shell"
+              class="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-2"
+              type="text"
+              value={shellInput()}
+              onInput={(event) => setShellInput(event.currentTarget.value)}
+              placeholder="/bin/zsh"
+            />
+            <button
+              class="w-full rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              type="submit"
+              disabled={isCreatingSession()}
+            >
+              {isCreatingSession() ? 'Starting…' : 'Start session'}
             </button>
-            <span class="text-xs text-[var(--text-muted)]">State: {connectionState()}</span>
+          </form>
+        </div>
+        <div class="flex h-full flex-col rounded-2xl border border-[var(--border)] bg-[var(--bg-card)]">
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
+            <div>
+              <p class="text-sm font-semibold">
+                {activeSession() ? `Attached to ${activeSession()!.id.slice(0, 8)}` : 'Select a session to attach'}
+              </p>
+              <p class="text-xs text-[var(--text-muted)]">{statusMessage()}</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <button
+                class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs"
+                type="button"
+                onClick={() => void refreshSessions()}
+              >
+                Refresh
+              </button>
+              <button
+                class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs disabled:opacity-60"
+                type="button"
+                disabled={!activeSession()}
+                onClick={() => void handleCloseSession()}
+              >
+                Close session
+              </button>
+            </div>
           </div>
-          <div
-            ref={(node) => {
-              terminalContainer = node ?? undefined
-              ensureTerminal()
-            }}
-            class="mt-4 min-h-[360px] rounded-2xl border border-[var(--border)] bg-[#020617] p-3"
-          />
+          <div class="flex-1">
+            <div
+              ref={(node) => {
+                terminalContainer = node ?? undefined
+                ensureTerminal()
+              }}
+              class="h-full min-h-[360px] rounded-b-2xl bg-[#020617]"
+            />
+          </div>
+          <div class="border-t border-[var(--border)] px-4 py-2 text-xs text-[var(--text-muted)]">
+            Connection: {connectionState()}
+          </div>
         </div>
       </section>
     </div>
@@ -772,20 +914,15 @@ function SessionsWidget(props: { workspacePath: string }) {
   })
   return (
     <div class="flex h-full flex-col gap-4 p-6 text-[var(--text)]">
-      <header>
-        <p class="text-xs uppercase tracking-[0.35em] text-[var(--text-muted)]">Opencode sessions</p>
-        <h2 class="text-2xl font-semibold">Background activity</h2>
-      </header>
-      <div class="flex-1 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
-        <OpencodeConsole
-          workspaceFilter={filter()}
-          onWorkspaceFilterChange={setFilter}
-          heading="Workspace activity"
-          description="Scope transcripts to this workspace or clear the filter to see everything."
-        />
-      </div>
+      <OpencodeConsole workspaceFilter={filter()} onWorkspaceFilterChange={setFilter} />
     </div>
   )
+}
+
+function formatTimestamp(value: string | null | undefined): string {
+  if (!value) return 'unknown time'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
 function sanitizeInput(value: string): string | undefined {

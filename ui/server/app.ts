@@ -285,6 +285,12 @@ type GitMetadata = {
     timestamp: string | null
   } | null
   remotes: Array<{ name: string; url: string }>
+  status?: {
+    isClean: boolean
+    changedFiles: number
+    summary: string | null
+  }
+  diffStat?: string | null
 }
 
 export type CreateServerOptions = {
@@ -768,12 +774,14 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       }
     }
 
-    const [branch, commitHash, commitMessage, commitTimestamp, remotesRaw] = await Promise.all([
+    const [branch, commitHash, commitMessage, commitTimestamp, remotesRaw, statusOutput, diffStat] = await Promise.all([
       readValue(['rev-parse', '--abbrev-ref', 'HEAD']),
       readValue(['rev-parse', 'HEAD']),
       readValue(['log', '-1', '--pretty=%s']),
       readValue(['log', '-1', '--pretty=%cI']),
-      readValue(['remote', '-v'])
+      readValue(['remote', '-v']),
+      readValue(['status', '--short']),
+      readValue(['diff', '--stat'])
     ])
 
     const remotes: Array<{ name: string; url: string }> = []
@@ -794,6 +802,13 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         })
     }
 
+    const changedFiles = statusOutput
+      ? statusOutput
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean).length
+      : 0
+
     return {
       repositoryPath: resolved,
       branch,
@@ -804,7 +819,13 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
             timestamp: commitTimestamp
           }
         : null,
-      remotes
+      remotes,
+      status: {
+        isClean: changedFiles === 0,
+        changedFiles,
+        summary: statusOutput ? statusOutput.split('\n').slice(0, 8).join('\n') : null
+      },
+      diffStat: diffStat ?? null
     }
   }
 
@@ -2183,8 +2204,10 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   const listTerminalSessionsHandler: RequestHandler = async (req, res) => {
     try {
       const userId = resolveUserIdFromRequest(req)
+      const projectFilter = typeof req.query.projectId === 'string' && req.query.projectId.trim().length ? req.query.projectId.trim() : null
       const sessions = await terminalModule.listSessions(userId)
-      res.json({ sessions })
+      const filtered = projectFilter ? sessions.filter((session) => session.projectId === projectFilter) : sessions
+      res.json({ sessions: filtered })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to list terminal sessions'
       res.status(500).json({ error: message })
