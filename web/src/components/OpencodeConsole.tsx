@@ -36,9 +36,8 @@ export type OpencodeConsoleProps = {
 
 export function opencodePages(props: OpencodeConsoleProps & { mobilePage?: number }) {
   return [
-    { title: 'New', content: () => <OpencodeConsole {...props} mobilePage={0} /> },
-    { title: 'List', content: () => <OpencodeConsole {...props} mobilePage={1} /> },
-    { title: 'Details', content: () => <OpencodeConsole {...props} mobilePage={2} /> }
+    { title: 'List', content: () => <OpencodeConsole {...props} mobilePage={0} /> },
+    { title: 'Details', content: () => <OpencodeConsole {...props} mobilePage={1} /> }
   ]
 }
 
@@ -149,8 +148,8 @@ export default function OpencodeConsole(props: OpencodeConsoleProps & { mobilePa
 
   // Mobile carousel state
   const [isMobile, setIsMobile] = createSignal(false)
-  // pages: 0 = New, 1 = List, 2 = Details
-  const [currentPage, setCurrentPage] = createSignal(1)
+  // pages: 0 = List, 1 = Details
+  const [currentPage, setCurrentPage] = createSignal(0)
 
   const isHosted = typeof props.mobilePage === 'number'
   let touchStartX = 0
@@ -173,11 +172,11 @@ export default function OpencodeConsole(props: OpencodeConsoleProps & { mobilePa
     let setHandler: (e: Event) => void
     if (props.mobilePage === undefined) {
       prevHandler = () => setCurrentPage((p) => Math.max(0, p - 1))
-      nextHandler = () => setCurrentPage((p) => Math.min(2, p + 1))
+      nextHandler = () => setCurrentPage((p) => Math.min(1, p + 1))
       setHandler = (e: Event) => {
         const ce = e as CustomEvent
         const page = Number(ce?.detail?.page)
-        if (!Number.isNaN(page)) setCurrentPage(Math.max(0, Math.min(2, page)))
+        if (!Number.isNaN(page)) setCurrentPage(Math.max(0, Math.min(1, page)))
       }
       try {
         window.addEventListener('single-widget:page-prev', prevHandler)
@@ -211,7 +210,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps & { mobilePa
   createEffect(() => {
     // When a session is selected, navigate to the detail page on mobile
     if (!isMobile()) return
-    if (selectedSessionId()) setCurrentPage(2)
+    if (selectedSessionId()) setCurrentPage(1)
   })
 
   // publish current mobile page title for SingleWidgetView header
@@ -220,7 +219,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps & { mobilePa
     const shouldPublish = typeof props.mobilePage !== 'number' && isMobile()
     if (!shouldPublish) return
     const cur = currentPage()
-    const title = cur === 0 ? 'New' : cur === 1 ? 'List' : 'Details'
+    const title = cur === 0 ? 'List' : 'Details'
     try {
       window.dispatchEvent(new CustomEvent('single-widget:page-title', { detail: { title } }))
     } catch {}
@@ -280,7 +279,39 @@ export default function OpencodeConsole(props: OpencodeConsoleProps & { mobilePa
       await Promise.all([refetchSessions(), refetchRuns()])
       setSelectedSessionId(run.sessionId)
       // on mobile, jump to session detail
-      if (isMobile()) setCurrentPage(2)
+      if (isMobile()) setCurrentPage(1)
+      props.onRunStarted?.(run.sessionId)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start session'
+      setError(message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  // quickStart: single-click start using current workspace and default prompt
+  async function quickStart() {
+    const workspacePath = (props.lockWorkspace ? (props.workspaceFilter ?? '') : workspaceValue()).trim()
+    const runPrompt = (props.defaultPrompt ?? prompt()).trim()
+    if (!workspacePath) {
+      setError('Workspace path is required')
+      return
+    }
+    if (!runPrompt) {
+      setError('Prompt is required')
+      return
+    }
+    setSubmitting(true)
+    setError(null)
+    try {
+      const run = await startOpencodeRun({
+        workspacePath,
+        prompt: runPrompt,
+        model: OPENCODE_MODEL
+      })
+      await Promise.all([refetchSessions(), refetchRuns()])
+      setSelectedSessionId(run.sessionId)
+      if (isMobile()) setCurrentPage(1)
       props.onRunStarted?.(run.sessionId)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to start session'
@@ -349,7 +380,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps & { mobilePa
       setCurrentPage((p) => Math.max(0, p - 1))
     } else if (delta < -threshold) {
       // inverted: swipe left -> next page
-      setCurrentPage((p) => Math.min(2, p + 1))
+      setCurrentPage((p) => Math.min(1, p + 1))
     }
     isTouching = false
     touchStartX = 0
@@ -421,7 +452,17 @@ export default function OpencodeConsole(props: OpencodeConsoleProps & { mobilePa
       <section class={wrapperClass}>
         <header class="mb-3 flex items-center justify-between text-sm font-semibold text-[var(--text-muted)]">
           <span>Sessions</span>
-          <span class="text-xs font-normal text-[var(--text-muted)]">Updates continuously</span>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-normal text-[var(--text-muted)]">Updates continuously</span>
+            <button
+              type="button"
+              class="rounded-xl border border-[var(--border)] px-3 py-1 text-sm"
+              onClick={() => void quickStart()}
+              disabled={submitting()}
+            >
+              {submitting() ? 'Starting…' : 'Start'}
+            </button>
+          </div>
         </header>
         <Show
           when={sessionRows().length > 0}
@@ -440,7 +481,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps & { mobilePa
                     }}
                     onClick={() => {
                       setSelectedSessionId(session.id)
-                      if (isMobile()) setCurrentPage(2)
+                      if (isMobile()) setCurrentPage(1)
                     }}
                   >
                     <div class="flex items-start justify-between gap-3">
@@ -947,7 +988,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps & { mobilePa
     </div>
   )
 
-  // Mobile layout: header with centered swipe zone + three pages carousel
+  // Mobile layout: header with centered swipe zone + two pages carousel
   const MobileLayout = (
     <div class="flex flex-col h-full">
       <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-muted)]">
@@ -973,16 +1014,16 @@ export default function OpencodeConsole(props: OpencodeConsoleProps & { mobilePa
             aria-label="Swipe pages"
           >
             <div class="h-full flex items-center justify-center text-xs text-[var(--text-muted)]">
-              {currentPage() === 0 ? 'New' : currentPage() === 1 ? 'List' : 'Details'}
+              {currentPage() === 0 ? 'List' : 'Details'}
             </div>
           </div>
 
-          <Show when={currentPage() < 2} fallback={<div class="w-6" />}>
+          <Show when={currentPage() < 1} fallback={<div class="w-6" />}>
             <button
               type="button"
               class="text-sm rounded p-1"
               aria-label="Next page"
-              onClick={() => setCurrentPage((p) => Math.min(2, p + 1))}
+              onClick={() => setCurrentPage((p) => Math.min(1, p + 1))}
             >
               ›
             </button>
@@ -993,9 +1034,6 @@ export default function OpencodeConsole(props: OpencodeConsoleProps & { mobilePa
 
       <div class="flex-1 overflow-hidden">
         <div class="single-widget-pages flex h-full transition-transform duration-300">
-          <div class="single-widget-page w-full p-4 overflow-auto" data-single-widget-title="New">
-            {StartForm()}
-          </div>
           <div class="single-widget-page w-full p-4 overflow-auto" data-single-widget-title="List">
             {SessionsList()}
           </div>
@@ -1009,12 +1047,8 @@ export default function OpencodeConsole(props: OpencodeConsoleProps & { mobilePa
 
   // If host explicitly passed a mobilePage prop, honor it regardless of local matchMedia
   if (typeof props.mobilePage === 'number') {
-    const pageIndex = Math.max(0, Math.min(2, props.mobilePage))
-    return (
-      <div class="flex-1 overflow-auto p-4">
-        {pageIndex === 0 ? StartForm() : pageIndex === 1 ? SessionsList() : SessionDetail()}
-      </div>
-    )
+    const pageIndex = Math.max(0, Math.min(1, props.mobilePage))
+    return <div class="flex-1 overflow-auto p-4">{pageIndex === 0 ? SessionsList() : SessionDetail()}</div>
   }
 
   if (isMobile()) {
