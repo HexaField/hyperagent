@@ -61,6 +61,25 @@ const loadWsClient = async (): Promise<typeof WebSocketType> => {
   return WebSocket
 }
 
+const loadWsServerBindings = async (): Promise<{
+  WebSocket: typeof WebSocketType
+  WebSocketServer: typeof WebSocketServerType
+}> => {
+  const WebSocket = await loadWsClient()
+  const nodeRequire = eval('require') as NodeJS.Require
+  const wsEntryPath = nodeRequire.resolve('ws')
+  const wsDir = path.dirname(wsEntryPath)
+  const serverModulePath = path.join(wsDir, 'lib', 'websocket-server.js')
+  const serverModule = await import(pathToFileURL(serverModulePath).href)
+  const WebSocketServer = (serverModule.WebSocketServer ?? serverModule.Server ?? serverModule.default) as
+    | typeof WebSocketServerType
+    | undefined
+  if (typeof WebSocketServer !== 'function') {
+    throw new Error('Unable to load ws server bindings')
+  }
+  return { WebSocket, WebSocketServer }
+}
+
 const mockResult: AgentLoopResult = {
   outcome: 'approved',
   reason: 'completed',
@@ -759,11 +778,12 @@ describe('createServerApp', () => {
   it('rewrites websocket origins when proxying code-server sessions', { timeout: 15000 }, async () => {
     const harness = await createIntegrationHarness()
     const repoDir = await createGitTestRepo()
+    const canonicalRepoDir = await fs.realpath(repoDir)
     try {
       const projectResponse = await fetch(`${harness.baseUrl}/api/projects`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Origin Check', repositoryPath: repoDir })
+        body: JSON.stringify({ name: 'Origin Check', repositoryPath: canonicalRepoDir })
       })
       expect(projectResponse.status).toBe(201)
       const project = await projectResponse.json()
@@ -811,6 +831,7 @@ describe('createServerApp', () => {
       expect(lastOrigin).toBe(harness.fakeCodeServer.origin)
     } finally {
       await harness.close()
+      await fs.rm(canonicalRepoDir, { recursive: true, force: true })
     }
   })
 
@@ -845,11 +866,12 @@ describe('createServerApp', () => {
   it('creates reusable project devspace sessions', async () => {
     const harness = await createIntegrationHarness()
     const repoDir = await createGitTestRepo()
+    const canonicalRepoDir = await fs.realpath(repoDir)
     try {
       const projectResponse = await fetch(`${harness.baseUrl}/api/projects`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Workspace Demo', repositoryPath: repoDir })
+        body: JSON.stringify({ name: 'Workspace Demo', repositoryPath: canonicalRepoDir })
       })
       expect(projectResponse.status).toBe(201)
       const project = await projectResponse.json()
@@ -871,18 +893,19 @@ describe('createServerApp', () => {
       expect(harness.controllerFactory).toHaveBeenCalledTimes(1)
     } finally {
       await harness.close()
-      await fs.rm(repoDir, { recursive: true, force: true })
+      await fs.rm(canonicalRepoDir, { recursive: true, force: true })
     }
   })
 
   it('streams agent runs for existing projects without launching extra code-servers', async () => {
     const harness = await createIntegrationHarness()
     const repoDir = await createGitTestRepo()
+    const canonicalRepoDir = await fs.realpath(repoDir)
     try {
       const projectResponse = await fetch(`${harness.baseUrl}/api/projects`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Project Agent', repositoryPath: repoDir })
+        body: JSON.stringify({ name: 'Project Agent', repositoryPath: canonicalRepoDir })
       })
       expect(projectResponse.status).toBe(201)
       const project = await projectResponse.json()
@@ -910,11 +933,11 @@ describe('createServerApp', () => {
       expect(sessionFrame?.payload?.projectId).toBe(project.id)
       expect(sessionFrame?.payload?.codeServerUrl).toContain(`/code-server/project-${project.id}`)
       expect(harness.runLoop).toHaveBeenCalledTimes(1)
-      expect(harness.runLoop.mock.calls[0][0].sessionDir).toBe(repoDir)
+      expect(harness.runLoop.mock.calls[0][0].sessionDir).toBe(canonicalRepoDir)
       expect(harness.controllerFactory).not.toHaveBeenCalled()
     } finally {
       await harness.close()
-      await fs.rm(repoDir, { recursive: true, force: true })
+      await fs.rm(canonicalRepoDir, { recursive: true, force: true })
     }
   })
 
@@ -948,6 +971,77 @@ describe('createServerApp', () => {
     } finally {
       await harness.close()
       await fs.rm(canonicalRepoDir, { recursive: true, force: true })
+    }
+  })
+
+  it('pulls and pushes remote refs via git endpoints', async () => {
+    const harness = await createIntegrationHarness()
+    const repoDir = await createGitTestRepo()
+    const canonicalRepoDir = await fs.realpath(repoDir)
+    let remoteDir: string | null = null
+    let remoteCloneRoot: string | null = null
+    await fs.mkdir(path.join(canonicalRepoDir, '.hyperagent'), { recursive: true })
+    try {
+      const remotePath = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-remote-'))
+      remoteDir = remotePath
+      execFileSync('git', ['init', '--bare'], { cwd: remotePath, stdio: 'ignore' })
+      execFileSync('git', ['--git-dir', remotePath, 'symbolic-ref', 'HEAD', 'refs/heads/main'], { stdio: 'ignore' })
+      execFileSync('git', ['remote', 'add', 'origin', remotePath], { cwd: canonicalRepoDir, stdio: 'ignore' })
+      execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: canonicalRepoDir, stdio: 'ignore' })
+
+      const projectResponse = await fetch(`${harness.baseUrl}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Remote Ops', repositoryPath: canonicalRepoDir })
+      })
+      const projectPayload = await projectResponse.json()
+      if (projectResponse.status !== 201) {
+        throw new Error(`Failed to create project: ${projectResponse.status} ${JSON.stringify(projectPayload)}`)
+      }
+      const projectId = projectPayload.id as string
+
+      const cloneRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-remote-clone-'))
+      remoteCloneRoot = cloneRoot
+      const remoteCloneDir = path.join(cloneRoot, 'clone')
+      execFileSync('git', ['clone', remotePath, remoteCloneDir], { stdio: 'ignore' })
+      execFileSync('git', ['config', 'user.name', 'Remote Author'], { cwd: remoteCloneDir, stdio: 'ignore' })
+      execFileSync('git', ['config', 'user.email', 'remote@author.test'], { cwd: remoteCloneDir, stdio: 'ignore' })
+      await fs.appendFile(path.join(remoteCloneDir, 'README.md'), '\nremote edit\n')
+      execFileSync('git', ['commit', '-am', 'remote-change'], { cwd: remoteCloneDir, stdio: 'ignore' })
+      execFileSync('git', ['push', 'origin', 'main'], { cwd: remoteCloneDir, stdio: 'ignore' })
+
+      const pullResponse = await fetch(`${harness.baseUrl}/api/projects/${projectId}/git/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ remote: 'origin', branch: 'main' })
+      })
+      expect(pullResponse.status).toBe(200)
+      const pullPayload = await pullResponse.json()
+      expect(pullPayload.git?.branch).toBe('main')
+      const readmeAfterPull = await fs.readFile(path.join(canonicalRepoDir, 'README.md'), 'utf8')
+      expect(readmeAfterPull.includes('remote edit')).toBe(true)
+
+      await fs.writeFile(path.join(canonicalRepoDir, 'LOCAL.txt'), 'local change\n')
+      execFileSync('git', ['add', 'LOCAL.txt'], { cwd: canonicalRepoDir, stdio: 'ignore' })
+      execFileSync('git', ['commit', '-m', 'local-change'], { cwd: canonicalRepoDir, stdio: 'ignore' })
+
+      const pushResponse = await fetch(`${harness.baseUrl}/api/projects/${projectId}/git/push`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ remote: 'origin', branch: 'main' })
+      })
+      expect(pushResponse.status).toBe(200)
+      const remoteHeadMessage = execFileSync('git', ['--git-dir', remotePath, 'log', '-1', '--pretty=%s']).toString().trim()
+      expect(remoteHeadMessage).toBe('local-change')
+    } finally {
+      await harness.close()
+      await fs.rm(canonicalRepoDir, { recursive: true, force: true })
+      if (remoteDir) {
+        await fs.rm(remoteDir, { recursive: true, force: true })
+      }
+      if (remoteCloneRoot) {
+        await fs.rm(remoteCloneRoot, { recursive: true, force: true })
+      }
     }
   })
 
@@ -1104,20 +1198,22 @@ describe('createServerApp', () => {
     const radicleModule = createRadicleModule({ defaultRemote: 'origin' })
     let harness: Awaited<ReturnType<typeof createIntegrationHarness>> | null = null
     let repoDir: string | null = null
+    let canonicalRepoDir: string | null = null
     try {
       harness = await createIntegrationHarness({ radicleModule })
       repoDir = await createGitTestRepo()
+      canonicalRepoDir = await fs.realpath(repoDir)
       const registerResponse = await fetch(`${harness.baseUrl}/api/radicle/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repositoryPath: repoDir, name: 'Real Rad Repo' })
+        body: JSON.stringify({ repositoryPath: canonicalRepoDir, name: 'Real Rad Repo' })
       })
       expect(registerResponse.status).toBe(200)
 
       const listResponse = await fetch(`${harness.baseUrl}/api/radicle/repositories`)
       expect(listResponse.status).toBe(200)
       const payload = await listResponse.json()
-      const match = payload.repositories.find((entry: any) => entry.project.repositoryPath === repoDir)
+      const match = payload.repositories.find((entry: any) => entry.project.repositoryPath === canonicalRepoDir)
       expect(match).toBeTruthy()
       expect(match.radicle?.registered).toBe(true)
       expect(match.project.id).toContain('rad-only')
@@ -1125,8 +1221,8 @@ describe('createServerApp', () => {
       if (harness) {
         await harness.close()
       }
-      if (repoDir) {
-        await fs.rm(repoDir, { recursive: true, force: true })
+      if (canonicalRepoDir) {
+        await fs.rm(canonicalRepoDir, { recursive: true, force: true })
       }
       await env.cleanup()
     }
@@ -1157,7 +1253,8 @@ describe('createServerApp', () => {
   })
 
   it('creates terminal sessions and streams output via websocket', { timeout: 20000 }, async () => {
-    const harness = await createIntegrationHarness()
+    const webSockets = await loadWsServerBindings()
+    const harness = await createIntegrationHarness({ webSockets })
     try {
       const initialList = await fetch(`${harness.baseUrl}/api/terminal/sessions`)
       expect(initialList.status).toBe(200)

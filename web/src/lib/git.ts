@@ -41,3 +41,19 @@ export async function unstashGitPath(projectId: string, path: string): Promise<G
 export async function checkoutGitRef(projectId: string, ref: string): Promise<GitInfo | null> {
   return await postGitAction(projectId, 'checkout', { ref })
 }
+
+export async function pullGitRemote(projectId: string, remote: string, branch?: string): Promise<GitInfo | null> {
+  const payload: Record<string, unknown> = { remote }
+  if (branch && branch.trim()) {
+    payload.branch = branch.trim()
+  }
+  return await postGitAction(projectId, 'pull', payload)
+}
+
+export async function pushGitRemote(projectId: string, remote: string, branch?: string): Promise<GitInfo | null> {
+  const payload: Record<string, unknown> = { remote }
+  if (branch && branch.trim()) {
+    payload.branch = branch.trim()
+  }
+  return await postGitAction(projectId, 'push', payload)
+}

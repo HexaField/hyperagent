@@ -25,6 +25,8 @@ import {
   checkoutGitRef,
   commitGitChanges,
   discardGitPath,
+  pullGitRemote,
+  pushGitRemote,
   stageGitPaths,
   stashGitPath,
   unstageGitPaths,
@@ -361,6 +363,14 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
     return text && text.trim().length ? text : null
   }
   const branchLabel = () => git()?.branch ?? workspace().defaultBranch
+  const remoteBranchTarget = () => {
+    const candidate = branchLabel()
+    if (candidate && candidate.trim().length) {
+      return candidate
+    }
+    const fallback = workspace().defaultBranch
+    return fallback && fallback.trim().length ? fallback : 'main'
+  }
 
   const changeGroups = createMemo(() => {
     const base = git()?.changes ?? []
@@ -380,6 +390,16 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
   const stagedChanges = () => changeGroups().staged
   const workingChanges = () => changeGroups().unstaged
   const isItemPending = (key: string) => pendingItem() === key
+  const isRemoteActionPending = (remoteName: string, mode: 'pull' | 'push') => pendingAction() === `${mode}:${remoteName}`
+
+  const handleRemoteSync = async (remoteName: string, mode: 'pull' | 'push') => {
+    const branch = remoteBranchTarget()
+    const executor = () =>
+      mode === 'pull'
+        ? pullGitRemote(workspace().id, remoteName, branch)
+        : pushGitRemote(workspace().id, remoteName, branch)
+    await runGitAction(`${mode}:${remoteName}`, executor)
+  }
 
   const runGitAction = async (label: string, executor: () => Promise<GitInfo | null>, itemKey?: string) => {
     setGitError(null)
@@ -731,8 +751,30 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
             <For each={remotes().slice(0, 3)}>
               {(remote) => (
                 <div class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2">
-                  <p class="text-xs uppercase tracking-wide text-[var(--text-muted)]">{remote.name}</p>
-                  <p class="text-sm text-[var(--text)]">{remote.url}</p>
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p class="text-xs uppercase tracking-wide text-[var(--text-muted)]">{remote.name}</p>
+                      <p class="text-sm text-[var(--text)]">{remote.url}</p>
+                    </div>
+                    <div class="flex gap-2 text-xs">
+                      <button
+                        class="rounded-lg border border-[var(--border)] px-3 py-1"
+                        type="button"
+                        disabled={isRemoteActionPending(remote.name, 'pull')}
+                        onClick={() => void handleRemoteSync(remote.name, 'pull')}
+                      >
+                        {isRemoteActionPending(remote.name, 'pull') ? 'Pulling…' : 'Pull'}
+                      </button>
+                      <button
+                        class="rounded-lg border border-[var(--border)] px-3 py-1"
+                        type="button"
+                        disabled={isRemoteActionPending(remote.name, 'push')}
+                        onClick={() => void handleRemoteSync(remote.name, 'push')}
+                      >
+                        {isRemoteActionPending(remote.name, 'push') ? 'Pushing…' : 'Push'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </For>

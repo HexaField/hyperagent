@@ -620,7 +620,11 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         }
       }
     }
-    return resolved
+    try {
+      return await fs.realpath(resolved)
+    } catch {
+      return resolved
+    }
   }
   const terminalWsServer: WebSocketServerType = new WebSocketServerCtor({ noServer: true })
   const DEFAULT_TERMINAL_USER_ID = process.env.TERMINAL_DEFAULT_USER_ID ?? 'anonymous'
@@ -1768,6 +1772,44 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 
+  const gitPullHandler: RequestHandler = async (req, res) => {
+    const project = getProjectOr404(req.params.projectId, res)
+    if (!project) return
+    const remote = typeof req.body?.remote === 'string' ? req.body.remote.trim() : ''
+    const branchInput = typeof req.body?.branch === 'string' ? req.body.branch.trim() : ''
+    if (!remote) {
+      res.status(400).json({ error: 'remote is required' })
+      return
+    }
+    const args = branchInput ? ['pull', remote, branchInput] : ['pull', remote]
+    try {
+      await runGitCommand(args, project.repositoryPath)
+      await respondWithUpdatedGit(res, project.repositoryPath)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : 'Failed to pull remote'
+      res.status(500).json({ error: text })
+    }
+  }
+
+  const gitPushHandler: RequestHandler = async (req, res) => {
+    const project = getProjectOr404(req.params.projectId, res)
+    if (!project) return
+    const remote = typeof req.body?.remote === 'string' ? req.body.remote.trim() : ''
+    const branchInput = typeof req.body?.branch === 'string' ? req.body.branch.trim() : ''
+    if (!remote) {
+      res.status(400).json({ error: 'remote is required' })
+      return
+    }
+    const args = branchInput ? ['push', remote, branchInput] : ['push', remote]
+    try {
+      await runGitCommand(args, project.repositoryPath)
+      await respondWithUpdatedGit(res, project.repositoryPath)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : 'Failed to push remote'
+      res.status(500).json({ error: text })
+    }
+  }
+
   const registerRadicleRepositoryHandler: RequestHandler = async (req, res) => {
     const { repositoryPath, name, description, visibility } = req.body ?? {}
     if (!repositoryPath || typeof repositoryPath !== 'string') {
@@ -2483,6 +2525,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   app.post('/api/projects/:projectId/git/checkout', gitCheckoutHandler)
   app.post('/api/projects/:projectId/git/stash', gitStashHandler)
   app.post('/api/projects/:projectId/git/unstash', gitUnstashHandler)
+  app.post('/api/projects/:projectId/git/pull', gitPullHandler)
+  app.post('/api/projects/:projectId/git/push', gitPushHandler)
   app.post('/api/projects', createProjectHandler)
   app.get('/api/pull-requests/:prId', pullRequestDetailHandler)
   app.get('/api/pull-requests/:prId/diff', pullRequestDiffHandler)
