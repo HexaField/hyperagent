@@ -16,7 +16,7 @@ import {
 } from 'solid-js'
 import DiffViewer from '../components/DiffViewer'
 import CanvasWorkspace, { type CanvasWidgetConfig } from '../components/layout/CanvasWorkspace'
-import OpencodeConsole from '../components/OpencodeConsole'
+import OpencodeConsole, { opencodePages } from '../components/OpencodeConsole'
 import WorkflowDetailView from '../components/WorkflowDetailView'
 import WorkflowLaunchModal from '../components/WorkflowLaunchModal'
 import { WIDGET_TEMPLATES, type WidgetAddEventDetail, type WidgetTemplateId } from '../constants/widgetTemplates'
@@ -393,28 +393,11 @@ function createWidgetConfig(options: CreateWidgetConfigOptions): CanvasWidgetCon
         initialSize: { width: 720, height: 520 },
         startOpen: true,
         removable,
-        pages: () => [
-          {
-            title: 'List',
-            content: () => (
-              <OpencodeConsole
-                workspaceFilter={workspace.repositoryPath}
-                onWorkspaceFilterChange={() => {}}
-                mobilePage={0}
-              />
-            )
-          },
-          {
-            title: 'Details',
-            content: () => (
-              <OpencodeConsole
-                workspaceFilter={workspace.repositoryPath}
-                onWorkspaceFilterChange={() => {}}
-                mobilePage={1}
-              />
-            )
-          }
-        ],
+        pages: () =>
+          opencodePages({
+            workspaceFilter: workspace.repositoryPath,
+            lockWorkspace: true
+          }),
         content: () => <SessionsWidget workspacePath={workspace.repositoryPath} />
       }
     default:

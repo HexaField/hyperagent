@@ -1,6 +1,61 @@
 import { For, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import type { CanvasWidgetConfig } from './CanvasWorkspace'
 
+const PAGE_STORAGE_PREFIX = 'single-widget:page'
+const PAGE_QUERY_PARAM = 'widgetPage'
+
+function getWidgetPageStorageKey(id: string) {
+  return `${PAGE_STORAGE_PREFIX}:${id}`
+}
+
+function readWidgetPage(id: string | null | undefined): number | null {
+  if (!id || typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(getWidgetPageStorageKey(id))
+    if (raw === null) return null
+    const value = Number(JSON.parse(raw))
+    return Number.isNaN(value) ? null : value
+  } catch {
+    return null
+  }
+}
+
+function persistWidgetPage(id: string | null | undefined, value: number) {
+  if (!id || typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(getWidgetPageStorageKey(id), JSON.stringify(value))
+  } catch {}
+}
+
+function readPageFromQuery(): { widgetId: string | null; page: number } | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const raw = params.get(PAGE_QUERY_PARAM)
+    if (raw === null) return null
+    if (raw.includes(':')) {
+      const [idPart, pagePart] = raw.split(':')
+      const parsed = Number(pagePart)
+      if (Number.isNaN(parsed)) return null
+      return { widgetId: idPart || null, page: parsed }
+    }
+    const fallback = Number(raw)
+    return Number.isNaN(fallback) ? null : { widgetId: null, page: fallback }
+  } catch {
+    return null
+  }
+}
+
+function updatePageQueryParam(widgetId: string, value: number) {
+  if (typeof window === 'undefined') return
+  try {
+    const url = new URL(window.location.href)
+    if (value > 0) url.searchParams.set(PAGE_QUERY_PARAM, `${widgetId}:${value}`)
+    else url.searchParams.delete(PAGE_QUERY_PARAM)
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+  } catch {}
+}
+
 export type SingleWidgetViewProps = {
   storageKey: string
   widgets: CanvasWidgetConfig[]
@@ -128,6 +183,25 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
   const [page, setPage] = createSignal(0)
   const [pageTitles, setPageTitles] = createSignal<string[]>([])
   const [singleRoot, setSingleRoot] = createSignal<HTMLDivElement | undefined>(undefined)
+  let lastWidgetForPageRestore: string | null = null
+
+  createEffect(() => {
+    const widget = selectedWidget()
+    if (!widget || !widget.id) return
+    if (widget.id === lastWidgetForPageRestore) return
+    lastWidgetForPageRestore = widget.id
+    const queryValue = readPageFromQuery()
+    if (queryValue && (queryValue.widgetId === null || queryValue.widgetId === widget.id)) {
+      setPage(Math.max(0, Math.floor(queryValue.page)))
+      return
+    }
+    const storedValue = readWidgetPage(widget.id)
+    if (storedValue !== null) {
+      setPage(Math.max(0, Math.floor(storedValue)))
+    } else {
+      setPage(0)
+    }
+  })
 
   // update pages info whenever selected widget changes or widget declares pages()
   createEffect(() => {
@@ -236,6 +310,14 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
       const cur = Math.min(Math.max(0, page()), maxIndex)
       container.style.transform = `translateX(-${cur * 100}%)`
     }
+  })
+
+  createEffect(() => {
+    const widget = selectedWidget()
+    if (!widget || !widget.id) return
+    const value = Math.max(0, Math.floor(page()))
+    persistWidgetPage(widget.id, value)
+    updatePageQueryParam(widget.id, value)
   })
 
   return (
