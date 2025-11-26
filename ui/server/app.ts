@@ -291,6 +291,7 @@ type GitMetadata = {
     summary: string | null
   }
   diffStat?: string | null
+  diffText?: string | null
 }
 
 export type CreateServerOptions = {
@@ -774,14 +775,15 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       }
     }
 
-    const [branch, commitHash, commitMessage, commitTimestamp, remotesRaw, statusOutput, diffStat] = await Promise.all([
+    const [branch, commitHash, commitMessage, commitTimestamp, remotesRaw, statusOutput, diffStat, diffText] = await Promise.all([
       readValue(['rev-parse', '--abbrev-ref', 'HEAD']),
       readValue(['rev-parse', 'HEAD']),
       readValue(['log', '-1', '--pretty=%s']),
       readValue(['log', '-1', '--pretty=%cI']),
       readValue(['remote', '-v']),
       readValue(['status', '--short']),
-      readValue(['diff', '--stat'])
+      readValue(['diff', '--stat']),
+      readValue(['diff', '--no-color'])
     ])
 
     const remotes: Array<{ name: string; url: string }> = []
@@ -825,7 +827,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         changedFiles,
         summary: statusOutput ? statusOutput.split('\n').slice(0, 8).join('\n') : null
       },
-      diffStat: diffStat ?? null
+      diffStat: diffStat ?? null,
+      diffText: diffText ?? null
     }
   }
 

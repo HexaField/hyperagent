@@ -13,4 +13,5 @@ export type GitInfo = {
     summary: string | null
   } | null
   diffStat?: string | null
+  diffText?: string | null
 }

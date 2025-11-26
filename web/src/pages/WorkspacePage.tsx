@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
+import DiffViewer from '../components/DiffViewer'
 import CanvasWorkspace, { type CanvasWidgetConfig } from '../components/layout/CanvasWorkspace'
 import OpencodeConsole from '../components/OpencodeConsole'
 import WorkflowDetailView from '../components/WorkflowDetailView'
@@ -328,6 +329,11 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
   const commit = () => git()?.commit ?? null
   const remotes = () => git()?.remotes ?? []
   const remoteCount = () => remotes().length
+  const diffText = () => {
+    const text = git()?.diffText ?? null
+    if (!text) return null
+    return text.trim().length ? text : null
+  }
 
   return (
     <div class="flex h-full flex-col gap-5 p-6 text-[var(--text)]">
@@ -398,11 +404,11 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
             </pre>
           )}
         </Show>
-        <Show when={git()?.diffStat}>
-          {(stat) => (
-            <pre class="mt-3 max-h-40 overflow-auto rounded-2xl bg-[var(--bg-muted)] px-3 py-2 text-xs text-[var(--text-muted)]">
-              {stat()}
-            </pre>
+        <Show when={diffText()}>
+          {(diff) => (
+            <div class="mt-4">
+              <DiffViewer diffText={diff()} />
+            </div>
           )}
         </Show>
         <Show when={remoteCount() > 0}>
