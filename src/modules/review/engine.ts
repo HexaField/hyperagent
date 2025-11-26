@@ -1,4 +1,4 @@
-import type { PullRequestCommitRecord, PullRequestRecord, FileDiff, ReviewEngineResult } from './types'
+import type { FileDiff, PullRequestCommitRecord, PullRequestRecord, ReviewEngineResult } from './types'
 
 export type ReviewEngineInput = {
   pullRequest: PullRequestRecord

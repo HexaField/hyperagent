@@ -1,6 +1,10 @@
-import fs from 'fs/promises'
 import fsSync from 'fs'
-import { spawn as spawnProcess, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from 'node:child_process'
+import fs from 'fs/promises'
+import {
+  spawn as spawnProcess,
+  type ChildProcessWithoutNullStreams,
+  type SpawnOptionsWithoutStdio
+} from 'node:child_process'
 import os from 'os'
 import path from 'path'
 

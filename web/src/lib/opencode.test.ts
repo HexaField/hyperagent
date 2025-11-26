@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, type Mock } from 'vitest'
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { fetchJson } from './http'
 import {
   fetchOpencodeRuns,

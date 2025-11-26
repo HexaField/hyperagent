@@ -1,8 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@solidjs/testing-library'
 import { Route, Router } from '@solidjs/router'
+import { cleanup, fireEvent, render, screen, waitFor } from '@solidjs/testing-library'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import RepositoryNavigator from '../RepositoryNavigator'
 import { fetchJson } from '../../../lib/http'
+import RepositoryNavigator from '../RepositoryNavigator'
 
 type ProjectPayload = {
   id: string
@@ -98,7 +98,9 @@ describe('RepositoryNavigator', () => {
     fireEvent.submit(screen.getByTestId('new-repo-form'))
 
     await waitFor(() => {
-      const postCall = fetchJsonMock.mock.calls.find(([url, init]) => url === '/api/projects' && init?.method === 'POST')
+      const postCall = fetchJsonMock.mock.calls.find(
+        ([url, init]) => url === '/api/projects' && init?.method === 'POST'
+      )
       expect(postCall).toBeTruthy()
       const [, init] = postCall!
       const payload = JSON.parse(init!.body as string)
@@ -142,7 +144,9 @@ describe('RepositoryNavigator', () => {
     fireEvent.click(convertButton)
 
     await waitFor(() => {
-      const postCall = fetchJsonMock.mock.calls.find(([url, init]) => url === '/api/projects' && init?.method === 'POST')
+      const postCall = fetchJsonMock.mock.calls.find(
+        ([url, init]) => url === '/api/projects' && init?.method === 'POST'
+      )
       expect(postCall).toBeTruthy()
       const [, init] = postCall!
       const payload = JSON.parse(init!.body as string)

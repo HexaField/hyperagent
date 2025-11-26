@@ -1,6 +1,6 @@
-import fs from 'fs/promises'
-import { existsSync } from 'fs'
 import type { Dirent } from 'fs'
+import { existsSync } from 'fs'
+import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 
@@ -216,8 +216,21 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
         if (!parsed.id || parsed.sessionID !== sessionId || !parsed.role) continue
         const parts = await readParts(parsed.id)
         const text = parts
-          .filter((part) => part.type === 'text' && typeof part.text === 'string')
-          .map((part) => part.text?.trim() ?? '')
+          .map((part) => {
+            if (part.type === 'text' && typeof part.text === 'string') {
+              return part.text?.trim() ?? ''
+            }
+            if (part.type === 'tool') {
+              return `🔧 Tool: ${part.text || 'Executing tool'}`
+            }
+            if (part.type === 'step-start') {
+              return `▶️ Step: ${part.text || 'Starting step'}`
+            }
+            if (part.type === 'step-finish') {
+              return `✅ Step: ${part.text || 'Step completed'}`
+            }
+            return null
+          })
           .filter(Boolean)
           .join('\n')
         messages.push({
@@ -331,7 +344,8 @@ async function readDirSafe(dirPath: string): Promise<Dirent[]> {
 }
 
 export function resolveDefaultOpencodeRoot(): string {
-  const envOverride = process.env.OPENCODE_STORAGE_ROOT ?? process.env.OPENCODE_DATA_DIR ?? process.env.OPENCODE_DATA_ROOT
+  const envOverride =
+    process.env.OPENCODE_STORAGE_ROOT ?? process.env.OPENCODE_DATA_DIR ?? process.env.OPENCODE_DATA_ROOT
   if (envOverride) {
     return path.resolve(envOverride)
   }

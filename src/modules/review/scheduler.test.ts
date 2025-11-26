@@ -4,9 +4,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ProjectRecord } from '../projects'
-import type { PullRequestCommitRecord, PullRequestRecord, ReviewEngineResult } from './types'
 import { reviewPersistence } from './persistence'
 import { createReviewSchedulerModule } from './scheduler'
+import type { PullRequestCommitRecord, PullRequestRecord, ReviewEngineResult } from './types'
 
 type ReviewRepos = ReturnType<typeof reviewPersistence.createBindings>
 
@@ -192,12 +192,7 @@ describe('review scheduler', () => {
     expect(comments[0].suggestedPatch).toContain('src/index.ts')
 
     const eventKinds = repos.pullRequestEvents.listByPullRequest(pullRequest.id).map((event) => event.kind)
-    expect(eventKinds).toEqual([
-      'review_requested',
-      'review_run_started',
-      'comment_added',
-      'review_run_completed'
-    ])
+    expect(eventKinds).toEqual(['review_requested', 'review_run_started', 'comment_added', 'review_run_completed'])
 
     expect(pullRequestModule.getPullRequestWithCommits).toHaveBeenCalledWith(pullRequest.id)
     expect(diffModule.getPullRequestDiff).toHaveBeenCalledTimes(1)

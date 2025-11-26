@@ -80,6 +80,8 @@ import {
 } from '../../src/modules/database'
 import { listBranchCommits, listGitBranches } from '../../src/modules/git'
 import type { Provider } from '../../src/modules/llm'
+import { createOpencodeRunner, type OpencodeRunner } from '../../src/modules/opencodeRunner'
+import { createOpencodeStorage, type OpencodeStorage } from '../../src/modules/opencodeStorage'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import { createDiffModule } from '../../src/modules/review/diff'
 import { createReviewEngineModule } from '../../src/modules/review/engine'
@@ -87,8 +89,6 @@ import { createPullRequestModule } from '../../src/modules/review/pullRequest'
 import { createDockerReviewRunnerGateway } from '../../src/modules/review/runnerGateway'
 import { createReviewSchedulerModule } from '../../src/modules/review/scheduler'
 import type { ReviewRunTrigger } from '../../src/modules/review/types'
-import { createOpencodeRunner, type OpencodeRunner } from '../../src/modules/opencodeRunner'
-import { createOpencodeStorage, type OpencodeStorage } from '../../src/modules/opencodeStorage'
 import { createTerminalModule, type LiveTerminalSession, type TerminalModule } from '../../src/modules/terminal'
 import { createAgentWorkflowExecutor } from '../../src/modules/workflowAgentExecutor'
 import type { WorkflowRunnerGateway } from '../../src/modules/workflowRunnerGateway'
@@ -198,7 +198,7 @@ function buildExternalUrl(pathOrUrl: string | null, origin: string | null): stri
 }
 
 function mergeFrameAncestorsDirective(policy: string | string[] | undefined, ancestor: string): string {
-  const normalized = Array.isArray(policy) ? policy.join('; ') : policy ?? ''
+  const normalized = Array.isArray(policy) ? policy.join('; ') : (policy ?? '')
   const directives = normalized
     .split(';')
     .map((entry) => entry.trim())
@@ -488,7 +488,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     maxRounds: WORKFLOW_AGENT_MAX_ROUNDS
   })
 
-  const workflowCallbackBaseUrl = process.env.WORKFLOW_CALLBACK_BASE_URL ?? `https://host.docker.internal:${defaultPort}`
+  const workflowCallbackBaseUrl =
+    process.env.WORKFLOW_CALLBACK_BASE_URL ?? `https://host.docker.internal:${defaultPort}`
   const workflowRunnerToken = process.env.WORKFLOW_RUNNER_TOKEN ?? process.env.WORKFLOW_CALLBACK_TOKEN ?? null
   const workflowRunnerGateway =
     options.workflowRunnerGateway ??
@@ -610,11 +611,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
           try {
             await runGitCommand(['checkout', '-B', branch], resolved)
           } catch (checkoutError) {
-            const reason = checkoutError instanceof Error
-              ? checkoutError.message
-              : symbolicError instanceof Error
-                ? symbolicError.message
-                : 'unknown failure'
+            const reason =
+              checkoutError instanceof Error
+                ? checkoutError.message
+                : symbolicError instanceof Error
+                  ? symbolicError.message
+                  : 'unknown failure'
             throw new Error(`Failed to set default branch "${branch}": ${reason}`)
           }
         }
@@ -836,19 +838,29 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       }
     }
 
-    const [branch, commitHash, commitMessage, commitTimestamp, remotesRaw, statusOutput, diffStat, diffText, stashOutput, branchList] =
-      await Promise.all([
+    const [
+      branch,
+      commitHash,
+      commitMessage,
+      commitTimestamp,
+      remotesRaw,
+      statusOutput,
+      diffStat,
+      diffText,
+      stashOutput,
+      branchList
+    ] = await Promise.all([
       readValue(['rev-parse', '--abbrev-ref', 'HEAD']),
       readValue(['rev-parse', 'HEAD']),
       readValue(['log', '-1', '--pretty=%s']),
       readValue(['log', '-1', '--pretty=%cI']),
       readValue(['remote', '-v']),
       readValue(['status', '--short'], { preserveWhitespace: true }),
-        readValue(['diff', '--stat']),
-        readValue(['diff', '--no-color']),
-        readValue(['stash', 'list', '--pretty=%gd::%s']),
-        listGitBranches(resolved)
-      ])
+      readValue(['diff', '--stat']),
+      readValue(['diff', '--no-color']),
+      readValue(['stash', 'list', '--pretty=%gd::%s']),
+      listGitBranches(resolved)
+    ])
 
     const remotes: Array<{ name: string; url: string }> = []
     if (remotesRaw) {
@@ -1739,7 +1751,10 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       return
     }
     try {
-      await runGitCommand(['stash', 'push', '--include-untracked', '-m', `${FILE_STASH_PREFIX}${pathInput}`, '--', pathInput], project.repositoryPath)
+      await runGitCommand(
+        ['stash', 'push', '--include-untracked', '-m', `${FILE_STASH_PREFIX}${pathInput}`, '--', pathInput],
+        project.repositoryPath
+      )
       await respondWithUpdatedGit(res, project.repositoryPath)
     } catch (error) {
       const text = error instanceof Error ? error.message : 'Failed to stash file'
@@ -1903,8 +1918,10 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       return
     }
     const normalizedName = name.trim()
-    const normalizedBranch = typeof defaultBranch === 'string' && defaultBranch.trim().length ? defaultBranch.trim() : 'main'
-    const normalizedDescription = typeof description === 'string' && description.trim().length ? description.trim() : undefined
+    const normalizedBranch =
+      typeof defaultBranch === 'string' && defaultBranch.trim().length ? defaultBranch.trim() : 'main'
+    const normalizedDescription =
+      typeof description === 'string' && description.trim().length ? description.trim() : undefined
     const normalizedPath = repositoryPath.trim()
     const normalizedVisibility = visibility === 'public' || visibility === 'private' ? visibility : 'private'
     let resolvedPath: string
@@ -2460,7 +2477,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   const listTerminalSessionsHandler: RequestHandler = async (req, res) => {
     try {
       const userId = resolveUserIdFromRequest(req)
-      const projectFilter = typeof req.query.projectId === 'string' && req.query.projectId.trim().length ? req.query.projectId.trim() : null
+      const projectFilter =
+        typeof req.query.projectId === 'string' && req.query.projectId.trim().length ? req.query.projectId.trim() : null
       const sessions = await terminalModule.listSessions(userId)
       const filtered = projectFilter ? sessions.filter((session) => session.projectId === projectFilter) : sessions
       res.json({ sessions: filtered })

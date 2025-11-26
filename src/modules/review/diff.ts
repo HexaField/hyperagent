@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import type { ProjectRecord } from '../projects'
-import type { FileDiff, DiffHunk, DiffLine, PullRequestRecord } from './types'
+import type { DiffHunk, DiffLine, FileDiff, PullRequestRecord } from './types'
 
 export type DiffModule = ReturnType<typeof createDiffModule>
 
@@ -12,7 +12,10 @@ export function createDiffModule() {
 
   async function getPullRequestDiff(pullRequest: PullRequestRecord, project: ProjectRecord): Promise<FileDiff[]> {
     const repoPath = path.resolve(project.repositoryPath)
-    const diffText = await runGit(['diff', '--unified=5', `${pullRequest.targetBranch}..${pullRequest.sourceBranch}`], repoPath)
+    const diffText = await runGit(
+      ['diff', '--unified=5', `${pullRequest.targetBranch}..${pullRequest.sourceBranch}`],
+      repoPath
+    )
     if (!diffText.trim()) return []
     return parseUnifiedDiff(diffText)
   }

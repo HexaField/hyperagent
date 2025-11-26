@@ -64,7 +64,10 @@ export default function WorkflowLaunchModal(props: WorkflowLaunchModalProps) {
   }
 
   return (
-    <form class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4" onSubmit={handleSubmit}>
+    <form
+      class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4"
+      onSubmit={handleSubmit}
+    >
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">Launch workflow</p>

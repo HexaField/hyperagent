@@ -313,7 +313,38 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
                     <span class="uppercase tracking-wide">{message.role}</span>
                     <span>{new Date(message.createdAt).toLocaleString()}</span>
                   </header>
-                  <p class="whitespace-pre-wrap text-[var(--text)]">{message.text}</p>
+                  <div class="whitespace-pre-wrap text-[var(--text)]">
+                    {message.text.split('\n').map((line) => {
+                      if (line.startsWith('🔧 Tool:')) {
+                        return (
+                          <div class="flex items-center gap-2 text-blue-600 dark:text-blue-400">
+                            <span>🔧</span>
+                            <span class="font-medium">Tool:</span>
+                            <span>{line.slice('🔧 Tool:'.length).trim()}</span>
+                          </div>
+                        )
+                      }
+                      if (line.startsWith('▶️ Step:')) {
+                        return (
+                          <div class="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+                            <span>▶️</span>
+                            <span class="font-medium">Step:</span>
+                            <span>{line.slice('▶️ Step:'.length).trim()}</span>
+                          </div>
+                        )
+                      }
+                      if (line.startsWith('✅ Step:')) {
+                        return (
+                          <div class="flex items-center gap-2 text-green-600 dark:text-green-400">
+                            <span>✅</span>
+                            <span class="font-medium">Step:</span>
+                            <span>{line.slice('✅ Step:'.length).trim()}</span>
+                          </div>
+                        )
+                      }
+                      return <p class="mb-1 last:mb-0">{line}</p>
+                    })}
+                  </div>
                 </article>
               )}
             </For>

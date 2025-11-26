@@ -1,5 +1,5 @@
-import fs from 'fs'
 import { spawn } from 'child_process'
+import fs from 'fs'
 import path from 'path'
 import type { PersistenceContext, PersistenceModule, Timestamp } from '../database'
 import { createRadicleRepoManager } from './repoManager'

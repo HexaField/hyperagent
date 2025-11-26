@@ -1,0 +1,15 @@
+{
+  "id": "ses_tool",
+  "directory": "/workspace/repo-tool",
+  "projectID": "proj_tool",
+  "title": "Tool Session",
+  "time": {
+    "created": 1700000001000,
+    "updated": 1700000001000
+  },
+  "summary": {
+    "additions": 5,
+    "deletions": 2,
+    "files": 2
+  }
+}

@@ -4,8 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { ProjectRecord } from '../projects'
-import type { PullRequestRecord } from './types'
 import { createDiffModule } from './diff'
+import type { PullRequestRecord } from './types'
 
 async function runGit(args: string[], cwd: string): Promise<string> {
   return await new Promise((resolve, reject) => {

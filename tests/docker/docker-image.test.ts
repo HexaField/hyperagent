@@ -11,11 +11,9 @@ describe('docker runtime smoke test', () => {
     const dockerPresent = commandExists('docker')
     expect(dockerPresent, "Docker CLI 'docker' must be installed to run review tests").toBe(true)
 
-    const output = spawnSync(
-      'docker',
-      ['run', '--rm', 'alpine:3.20', '/bin/sh', '-c', 'echo review-runner-ready'],
-      { encoding: 'utf8' }
-    )
+    const output = spawnSync('docker', ['run', '--rm', 'alpine:3.20', '/bin/sh', '-c', 'echo review-runner-ready'], {
+      encoding: 'utf8'
+    })
 
     expect(output.status, output.stderr).toBe(0)
     expect(output.stdout.trim()).toBe('review-runner-ready')

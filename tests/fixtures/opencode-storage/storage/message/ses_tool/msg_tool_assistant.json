@@ -1,0 +1,18 @@
+{
+  "id": "msg_tool_assistant",
+  "sessionID": "ses_tool",
+  "role": "assistant",
+  "parentID": "msg_tool_user",
+  "time": {
+    "created": 1700000008000,
+    "completed": 1700000010000
+  },
+  "modelID": "github-copilot/gpt-5-mini",
+  "providerID": "opencode",
+  "mode": "build",
+  "path": {
+    "cwd": "/workspace/repo-tool",
+    "root": "/workspace/repo-tool"
+  },
+  "finish": "stop"
+}

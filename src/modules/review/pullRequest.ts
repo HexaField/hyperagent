@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import path from 'node:path'
-import type { ProjectsRepository, ProjectRecord } from '../projects'
+import type { ProjectRecord, ProjectsRepository } from '../projects'
 import type {
   PullRequestCommitInput,
   PullRequestCommitsRepository,

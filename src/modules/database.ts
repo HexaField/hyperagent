@@ -26,6 +26,19 @@ import {
   type RadicleRegistrationsRepository
 } from './radicle'
 import {
+  reviewPersistence,
+  type PullRequestCommitInput,
+  type PullRequestCommitsRepository,
+  type PullRequestEventsRepository,
+  type PullRequestInsertInput,
+  type PullRequestsRepository,
+  type ReviewBindings,
+  type ReviewCommentsRepository,
+  type ReviewRunInsertInput,
+  type ReviewRunsRepository,
+  type ReviewThreadsRepository
+} from './review/persistence'
+import {
   terminalSessionsPersistence,
   type TerminalSessionCreateInput,
   type TerminalSessionRecord,
@@ -47,19 +60,6 @@ import {
   type WorkflowsBindings,
   type WorkflowsRepository
 } from './workflows'
-import {
-  reviewPersistence,
-  type PullRequestCommitInput,
-  type PullRequestCommitsRepository,
-  type PullRequestEventsRepository,
-  type PullRequestInsertInput,
-  type PullRequestsRepository,
-  type ReviewBindings,
-  type ReviewCommentsRepository,
-  type ReviewRunInsertInput,
-  type ReviewRunsRepository,
-  type ReviewThreadsRepository
-} from './review/persistence'
 
 export type Timestamp = string
 
@@ -135,23 +135,23 @@ export type {
   CodeServerSessionsRepository,
   ProjectRecord,
   ProjectsRepository,
-  RadicleRegistrationInput,
-  RadicleRegistrationRecord,
-  RadicleRegistrationsRepository,
   PullRequestCommitInput,
   PullRequestCommitsRepository,
   PullRequestEventsRepository,
   PullRequestInsertInput,
   PullRequestsRepository,
+  RadicleRegistrationInput,
+  RadicleRegistrationRecord,
+  RadicleRegistrationsRepository,
+  ReviewCommentsRepository,
+  ReviewRunInsertInput,
+  ReviewRunsRepository,
+  ReviewThreadsRepository,
   TerminalSessionCreateInput,
   TerminalSessionRecord,
   TerminalSessionStatus,
   TerminalSessionUpdateInput,
   TerminalSessionsRepository,
-  ReviewRunInsertInput,
-  ReviewRunsRepository,
-  ReviewThreadsRepository,
-  ReviewCommentsRepository,
   WorkflowInput,
   WorkflowKind,
   WorkflowRecord,

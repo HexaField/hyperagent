@@ -1,7 +1,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { describe, expect, it, vi, afterEach } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createOpencodeStorage, resolveDefaultOpencodeRoot } from './opencodeStorage'
 
 const fixtureRoot = path.join(process.cwd(), 'tests/fixtures/opencode-storage')
@@ -10,7 +10,7 @@ describe('createOpencodeStorage', () => {
   it('lists sessions sorted by updatedAt and filters by workspace path', async () => {
     const storage = createOpencodeStorage({ rootDir: fixtureRoot })
     const sessions = await storage.listSessions()
-    expect(sessions.map((session) => session.id)).toEqual(['ses_beta', 'ses_alpha'])
+    expect(sessions.map((session) => session.id)).toEqual(['ses_beta', 'ses_alpha', 'ses_tool'])
 
     const filtered = await storage.listSessions({ workspacePath: '/workspace/repo-alpha' })
     expect(filtered).toHaveLength(1)
@@ -27,6 +27,18 @@ describe('createOpencodeStorage', () => {
     const assistant = detail?.messages.find((message) => message.role === 'assistant')
     expect(assistant?.text).toContain('Outlined plan')
     expect(assistant?.modelId).toBe('github-copilot/gpt-5-mini')
+  })
+
+  it('includes tool, step-start, and step-finish parts in message text', async () => {
+    const storage = createOpencodeStorage({ rootDir: fixtureRoot })
+    const detail = await storage.getSession('ses_tool')
+    expect(detail).not.toBeNull()
+    expect(detail?.session.title).toBe('Tool Session')
+    expect(detail?.messages).toHaveLength(1)
+    const assistant = detail?.messages.find((message) => message.role === 'assistant')
+    expect(assistant?.text).toContain('🔧 Tool: Running npm install')
+    expect(assistant?.text).toContain('▶️ Step: Installing dependencies')
+    expect(assistant?.text).toContain('✅ Step: Dependencies installed successfully')
   })
 })
 

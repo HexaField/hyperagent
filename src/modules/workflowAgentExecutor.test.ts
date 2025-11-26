@@ -43,7 +43,9 @@ describe('createAgentWorkflowExecutor', () => {
     const logsPath = result.logsPath
     const legacyPath = logsPath?.endsWith('.hyperagent.json')
     const perRunPath =
-      typeof logsPath === 'string' && logsPath.includes(`${path.sep}.hyperagent${path.sep}`) && logsPath.endsWith('.json')
+      typeof logsPath === 'string' &&
+      logsPath.includes(`${path.sep}.hyperagent${path.sep}`) &&
+      logsPath.endsWith('.json')
     expect(logsPath === null || legacyPath || perRunPath).toBe(true)
   })
 

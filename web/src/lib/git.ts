@@ -1,11 +1,15 @@
-import { fetchJson } from './http'
 import type { GitInfo } from '../types/git'
+import { fetchJson } from './http'
 
 type GitResponse = {
   git: GitInfo | null
 }
 
-async function postGitAction(projectId: string, action: string, body: Record<string, unknown>): Promise<GitInfo | null> {
+async function postGitAction(
+  projectId: string,
+  action: string,
+  body: Record<string, unknown>
+): Promise<GitInfo | null> {
   const payload = await fetchJson<GitResponse>(`/api/projects/${projectId}/git/${action}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

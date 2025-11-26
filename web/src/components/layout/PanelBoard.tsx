@@ -280,12 +280,10 @@ export default function PanelBoard(props: PanelBoardProps) {
     }))
   }
 
-  const getPanelRect = (panelId: string): PanelRect => state()[panelId]?.rect ?? getPanelDefaults(panelId, (panel) => panel.defaultRect)
+  const getPanelRect = (panelId: string): PanelRect =>
+    state()[panelId]?.rect ?? getPanelDefaults(panelId, (panel) => panel.defaultRect)
 
-  const updatePanelState = (
-    panelId: string,
-    mutation: (current: PanelState, panel: PanelConfig) => PanelState
-  ) => {
+  const updatePanelState = (panelId: string, mutation: (current: PanelState, panel: PanelConfig) => PanelState) => {
     const panel = panelList().find((entry) => entry.id === panelId)
     if (!panel) return
     setState((prev) => {
@@ -344,7 +342,11 @@ export default function PanelBoard(props: PanelBoardProps) {
   }
 
   return (
-    <div class={`relative w-full ${props.class ?? ''}`} style={{ height: `${boardHeight()}px`, 'min-height': '760px' }} ref={assignBoardRef}>
+    <div
+      class={`relative w-full ${props.class ?? ''}`}
+      style={{ height: `${boardHeight()}px`, 'min-height': '760px' }}
+      ref={assignBoardRef}
+    >
       <Show when={maximizedId()}>
         <div class="pointer-events-none fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-sm" />
       </Show>
@@ -370,7 +372,7 @@ export default function PanelBoard(props: PanelBoardProps) {
             }
           })
           const hidden = () => maximizedId() !== null && maximizedId() !== panel.id
-          const zIndex = () => (isMaximized() ? 100 : zIndices()[panel.id] ?? 1)
+          const zIndex = () => (isMaximized() ? 100 : (zIndices()[panel.id] ?? 1))
           return (
             <div
               class="absolute flex flex-col gap-4 rounded-[1.25rem] border border-[var(--border)] bg-[var(--bg-card)] p-5 shadow-[0_18px_30px_rgba(15,23,42,0.12)]"

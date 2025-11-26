@@ -1,8 +1,8 @@
 import { useSearchParams } from '@solidjs/router'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onMount } from 'solid-js'
+import { useWorkspaceSelection } from '../../contexts/WorkspaceSelectionContext'
 import { fetchJson } from '../../lib/http'
 import { buildSessionWorkflowPayload } from '../../lib/sessions'
-import { useWorkspaceSelection } from '../../contexts/WorkspaceSelectionContext'
 import type { GitInfo } from '../../types/git'
 
 const BROWSER_PAGE_SIZE = 10
@@ -412,7 +412,9 @@ export default function RepositoryNavigator() {
               <input
                 type="text"
                 class={`flex-1 rounded-2xl border bg-[var(--bg-muted)] p-3 text-sm focus:outline-none focus:ring-2 ${
-                  browserPathInvalid() ? 'border-red-500 focus:ring-red-500' : 'border-[var(--border)] focus:ring-blue-500'
+                  browserPathInvalid()
+                    ? 'border-red-500 focus:ring-red-500'
+                    : 'border-[var(--border)] focus:ring-blue-500'
                 }`}
                 value={browserPathInput()}
                 onInput={(event) => {
@@ -438,8 +440,14 @@ export default function RepositoryNavigator() {
             </div>
             <Show when={browserError()}>{(message) => <p class="text-xs text-red-600">{message()}</p>}</Show>
             <div class="flex flex-col gap-2 rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-3">
-              <Show when={!browserLoading()} fallback={<p class="text-sm text-[var(--text-muted)]">Loading folders…</p>}>
-                <Show when={(browser()?.entries.length ?? 0) > 0} fallback={<p class="text-sm text-[var(--text-muted)]">No subfolders here.</p>}>
+              <Show
+                when={!browserLoading()}
+                fallback={<p class="text-sm text-[var(--text-muted)]">Loading folders…</p>}
+              >
+                <Show
+                  when={(browser()?.entries.length ?? 0) > 0}
+                  fallback={<p class="text-sm text-[var(--text-muted)]">No subfolders here.</p>}
+                >
                   <ul class="flex flex-col divide-y divide-[var(--border)]">
                     <For each={paginatedEntries()}>
                       {(entry) => {
@@ -468,7 +476,9 @@ export default function RepositoryNavigator() {
                                 Use in form
                               </button>
                               <Show when={entryIsRegistered()}>
-                                <span class="rounded-xl bg-green-600 px-3 py-1 font-semibold text-white">Registered</span>
+                                <span class="rounded-xl bg-green-600 px-3 py-1 font-semibold text-white">
+                                  Registered
+                                </span>
                               </Show>
                               <Show when={!entryIsRegistered()}>
                                 <Show
@@ -476,7 +486,10 @@ export default function RepositoryNavigator() {
                                   fallback={
                                     <Show when={registrationReason()}>
                                       {(reason) => (
-                                        <span class="rounded-xl bg-red-600 px-3 py-1 font-semibold text-white" title={reason()}>
+                                        <span
+                                          class="rounded-xl bg-red-600 px-3 py-1 font-semibold text-white"
+                                          title={reason()}
+                                        >
                                           Cannot register
                                         </span>
                                       )}
@@ -538,7 +551,11 @@ export default function RepositoryNavigator() {
             <h2 class="text-lg font-semibold">Hyperagent workspaces</h2>
           </div>
           <div class="flex flex-wrap items-center gap-2 text-sm">
-            <button class="rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white" type="button" onClick={openNewRepoModal}>
+            <button
+              class="rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white"
+              type="button"
+              onClick={openNewRepoModal}
+            >
               New repository
             </button>
             <button class="rounded-xl border border-[var(--border)] px-4 py-2" type="button" onClick={refreshProjects}>
@@ -608,9 +625,15 @@ export default function RepositoryNavigator() {
             Refresh
           </button>
         </div>
-        <Show when={radicleRepositories()} fallback={<p class="text-sm text-[var(--text-muted)]">Loading Radicle repositories…</p>}>
+        <Show
+          when={radicleRepositories()}
+          fallback={<p class="text-sm text-[var(--text-muted)]">Loading Radicle repositories…</p>}
+        >
           {(items) => (
-            <Show when={items().length} fallback={<p class="text-sm text-[var(--text-muted)]">No Radicle repositories detected yet.</p>}>
+            <Show
+              when={items().length}
+              fallback={<p class="text-sm text-[var(--text-muted)]">No Radicle repositories detected yet.</p>}
+            >
               <ul class="flex flex-col gap-3">
                 <For each={items()}>
                   {(entry) => (
@@ -626,14 +649,21 @@ export default function RepositoryNavigator() {
                         <Show
                           when={entry.radicle?.registered}
                           fallback={
-                            <span class="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700">Not registered</span>
+                            <span class="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700">
+                              Not registered
+                            </span>
                           }
                         >
-                          <span class="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">Registered</span>
+                          <span class="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+                            Registered
+                          </span>
                         </Show>
                       </div>
                       <div class="mt-3 flex flex-wrap items-center gap-3 text-xs text-[var(--text-muted)]">
-                        <Show when={entry.radicle?.radicleProjectId} fallback={<span>No Radicle project detected</span>}>
+                        <Show
+                          when={entry.radicle?.radicleProjectId}
+                          fallback={<span>No Radicle project detected</span>}
+                        >
                           {(id) => (
                             <span>
                               Project ID: <code class="rounded bg-[var(--bg-card)] px-1">{id()}</code>
@@ -659,7 +689,9 @@ export default function RepositoryNavigator() {
                           disabled={radicleConversionPath() === entry.project.repositoryPath}
                           onClick={() => void convertRadicleRepository(entry)}
                         >
-                          {radicleConversionPath() === entry.project.repositoryPath ? 'Converting…' : 'Convert to Hyperagent project'}
+                          {radicleConversionPath() === entry.project.repositoryPath
+                            ? 'Converting…'
+                            : 'Convert to Hyperagent project'}
                         </button>
                       </Show>
                       <Show when={expandedRadRepos().has(entry.project.id)}>
@@ -706,7 +738,12 @@ export default function RepositoryNavigator() {
 
       <Show when={sessionProject()}>
         {(activeProject) => (
-          <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" onClick={() => closeSessionModal()}>
+          <div
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+            role="dialog"
+            aria-modal="true"
+            onClick={() => closeSessionModal()}
+          >
             <form
               class="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6 shadow-2xl"
               onClick={(event) => event.stopPropagation()}
@@ -739,9 +776,7 @@ export default function RepositoryNavigator() {
                 onInput={(event) => setSessionDetails(event.currentTarget.value)}
                 disabled={sessionSubmitting()}
               />
-              <Show when={sessionStatus()}>
-                {(message) => <p class="mt-2 text-xs text-red-500">{message()}</p>}
-              </Show>
+              <Show when={sessionStatus()}>{(message) => <p class="mt-2 text-xs text-red-500">{message()}</p>}</Show>
               <div class="mt-4 flex justify-end gap-2">
                 <button
                   class="rounded-xl border border-[var(--border)] px-4 py-2 text-sm"
@@ -765,7 +800,12 @@ export default function RepositoryNavigator() {
       </Show>
 
       <Show when={newRepoModalOpen()}>
-        <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" onClick={closeNewRepoModal}>
+        <div
+          class="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={closeNewRepoModal}
+        >
           <form
             data-testid="new-repo-form"
             class="w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6"
@@ -816,11 +856,13 @@ export default function RepositoryNavigator() {
               value={form().description}
               onInput={(event) => setForm((prev) => ({ ...prev, description: event.currentTarget.value }))}
             />
-            <Show when={status()}>
-              {(message) => <p class="mt-2 text-xs text-[var(--text-muted)]">{message()}</p>}
-            </Show>
+            <Show when={status()}>{(message) => <p class="mt-2 text-xs text-[var(--text-muted)]">{message()}</p>}</Show>
             <div class="mt-4 flex justify-end gap-2 text-sm">
-              <button class="rounded-xl border border-[var(--border)] px-4 py-2" type="button" onClick={closeNewRepoModal}>
+              <button
+                class="rounded-xl border border-[var(--border)] px-4 py-2"
+                type="button"
+                onClick={closeNewRepoModal}
+              >
                 Cancel
               </button>
               <button class="rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white" type="submit">
@@ -872,7 +914,9 @@ const RepoInfoPanel = (props: { git: GitInfo | null; path: string }) => {
               <For each={props.git?.remotes ?? []}>
                 {(remote) => (
                   <li class="flex flex-wrap items-center gap-2">
-                    <span class="rounded-full bg-[var(--bg-muted)] px-2 py-0.5 text-xs font-semibold">{remote.name}</span>
+                    <span class="rounded-full bg-[var(--bg-muted)] px-2 py-0.5 text-xs font-semibold">
+                      {remote.name}
+                    </span>
                     <code class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap rounded bg-[var(--bg-muted)] px-2 py-0.5 text-xs">
                       {remote.url}
                     </code>

@@ -28,7 +28,11 @@ export type PullRequestInsertInput = {
 
 export type PullRequestsRepository = {
   insert: (input: PullRequestInsertInput) => PullRequestRecord
-  updateStatus: (id: string, status: PullRequestStatus, patch?: { mergedAt?: Timestamp | null; closedAt?: Timestamp | null }) => void
+  updateStatus: (
+    id: string,
+    status: PullRequestStatus,
+    patch?: { mergedAt?: Timestamp | null; closedAt?: Timestamp | null }
+  ) => void
   getById: (id: string) => PullRequestRecord | null
   listByProject: (projectId: string) => PullRequestRecord[]
   touch: (id: string) => void
@@ -69,7 +73,10 @@ export type ReviewRunInsertInput = {
 
 export type ReviewRunsRepository = {
   insert: (input: ReviewRunInsertInput) => ReviewRunRecord
-  update: (id: string, patch: Partial<Omit<ReviewRunRecord, 'id' | 'pullRequestId' | 'trigger' | 'runnerAgent'>>) => void
+  update: (
+    id: string,
+    patch: Partial<Omit<ReviewRunRecord, 'id' | 'pullRequestId' | 'trigger' | 'runnerAgent'>>
+  ) => void
   getById: (id: string) => ReviewRunRecord | null
   listByPullRequest: (pullRequestId: string) => ReviewRunRecord[]
   listByStatus: (status: ReviewRunStatus, limit?: number) => ReviewRunRecord[]
@@ -557,7 +564,11 @@ function createReviewThreadsRepository(db: Database.Database): ReviewThreadsRepo
     },
     markResolved: (threadId, resolved) => {
       const now = resolved ? new Date().toISOString() : null
-      db.prepare('UPDATE review_threads SET resolved = ?, resolved_at = ? WHERE id = ?').run(resolved ? 1 : 0, now, threadId)
+      db.prepare('UPDATE review_threads SET resolved = ?, resolved_at = ? WHERE id = ?').run(
+        resolved ? 1 : 0,
+        now,
+        threadId
+      )
     }
   }
 }

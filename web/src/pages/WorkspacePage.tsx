@@ -2,7 +2,18 @@ import { useSearchParams } from '@solidjs/router'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
+import {
+  For,
+  Match,
+  Show,
+  Switch,
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  onCleanup,
+  onMount
+} from 'solid-js'
 import DiffViewer from '../components/DiffViewer'
 import CanvasWorkspace, { type CanvasWidgetConfig } from '../components/layout/CanvasWorkspace'
 import OpencodeConsole from '../components/OpencodeConsole'
@@ -15,14 +26,6 @@ import type { GitFileChange, GitInfo } from '../types/git'
 
 import { listCodeServerSessions } from '../lib/codeServer'
 import { ensureWorkspaceDevspace, type DevspaceSession } from '../lib/devspace'
-import { fetchJson } from '../lib/http'
-import {
-  closeTerminalSession,
-  createTerminalSession,
-  createTerminalWebSocket,
-  listTerminalSessions,
-  type TerminalSession
-} from '../lib/terminal'
 import {
   checkoutGitRef,
   commitGitChanges,
@@ -34,6 +37,14 @@ import {
   unstageGitPaths,
   unstashGitPath
 } from '../lib/git'
+import { fetchJson } from '../lib/http'
+import {
+  closeTerminalSession,
+  createTerminalSession,
+  createTerminalWebSocket,
+  listTerminalSessions,
+  type TerminalSession
+} from '../lib/terminal'
 
 const TEMPLATE_ID_SET = new Set<WidgetTemplateId>(WIDGET_TEMPLATES.map((template) => template.id))
 
@@ -380,7 +391,9 @@ function WorkspaceCodeServerWidget(props: { workspaceId: string; workspaceName: 
     }
   })
 
-  const selectedSession = createMemo(() => workspaceSessions().find((session) => session.id === selectedSessionId()) ?? null)
+  const selectedSession = createMemo(
+    () => workspaceSessions().find((session) => session.id === selectedSessionId()) ?? null
+  )
   const sessionError = () => {
     const error = sessions.error
     if (!error) return null
@@ -390,7 +403,9 @@ function WorkspaceCodeServerWidget(props: { workspaceId: string; workspaceName: 
   const activeSessionUrl = createMemo(() => selectedSession()?.url ?? ephemeralSession()?.codeServerUrl ?? null)
   const activeSessionId = createMemo(() => selectedSession()?.id ?? ephemeralSession()?.sessionId ?? null)
   const activeSessionBranch = createMemo(() => selectedSession()?.branch ?? ephemeralSession()?.branch ?? null)
-  const activeSessionPath = createMemo(() => selectedSession()?.workspacePath ?? ephemeralSession()?.workspacePath ?? props.workspacePath)
+  const activeSessionPath = createMemo(
+    () => selectedSession()?.workspacePath ?? ephemeralSession()?.workspacePath ?? props.workspacePath
+  )
 
   const handleRefreshSessions = () => {
     setLaunchError(null)
@@ -422,14 +437,18 @@ function WorkspaceCodeServerWidget(props: { workspaceId: string; workspaceName: 
 
   return (
     <div class="flex h-full flex-col gap-4 p-6 text-[var(--text)]">
-      <section class="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <section class="h-full grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
         <div class="flex h-full flex-col gap-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 text-sm">
           <div>
             <p class="text-sm font-semibold">Workspace location</p>
             <p class="break-all text-xs text-[var(--text-muted)]">{props.workspacePath}</p>
           </div>
           <div class="flex flex-wrap gap-2">
-            <button class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs" type="button" onClick={handleRefreshSessions}>
+            <button
+              class="rounded-xl border border-[var(--border)] px-3 py-1 text-xs"
+              type="button"
+              onClick={handleRefreshSessions}
+            >
               Refresh list
             </button>
             <button
@@ -441,14 +460,13 @@ function WorkspaceCodeServerWidget(props: { workspaceId: string; workspaceName: 
               {launching() ? 'Launching…' : 'Launch VS Code here'}
             </button>
           </div>
-          <Show when={sessionError()}>
-            {(message) => <p class="text-xs text-red-400">{message()}</p>}
-          </Show>
-          <Show when={launchError()}>
-            {(message) => <p class="text-xs text-red-400">{message()}</p>}
-          </Show>
+          <Show when={sessionError()}>{(message) => <p class="text-xs text-red-400">{message()}</p>}</Show>
+          <Show when={launchError()}>{(message) => <p class="text-xs text-red-400">{message()}</p>}</Show>
           <div class="flex-1 space-y-2 overflow-auto pr-1">
-            <Show when={!isLoadingSessions()} fallback={<p class="text-xs text-[var(--text-muted)]">Loading sessions…</p>}>
+            <Show
+              when={!isLoadingSessions()}
+              fallback={<p class="text-xs text-[var(--text-muted)]">Loading sessions…</p>}
+            >
               <For each={workspaceSessions()}>
                 {(session) => (
                   <button
@@ -465,7 +483,9 @@ function WorkspaceCodeServerWidget(props: { workspaceId: string; workspaceName: 
                   >
                     <div class="flex items-center justify-between text-sm">
                       <span class="font-semibold">Session {session.id.slice(0, 8)}</span>
-                      <span class="text-xs text-[var(--text-muted)]">{new Date(session.startedAt).toLocaleString()}</span>
+                      <span class="text-xs text-[var(--text-muted)]">
+                        {new Date(session.startedAt).toLocaleString()}
+                      </span>
                     </div>
                     <p class="text-xs text-[var(--text-muted)]">{session.workspacePath}</p>
                     <p class="text-xs text-[var(--text-muted)]">Branch {session.branch}</p>
@@ -482,7 +502,9 @@ function WorkspaceCodeServerWidget(props: { workspaceId: string; workspaceName: 
           <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
             <div>
               <p class="text-sm font-semibold">
-                {activeSessionId() ? `Attached to ${activeSessionId()!.slice(0, 8)}` : 'Select or launch a VS Code session'}
+                {activeSessionId()
+                  ? `Attached to ${activeSessionId()!.slice(0, 8)}`
+                  : 'Select or launch a VS Code session'}
               </p>
               <p class="text-xs text-[var(--text-muted)]">
                 {activeSessionId()
@@ -584,7 +606,8 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
   const stagedChanges = () => changeGroups().staged
   const workingChanges = () => changeGroups().unstaged
   const isItemPending = (key: string) => pendingItem() === key
-  const isRemoteActionPending = (remoteName: string, mode: 'pull' | 'push') => pendingAction() === `${mode}:${remoteName}`
+  const isRemoteActionPending = (remoteName: string, mode: 'pull' | 'push') =>
+    pendingAction() === `${mode}:${remoteName}`
 
   const handleRemoteSync = async (remoteName: string, mode: 'pull' | 'push') => {
     const branch = remoteBranchTarget()
@@ -651,7 +674,11 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
   }
 
   const discardChange = (change: GitDisplayChange) => {
-    void runGitAction('discard', () => discardGitPath(workspace().id, change.path, change.isUntracked), `discard:${change.path}`)
+    void runGitAction(
+      'discard',
+      () => discardGitPath(workspace().id, change.path, change.isUntracked),
+      `discard:${change.path}`
+    )
   }
 
   const stashChange = (change: GitDisplayChange) => {
@@ -685,7 +712,10 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
     const label = describeGitChange(change, type)
     const renameInfo = change.renameFrom && change.renameTo ? `${change.renameFrom} → ${change.renameTo}` : null
     return (
-      <div class="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2" data-key={rowKey}>
+      <div
+        class="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2"
+        data-key={rowKey}
+      >
         <div>
           <p class="text-sm font-semibold text-[var(--text)]">{change.displayPath}</p>
           <p class="text-xs text-[var(--text-muted)]">{renameInfo ?? label}</p>
@@ -746,12 +776,16 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
               value={checkoutTarget()}
               onChange={(event) => setCheckoutTarget(event.currentTarget.value)}
             >
-              <For each={branches().length ? branches() : [branchLabel()]}>{(branch) => <option value={branch ?? ''}>{branch ?? 'unknown'}</option>}</For>
+              <For each={branches().length ? branches() : [branchLabel()]}>
+                {(branch) => <option value={branch ?? ''}>{branch ?? 'unknown'}</option>}
+              </For>
             </select>
             <button
               class="rounded-lg border border-[var(--border)] px-3 py-1"
               type="button"
-              disabled={!checkoutTarget().trim() || checkoutTarget() === branchLabel() || pendingAction() === 'checkout'}
+              disabled={
+                !checkoutTarget().trim() || checkoutTarget() === branchLabel() || pendingAction() === 'checkout'
+              }
               onClick={() => void handleCheckout()}
             >
               Checkout
@@ -814,14 +848,16 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
             >
               {isRefreshing() ? 'Refreshing…' : 'Refresh'}
             </button>
-            <button class="rounded-lg border border-[var(--border)] px-3 py-1" type="button" onClick={props.onOpenNavigator}>
+            <button
+              class="rounded-lg border border-[var(--border)] px-3 py-1"
+              type="button"
+              onClick={props.onOpenNavigator}
+            >
               Manage
             </button>
           </div>
         </div>
-        <Show when={gitError()}>
-          {(message) => <p class="mt-2 text-xs text-red-400">{message()}</p>}
-        </Show>
+        <Show when={gitError()}>{(message) => <p class="mt-2 text-xs text-red-400">{message()}</p>}</Show>
         <form
           class="mt-4 flex flex-col gap-3 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--bg-muted)] p-3"
           onSubmit={(event) => {
@@ -829,7 +865,10 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
             void handleCommit()
           }}
         >
-          <label class="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]" for="workspace-commit-message">
+          <label
+            class="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]"
+            for="workspace-commit-message"
+          >
             Commit message
           </label>
           <input
@@ -865,7 +904,10 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
               </button>
             </header>
             <div class="mt-3 space-y-2 overflow-auto pr-1">
-              <Show when={workingChanges().length} fallback={<p class="text-xs text-[var(--text-muted)]">No unstaged changes.</p>}>
+              <Show
+                when={workingChanges().length}
+                fallback={<p class="text-xs text-[var(--text-muted)]">No unstaged changes.</p>}
+              >
                 <For each={workingChanges()}>{(change) => renderChangeRow(change, 'working')}</For>
               </Show>
             </div>
@@ -885,7 +927,10 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
               </button>
             </header>
             <div class="mt-3 space-y-2 overflow-auto pr-1">
-              <Show when={stagedChanges().length} fallback={<p class="text-xs text-[var(--text-muted)]">No staged changes.</p>}>
+              <Show
+                when={stagedChanges().length}
+                fallback={<p class="text-xs text-[var(--text-muted)]">No staged changes.</p>}
+              >
                 <For each={stagedChanges()}>{(change) => renderChangeRow(change, 'staged')}</For>
               </Show>
             </div>

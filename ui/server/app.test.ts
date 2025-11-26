@@ -2,23 +2,22 @@ import fs from 'fs/promises'
 import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import { EventEmitter, once } from 'node:events'
+import type { IncomingMessage } from 'node:http'
 import { createServer as createHttpServer } from 'node:http'
 import { request as httpsRequest } from 'node:https'
-import type { IncomingMessage } from 'node:http'
-import { AddressInfo } from 'node:net'
 import type { Socket } from 'node:net'
-import { TextDecoder } from 'node:util'
+import { AddressInfo } from 'node:net'
 import { pathToFileURL } from 'node:url'
+import { TextDecoder } from 'node:util'
 import os from 'os'
 import path from 'path'
 import selfsigned from 'selfsigned'
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import type WebSocketType from 'ws'
-import type { RawData as WsRawData, WebSocketServer as WebSocketServerType } from 'ws'
+import type { WebSocketServer as WebSocketServerType, RawData as WsRawData } from 'ws'
 import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../../src/modules/agent'
 import type { CodeServerController, CodeServerHandle, CodeServerOptions } from '../../src/modules/codeServer'
 import type { TerminalSessionRecord } from '../../src/modules/database'
-import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import type { OpencodeRunner } from '../../src/modules/opencodeRunner'
 import {
   createOpencodeStorage,
@@ -26,6 +25,7 @@ import {
   type OpencodeSessionSummary,
   type OpencodeStorage
 } from '../../src/modules/opencodeStorage'
+import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import type { LiveTerminalSession, TerminalModule } from '../../src/modules/terminal'
 import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from '../../src/modules/workflowRunnerGateway'
 import { createServerApp } from './app'
@@ -36,15 +36,14 @@ const loadWsClient = async (): Promise<typeof WebSocketType> => {
   const nodeRequire = eval('require') as NodeJS.Require
   const resolvedPath = nodeRequire.resolve('ws')
   const packageDir = path.dirname(resolvedPath)
-  const candidatePaths = [
-    path.join(packageDir, 'lib', 'websocket.js'),
-    resolvedPath
-  ]
+  const candidatePaths = [path.join(packageDir, 'lib', 'websocket.js'), resolvedPath]
 
   for (const candidate of candidatePaths) {
     try {
       const mod = nodeRequire(candidate)
-      const WebSocket = (mod && typeof mod === 'object' && 'default' in mod ? (mod as any).default : mod) as typeof WebSocketType
+      const WebSocket = (
+        mod && typeof mod === 'object' && 'default' in mod ? (mod as any).default : mod
+      ) as typeof WebSocketType
       if (typeof WebSocket === 'function') {
         return WebSocket
       }
@@ -194,7 +193,7 @@ async function startFakeCodeServer(): Promise<FakeCodeServer> {
     }
     const originHeader = req.headers.origin
     const normalizedOrigin = Array.isArray(originHeader)
-      ? originHeader[0] ?? ''
+      ? (originHeader[0] ?? '')
       : typeof originHeader === 'string'
         ? originHeader
         : ''
@@ -204,7 +203,10 @@ async function startFakeCodeServer(): Promise<FakeCodeServer> {
       socket.destroy()
       return
     }
-    const accept = crypto.createHash('sha1').update(keyHeader + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
+    const accept = crypto
+      .createHash('sha1')
+      .update(keyHeader + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+      .digest('base64')
     const responseHeaders = [
       'HTTP/1.1 101 Switching Protocols',
       'Upgrade: websocket',
@@ -722,9 +724,10 @@ describe('createServerApp', () => {
           if (!codeServerUrl) {
             throw new Error('code-server url missing in session frame')
           }
-          const resolvedUrl = codeServerUrl.startsWith('http://') || codeServerUrl.startsWith('https://')
-            ? codeServerUrl
-            : `${harness.baseUrl}${codeServerUrl}`
+          const resolvedUrl =
+            codeServerUrl.startsWith('http://') || codeServerUrl.startsWith('https://')
+              ? codeServerUrl
+              : `${harness.baseUrl}${codeServerUrl}`
           const codeServerResponse = await fetch(resolvedUrl)
           expect(codeServerResponse.status).toBe(200)
           expect(await codeServerResponse.text()).toContain('fake-code-server')
@@ -1031,7 +1034,9 @@ describe('createServerApp', () => {
         body: JSON.stringify({ remote: 'origin', branch: 'main' })
       })
       expect(pushResponse.status).toBe(200)
-      const remoteHeadMessage = execFileSync('git', ['--git-dir', remotePath, 'log', '-1', '--pretty=%s']).toString().trim()
+      const remoteHeadMessage = execFileSync('git', ['--git-dir', remotePath, 'log', '-1', '--pretty=%s'])
+        .toString()
+        .trim()
       expect(remoteHeadMessage).toBe('local-change')
     } finally {
       await harness.close()

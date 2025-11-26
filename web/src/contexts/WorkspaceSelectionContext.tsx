@@ -34,7 +34,8 @@ export const WorkspaceSelectionProvider: Component<{ children: JSX.Element }> = 
   const [workspaces, { refetch }] = createResource(fetchWorkspaces)
   const isLoading = () => workspaces.state === 'pending'
 
-  const paramWorkspaceId = () => (typeof params.workspaceId === 'string' && params.workspaceId.length ? params.workspaceId : null)
+  const paramWorkspaceId = () =>
+    typeof params.workspaceId === 'string' && params.workspaceId.length ? params.workspaceId : null
 
   const currentWorkspaceId = createMemo<string | null>(() => {
     const list = workspaces()

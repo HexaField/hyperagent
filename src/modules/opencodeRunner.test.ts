@@ -1,11 +1,11 @@
+import { EventEmitter } from 'events'
 import fs from 'fs/promises'
-import { PassThrough } from 'stream'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn as realSpawn } from 'node:child_process'
 import os from 'os'
 import path from 'path'
-import { EventEmitter } from 'events'
-import { describe, expect, it, vi, afterEach } from 'vitest'
-import { spawn as realSpawn } from 'node:child_process'
-import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { PassThrough } from 'stream'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createOpencodeRunner } from './opencodeRunner'
 
 class FakeChild extends EventEmitter {

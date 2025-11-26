@@ -4,8 +4,8 @@ import path from 'path'
 import { describe, expect, it } from 'vitest'
 import { createPersistence, type Persistence } from './database'
 import type { ProjectRecord } from './projects'
-import { createWorkflowRuntime, type AgentExecutor, type PlannerRun } from './workflows'
 import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from './workflowRunnerGateway'
+import { createWorkflowRuntime, type AgentExecutor, type PlannerRun } from './workflows'
 
 const commitAuthor = { name: 'Test Workflow', email: 'workflow@test.local' }
 
@@ -33,7 +33,11 @@ describe('workflow runtime docker runner integration', () => {
     ]
   }
 
-  const createRuntime = (persistence: Persistence, runnerGateway: WorkflowRunnerGateway, agentExecutor?: AgentExecutor) => {
+  const createRuntime = (
+    persistence: Persistence,
+    runnerGateway: WorkflowRunnerGateway,
+    agentExecutor?: AgentExecutor
+  ) => {
     return createWorkflowRuntime({
       persistence: {
         projects: persistence.projects,
@@ -53,7 +57,10 @@ describe('workflow runtime docker runner integration', () => {
     })
   }
 
-  const createProjectFixture = async (persistence: Persistence, name: string): Promise<{
+  const createProjectFixture = async (
+    persistence: Persistence,
+    name: string
+  ): Promise<{
     project: ProjectRecord
     repoPath: string
   }> => {

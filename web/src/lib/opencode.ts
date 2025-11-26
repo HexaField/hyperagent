@@ -69,9 +69,12 @@ export async function startOpencodeRun(input: {
 }
 
 export async function killOpencodeSession(sessionId: string): Promise<boolean> {
-  const payload = await fetchJson<{ success: boolean }>(`/api/opencode/sessions/${encodeURIComponent(sessionId)}/kill`, {
-    method: 'POST'
-  })
+  const payload = await fetchJson<{ success: boolean }>(
+    `/api/opencode/sessions/${encodeURIComponent(sessionId)}/kill`,
+    {
+      method: 'POST'
+    }
+  )
   return Boolean(payload.success)
 }
 

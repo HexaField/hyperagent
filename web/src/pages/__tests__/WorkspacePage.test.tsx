@@ -1,10 +1,10 @@
 import { Route, Router } from '@solidjs/router'
 import { cleanup, render, screen } from '@solidjs/testing-library'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
-import WorkspacePage from '../WorkspacePage'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CanvasNavigatorContext, type CanvasNavigatorController } from '../../contexts/CanvasNavigatorContext'
 import type { WorkspaceRecord } from '../../contexts/WorkspaceSelectionContext'
+import WorkspacePage from '../WorkspacePage'
 
 const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : input.toString()

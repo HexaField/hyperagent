@@ -613,8 +613,10 @@ const elementCanScroll = (element: HTMLElement) => {
   const overflowY = style.overflowY
   const overflowX = style.overflowX
   const vertical =
-    (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') && element.scrollHeight > element.clientHeight + 1
+    (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') &&
+    element.scrollHeight > element.clientHeight + 1
   const horizontal =
-    (overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'overlay') && element.scrollWidth > element.clientWidth + 1
+    (overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'overlay') &&
+    element.scrollWidth > element.clientWidth + 1
   return vertical || horizontal
 }

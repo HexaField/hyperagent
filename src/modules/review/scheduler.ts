@@ -1,9 +1,14 @@
-import type { PullRequestEventsRepository, ReviewCommentsRepository, ReviewRunsRepository, ReviewThreadsRepository } from './persistence'
-import type { ReviewRunRecord, ReviewRunTrigger, ReviewEngineResult } from './types'
-import type { PullRequestModule } from './pullRequest'
 import type { DiffModule } from './diff'
 import type { ReviewEngineModule } from './engine'
+import type {
+  PullRequestEventsRepository,
+  ReviewCommentsRepository,
+  ReviewRunsRepository,
+  ReviewThreadsRepository
+} from './persistence'
+import type { PullRequestModule } from './pullRequest'
 import type { ReviewRunnerGateway } from './runnerGateway'
+import type { ReviewEngineResult, ReviewRunRecord, ReviewRunTrigger } from './types'
 
 export type ReviewScheduler = ReturnType<typeof createReviewSchedulerModule>
 
@@ -147,7 +152,11 @@ export function createReviewSchedulerModule(deps: {
     }
   }
 
-  async function persistEngineResult(run: ReviewRunRecord, pullRequestId: string, engineResult: ReviewEngineResult): Promise<void> {
+  async function persistEngineResult(
+    run: ReviewRunRecord,
+    pullRequestId: string,
+    engineResult: ReviewEngineResult
+  ): Promise<void> {
     deps.reviewRuns.update(run.id, {
       status: 'completed',
       completedAt: new Date().toISOString(),

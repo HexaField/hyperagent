@@ -496,9 +496,7 @@ export const workflowsPersistence: PersistenceModule<WorkflowsBindings> = {
         updated_at TEXT NOT NULL
       );
     `)
-    const workflowStepColumns = db
-      .prepare("PRAGMA table_info('workflow_steps')")
-      .all() as Array<{ name: string }>
+    const workflowStepColumns = db.prepare("PRAGMA table_info('workflow_steps')").all() as Array<{ name: string }>
     const hasRunnerInstanceId = workflowStepColumns.some((column) => column.name === 'runner_instance_id')
     if (!hasRunnerInstanceId) {
       db.exec('ALTER TABLE workflow_steps ADD COLUMN runner_instance_id TEXT')
@@ -636,7 +634,7 @@ function createWorkflowStepsRepository(db: Database.Database): WorkflowStepsRepo
       const nextResult =
         patch.result === undefined ? current.result : patch.result ? JSON.stringify(patch.result) : null
       const nextRunnerInstanceId =
-        patch.runnerInstanceId === undefined ? current.runner_instance_id ?? null : patch.runnerInstanceId
+        patch.runnerInstanceId === undefined ? (current.runner_instance_id ?? null) : patch.runnerInstanceId
       db.prepare(
         `UPDATE workflow_steps
          SET status = ?, result = ?, runner_instance_id = ?, updated_at = ?

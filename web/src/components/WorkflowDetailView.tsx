@@ -1,7 +1,7 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal } from 'solid-js'
-import DiffViewer from './DiffViewer'
 import { fetchJson } from '../lib/http'
+import DiffViewer from './DiffViewer'
 
 type WorkflowRecord = {
   id: string
@@ -265,7 +265,10 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
           <h1 class="text-3xl font-semibold text-[var(--text)]">
             {workflowRecord() ? `${workflowRecord()!.kind} workflow` : 'Loading…'}
           </h1>
-          <Show when={workflowRecord()} fallback={<p class="text-[var(--text-muted)]">Select a workflow to inspect.</p>}>
+          <Show
+            when={workflowRecord()}
+            fallback={<p class="text-[var(--text-muted)]">Select a workflow to inspect.</p>}
+          >
             {(workflow) => (
               <p class="text-[var(--text-muted)]">
                 Status · {workflow().status} — started {new Date(workflow().createdAt).toLocaleString()}
@@ -296,7 +299,9 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                       >
                         <div class="flex items-center justify-between gap-3">
                           <span class="font-semibold">
-                            {typeof step.data?.title === 'string' ? (step.data.title as string) : `Step ${step.sequence}`}
+                            {typeof step.data?.title === 'string'
+                              ? (step.data.title as string)
+                              : `Step ${step.sequence}`}
                           </span>
                           <span class="text-xs capitalize">{step.status}</span>
                         </div>
@@ -376,7 +381,9 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                     <p class="text-xs text-[var(--text-muted)] whitespace-pre-wrap">{agent().userInstructions}</p>
                     <div class="divide-y divide-[var(--border)] border border-[var(--border)] rounded-2xl">
                       <div class="space-y-1 p-4">
-                        <p class="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Verifier bootstrap</p>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                          Verifier bootstrap
+                        </p>
                         <p class="text-sm text-[var(--text)] whitespace-pre-wrap">
                           {agent().bootstrap.parsed.instructions || agent().bootstrap.parsed.critique}
                         </p>
@@ -390,7 +397,8 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                             <div class="space-y-1">
                               <p class="text-xs font-semibold text-[var(--text-muted)]">Worker plan</p>
                               <p class="text-sm text-[var(--text)] whitespace-pre-wrap">
-                                {(round.worker.parsed.plan || round.worker.parsed.work || '').trim() || 'No plan returned.'}
+                                {(round.worker.parsed.plan || round.worker.parsed.work || '').trim() ||
+                                  'No plan returned.'}
                               </p>
                             </div>
                             <div class="space-y-1">
@@ -425,9 +433,7 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                 <Show when={provenance.loading}>
                   <p class="text-[var(--text-muted)]">Loading provenance…</p>
                 </Show>
-                <Show when={provenanceError()}>
-                  {(message) => <p class="text-red-500">{message()}</p>}
-                </Show>
+                <Show when={provenanceError()}>{(message) => <p class="text-red-500">{message()}</p>}</Show>
                 <Show
                   when={provenance()}
                   fallback={
@@ -450,9 +456,7 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                             when={formattedProvenance()}
                             fallback={<p class="text-[var(--text-muted)]">Provenance file is empty or unavailable.</p>}
                           >
-                            {(body) => (
-                              <pre class="whitespace-pre-wrap font-mono leading-snug">{body()}</pre>
-                            )}
+                            {(body) => <pre class="whitespace-pre-wrap font-mono leading-snug">{body()}</pre>}
                           </Show>
                         </div>
                       </div>
@@ -476,7 +480,9 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                               {(entry) => (
                                 <li class="flex items-center justify-between border-b border-[var(--border)] px-3 py-2 last:border-b-0">
                                   <span class="font-mono text-[var(--text)]">{entry.name}</span>
-                                  <span class="text-[var(--text-muted)]">{entry.kind === 'directory' ? 'dir' : 'file'}</span>
+                                  <span class="text-[var(--text-muted)]">
+                                    {entry.kind === 'directory' ? 'dir' : 'file'}
+                                  </span>
                                 </li>
                               )}
                             </For>
