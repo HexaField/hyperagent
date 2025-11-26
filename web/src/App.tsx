@@ -1,6 +1,8 @@
 import type { RouteSectionProps } from '@solidjs/router'
 import { Route, Router } from '@solidjs/router'
-import { For, Show, createResource, createSignal, type JSX } from 'solid-js'
+import { For, Show, createResource, createSignal, onCleanup, onMount, type JSX } from 'solid-js'
+import type { CanvasWidgetConfig } from './components/layout/CanvasWorkspace'
+import SingleWidgetView from './components/layout/SingleWidgetView'
 import RepositoryNavigator from './components/navigation/RepositoryNavigator'
 import { WIDGET_TEMPLATES, type WidgetAddEventDetail } from './constants/widgetTemplates'
 import { CanvasNavigatorContext, useCanvasNavigator } from './contexts/CanvasNavigatorContext'
@@ -38,17 +40,43 @@ const AppShell = (props: RouteSectionProps) => {
 
 export default function App() {
   const [radicleStatus, { refetch: refetchRadicleStatus }] = createResource(fetchRadicleStatus)
+  const [singleState, setSingleState] = createSignal<{
+    storageKey: string
+    widgets: CanvasWidgetConfig[]
+    onRemoveWidget?: (id: string) => void
+  } | null>(null)
 
   const isReady = () => {
     const status = radicleStatus()
     return Boolean(status && status.reachable && status.loggedIn)
   }
 
+  onMount(() => {
+    if (typeof window === 'undefined') return
+    const openHandler = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail
+      if (!detail) return
+      setSingleState({ storageKey: detail.storageKey, widgets: detail.widgets, onRemoveWidget: detail.onRemoveWidget })
+    }
+    const closeHandler = () => setSingleState(null)
+    window.addEventListener('workspace:open-single-view', openHandler)
+    window.addEventListener('workspace:close-single-view', closeHandler)
+    onCleanup(() => {
+      window.removeEventListener('workspace:open-single-view', openHandler)
+      window.removeEventListener('workspace:close-single-view', closeHandler)
+    })
+  })
+
   return (
     <Show when={isReady()} fallback={<RadicleGate status={radicleStatus()} onRetry={() => refetchRadicleStatus()} />}>
       <Router root={AppShell}>
         <Route path="/" component={WorkspacePage} />
       </Router>
+      <Show when={singleState()}>
+        {(s) => (
+          <SingleWidgetView storageKey={s().storageKey} widgets={s().widgets} onRemoveWidget={s().onRemoveWidget} />
+        )}
+      </Show>
     </Show>
   )
 }
@@ -89,8 +117,49 @@ function CanvasChrome() {
         </button>
         <Show when={navigator.isOpen()}>
           <ChromePanel title="Workspace" onNavigate={() => navigator.close()} widthClass="w-[36rem]">
-            <div class="max-h-[70vh] overflow-y-auto pr-1">
-              <RepositoryNavigator />
+            <div class="flex flex-col gap-3">
+              <div class="flex items-center justify-between gap-3">
+                <div class="text-sm">
+                  <p class="text-xs text-[var(--text-muted)]">View mode</p>
+                </div>
+                <div class="flex gap-2">
+                  <button
+                    type="button"
+                    class="rounded-xl border border-[var(--border)] px-3 py-1 text-sm"
+                    onClick={() => {
+                      if (typeof window === 'undefined') return
+                      try {
+                        const params = new URLSearchParams(window.location.search)
+                        const workspaceId = params.get('workspaceId')
+                        if (workspaceId) window.localStorage.setItem(`workspace:${workspaceId}:view`, 'canvas')
+                      } catch {}
+                      window.dispatchEvent(new CustomEvent('workspace:view-change', { detail: { mode: 'canvas' } }))
+                      navigator.close()
+                    }}
+                  >
+                    Canvas
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-xl border border-[var(--border)] bg-blue-600 px-3 py-1 text-sm font-semibold text-white"
+                    onClick={() => {
+                      if (typeof window === 'undefined') return
+                      try {
+                        const params = new URLSearchParams(window.location.search)
+                        const workspaceId = params.get('workspaceId')
+                        if (workspaceId) window.localStorage.setItem(`workspace:${workspaceId}:view`, 'single')
+                      } catch {}
+                      window.dispatchEvent(new CustomEvent('workspace:view-change', { detail: { mode: 'single' } }))
+                      navigator.close()
+                    }}
+                  >
+                    Single widget
+                  </button>
+                </div>
+              </div>
+              <div class="max-h-[70vh] overflow-y-auto pr-1">
+                <RepositoryNavigator />
+              </div>
             </div>
           </ChromePanel>
         </Show>

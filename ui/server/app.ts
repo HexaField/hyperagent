@@ -81,7 +81,11 @@ import {
 import { listBranchCommits, listGitBranches } from '../../src/modules/git'
 import type { Provider } from '../../src/modules/llm'
 import { createOpencodeRunner, DEFAULT_OPENCODE_MODEL, type OpencodeRunner } from '../../src/modules/opencodeRunner'
-import { createOpencodeStorage, type OpencodeStorage } from '../../src/modules/opencodeStorage'
+import {
+  createOpencodeStorage,
+  resolveDefaultOpencodeRoot,
+  type OpencodeStorage
+} from '../../src/modules/opencodeStorage'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import { createDiffModule } from '../../src/modules/review/diff'
 import { createReviewEngineModule } from '../../src/modules/review/engine'
@@ -2690,9 +2694,60 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   app.delete('/api/terminal/sessions/:sessionId', deleteTerminalSessionHandler)
   app.get('/api/opencode/sessions', listOpencodeSessionsHandler)
   app.get('/api/opencode/sessions/:sessionId', getOpencodeSessionHandler)
+
+  const postOpencodeMessageHandler: RequestHandler = async (req, res) => {
+    const sessionId = req.params.sessionId
+    if (!sessionId) {
+      res.status(400).json({ error: 'sessionId is required' })
+      return
+    }
+    const body = req.body ?? {}
+    const text = typeof body.text === 'string' ? body.text.trim() : ''
+    const role = typeof body.role === 'string' && body.role.trim().length ? body.role.trim() : 'user'
+    if (!text.length) {
+      res.status(400).json({ error: 'text is required' })
+      return
+    }
+    try {
+      const existing = await opencodeStorage.getSession(sessionId)
+      if (!existing) {
+        res.status(404).json({ error: 'Unknown session' })
+        return
+      }
+      const root = (opencodeStorage as any).rootDir || resolveDefaultOpencodeRoot()
+      const messageDirPath = path.join(root, 'storage', 'message', sessionId)
+      await fs.mkdir(messageDirPath, { recursive: true })
+      const messageId = `msg_${sessionId}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
+      const messagePayload = {
+        id: messageId,
+        sessionID: sessionId,
+        role,
+        time: { created: Date.now() },
+        model: { providerID: 'opencode', modelID: DEFAULT_OPENCODE_MODEL },
+        providerID: 'opencode'
+      }
+      const messageFile = path.join(messageDirPath, `${messageId}.json`)
+      await fs.writeFile(messageFile, JSON.stringify(messagePayload, null, 2), 'utf8')
+
+      const partDirPath = path.join(root, 'storage', 'part', messageId)
+      await fs.mkdir(partDirPath, { recursive: true })
+      const partId = `prt_${messageId}_1`
+      const partPayload = { id: partId, type: 'text', text, time: { start: Date.now() } }
+      const partFile = path.join(partDirPath, `${partId}.json`)
+      await fs.writeFile(partFile, JSON.stringify(partPayload, null, 2), 'utf8')
+
+      const updated = await opencodeStorage.getSession(sessionId)
+      res.status(201).json(updated)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to post opencode message'
+      res.status(500).json({ error: message })
+    }
+  }
+
   app.get('/api/opencode/runs', listOpencodeRunsHandler)
   app.post('/api/opencode/sessions', startOpencodeSessionHandler)
   app.post('/api/opencode/sessions/:sessionId/kill', killOpencodeSessionHandler)
+  app.post('/api/opencode/sessions/:sessionId/messages', postOpencodeMessageHandler)
   app.post('/api/agent/run', agentRunHandler)
 
   const sendTerminalPayload = (socket: WebSocketType, payload: Record<string, unknown>) => {

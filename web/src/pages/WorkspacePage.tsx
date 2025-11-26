@@ -91,6 +91,64 @@ export default function WorkspacePage() {
   const activeWorkspace = selection.currentWorkspace
   const [widgetInstances, setWidgetInstances] = createSignal<WidgetInstance[]>([])
 
+  const [workspaceViewMode, setWorkspaceViewMode] = createSignal<'canvas' | 'single'>('canvas')
+
+  // initialize view mode from workspace preference or small screen heuristics
+  createEffect(() => {
+    const ws = activeWorkspace()
+    if (!ws || typeof window === 'undefined') return
+    try {
+      const raw = window.localStorage.getItem(`workspace:${ws.id}:view`)
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw)
+          if (parsed === 'single') {
+            setWorkspaceViewMode('single')
+            return
+          }
+        } catch {
+          if (raw === 'single') {
+            setWorkspaceViewMode('single')
+            return
+          }
+        }
+      }
+      // no stored preference -> prefer single on small viewports
+      if (window.matchMedia && window.matchMedia('(max-width: 640px)').matches) setWorkspaceViewMode('single')
+      else setWorkspaceViewMode('canvas')
+    } catch {
+      setWorkspaceViewMode('canvas')
+    }
+  })
+
+  // when view mode changes, notify the app root to render the single overlay
+  createEffect(() => {
+    if (typeof window === 'undefined') return
+    if (workspaceViewMode() === 'single') {
+      const ws = activeWorkspace()
+      if (!ws) return
+      try {
+        window.dispatchEvent(
+          new CustomEvent('workspace:open-single-view', {
+            detail: {
+              storageKey: `workspace:${ws.id}`,
+              widgets: widgets(),
+              onRemoveWidget: (id: string) =>
+                setWidgetInstances((prev) => prev.filter((entry) => entry.instanceId !== id)),
+              workspaceId: ws.id
+            }
+          })
+        )
+      } catch {
+        // ignore
+      }
+    } else {
+      try {
+        window.dispatchEvent(new CustomEvent('workspace:close-single-view'))
+      } catch {}
+    }
+  })
+
   const widgets = createMemo<CanvasWidgetConfig[]>(() => {
     const workspace = activeWorkspace()
     if (!workspace) return []
@@ -141,8 +199,27 @@ export default function WorkspacePage() {
       const instanceId = generateWidgetInstanceId(detail.templateId)
       setWidgetInstances((prev) => [...prev, { templateId: detail.templateId, instanceId }])
     }
+    const handleViewChange = (event: Event) => {
+      const custom = event as CustomEvent<{ mode?: string }>
+      const detail = custom.detail
+      if (!detail || typeof detail.mode !== 'string') return
+      const nextMode = detail.mode === 'single' ? 'single' : 'canvas'
+      setWorkspaceViewMode(nextMode)
+      try {
+        const ws = activeWorkspace()
+        if (ws && typeof window !== 'undefined') {
+          window.localStorage.setItem(`workspace:${ws.id}:view`, nextMode)
+        }
+      } catch {
+        // ignore storage errors
+      }
+    }
     window.addEventListener('workspace:add-widget', handleAddWidget)
-    onCleanup(() => window.removeEventListener('workspace:add-widget', handleAddWidget))
+    window.addEventListener('workspace:view-change', handleViewChange)
+    onCleanup(() => {
+      window.removeEventListener('workspace:add-widget', handleAddWidget)
+      window.removeEventListener('workspace:view-change', handleViewChange)
+    })
   })
 
   return (
@@ -316,6 +393,38 @@ function createWidgetConfig(options: CreateWidgetConfigOptions): CanvasWidgetCon
         initialSize: { width: 720, height: 520 },
         startOpen: true,
         removable,
+        pages: () => [
+          {
+            title: 'New',
+            content: () => (
+              <OpencodeConsole
+                workspaceFilter={workspace.repositoryPath}
+                onWorkspaceFilterChange={() => {}}
+                mobilePage={0}
+              />
+            )
+          },
+          {
+            title: 'List',
+            content: () => (
+              <OpencodeConsole
+                workspaceFilter={workspace.repositoryPath}
+                onWorkspaceFilterChange={() => {}}
+                mobilePage={1}
+              />
+            )
+          },
+          {
+            title: 'Details',
+            content: () => (
+              <OpencodeConsole
+                workspaceFilter={workspace.repositoryPath}
+                onWorkspaceFilterChange={() => {}}
+                mobilePage={2}
+              />
+            )
+          }
+        ],
         content: () => <SessionsWidget workspacePath={workspace.repositoryPath} />
       }
     default:

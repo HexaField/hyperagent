@@ -22,6 +22,8 @@ export type CanvasWidgetConfig = {
   icon?: string
   headerActions?: () => JSX.Element
   content: () => JSX.Element
+  // Optional mobile pages API: if provided, SingleWidgetView will render these
+  pages?: () => { title: string; content: () => JSX.Element }[]
   removable?: boolean
 }
 

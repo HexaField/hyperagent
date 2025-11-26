@@ -95,8 +95,8 @@ export default function WorkflowLaunchModal(props: WorkflowLaunchModalProps) {
       />
       <Show when={status()} keyed>
         {(entry) => (
-          <p class={entry().kind === 'error' ? 'text-xs text-red-500' : 'text-xs text-[var(--text-muted)]'}>
-            {entry().message}
+          <p class={entry.kind === 'error' ? 'text-xs text-red-500' : 'text-xs text-[var(--text-muted)]'}>
+            {entry.message}
           </p>
         )}
       </Show>
