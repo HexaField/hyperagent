@@ -22,7 +22,7 @@ export type GitInfo = {
     message: string | null
     timestamp: string | null
   } | null
-  remotes: Array<{ name: string; url: string }>
+  remotes: Array<{ name: string; url: string; ahead?: number; behind?: number }>
   status?: {
     isClean: boolean
     changedFiles: number

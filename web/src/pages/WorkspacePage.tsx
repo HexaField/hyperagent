@@ -988,34 +988,53 @@ function WorkspaceSummary(props: { workspace: WorkspaceRecord; onOpenNavigator: 
           <div class="mt-4 space-y-2">
             <p class="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">Remotes</p>
             <For each={remotes().slice(0, 3)}>
-              {(remote) => (
-                <div class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2">
-                  <div class="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p class="text-xs uppercase tracking-wide text-[var(--text-muted)]">{remote.name}</p>
-                      <p class="text-sm text-[var(--text)]">{remote.url}</p>
-                    </div>
-                    <div class="flex gap-2 text-xs">
-                      <button
-                        class="rounded-lg border border-[var(--border)] px-3 py-1"
-                        type="button"
-                        disabled={isRemoteActionPending(remote.name, 'pull')}
-                        onClick={() => void handleRemoteSync(remote.name, 'pull')}
-                      >
-                        {isRemoteActionPending(remote.name, 'pull') ? 'Pulling…' : 'Pull'}
-                      </button>
-                      <button
-                        class="rounded-lg border border-[var(--border)] px-3 py-1"
-                        type="button"
-                        disabled={isRemoteActionPending(remote.name, 'push')}
-                        onClick={() => void handleRemoteSync(remote.name, 'push')}
-                      >
-                        {isRemoteActionPending(remote.name, 'push') ? 'Pushing…' : 'Push'}
-                      </button>
+              {(remote) => {
+                const showPull = remote.behind !== undefined && remote.behind > 0
+                const showPush = remote.ahead !== undefined && remote.ahead > 0
+                const hasDelta = showPull || showPush
+
+                return (
+                  <div class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                      <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2">
+                          <p class="text-xs uppercase tracking-wide text-[var(--text-muted)]">{remote.name}</p>
+                          <Show when={hasDelta}>
+                            <span class="text-xs text-[var(--text-muted)]">
+                              {showPull && <span class="text-blue-400">↓{remote.behind}</span>}
+                              {showPull && showPush && <span class="mx-1">·</span>}
+                              {showPush && <span class="text-green-400">↑{remote.ahead}</span>}
+                            </span>
+                          </Show>
+                        </div>
+                        <p class="text-sm text-[var(--text)] truncate">{remote.url}</p>
+                      </div>
+                      <div class="flex gap-2 text-xs">
+                        <Show when={showPull}>
+                          <button
+                            class="rounded-lg border border-[var(--border)] px-3 py-1"
+                            type="button"
+                            disabled={isRemoteActionPending(remote.name, 'pull')}
+                            onClick={() => void handleRemoteSync(remote.name, 'pull')}
+                          >
+                            {isRemoteActionPending(remote.name, 'pull') ? 'Pulling…' : 'Pull'}
+                          </button>
+                        </Show>
+                        <Show when={showPush}>
+                          <button
+                            class="rounded-lg border border-[var(--border)] px-3 py-1"
+                            type="button"
+                            disabled={isRemoteActionPending(remote.name, 'push')}
+                            onClick={() => void handleRemoteSync(remote.name, 'push')}
+                          >
+                            {isRemoteActionPending(remote.name, 'push') ? 'Pushing…' : 'Push'}
+                          </button>
+                        </Show>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )
+              }}
             </For>
             <Show when={remoteCount() > 3}>
               <p class="text-xs text-[var(--text-muted)]">{remoteCount() - 3} more remote(s) hidden.</p>

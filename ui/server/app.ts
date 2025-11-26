@@ -269,7 +269,7 @@ type GitMetadata = {
     message: string | null
     timestamp: string | null
   } | null
-  remotes: Array<{ name: string; url: string }>
+  remotes: Array<{ name: string; url: string; ahead?: number; behind?: number }>
   status?: {
     isClean: boolean
     changedFiles: number
@@ -862,22 +862,54 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       listGitBranches(resolved)
     ])
 
-    const remotes: Array<{ name: string; url: string }> = []
+    const remotes: Array<{ name: string; url: string; ahead?: number; behind?: number }> = []
     if (remotesRaw) {
       const seen = new Set<string>()
-      remotesRaw
+      const remoteLines = remotesRaw
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean)
-        .forEach((line) => {
-          const parts = line.split(/\s+/)
-          if (parts.length < 2) return
-          const [name, url] = parts
-          const key = `${name}:${url}`
-          if (seen.has(key)) return
-          seen.add(key)
-          remotes.push({ name, url })
-        })
+
+      for (const line of remoteLines) {
+        const parts = line.split(/\s+/)
+        if (parts.length < 2) continue
+        const [name, url] = parts
+        const key = `${name}:${url}`
+        if (seen.has(key)) continue
+        seen.add(key)
+
+        // Get ahead/behind information for this remote
+        let ahead: number | undefined
+        let behind: number | undefined
+
+        if (branch) {
+          try {
+            const remoteBranch = `${name}/${branch}`
+            // Check if remote branch exists
+            const remoteBranchExists = await readValue(['rev-parse', '--verify', remoteBranch])
+            if (remoteBranchExists) {
+              const aheadBehindOutput = await readValue([
+                'rev-list',
+                '--count',
+                '--left-right',
+                `${remoteBranch}...HEAD`
+              ])
+              if (aheadBehindOutput) {
+                const [behindStr, aheadStr] = aheadBehindOutput.split('\t')
+                behind = behindStr ? parseInt(behindStr, 10) : 0
+                ahead = aheadStr ? parseInt(aheadStr, 10) : 0
+                // Only include non-zero values
+                if (ahead === 0) ahead = undefined
+                if (behind === 0) behind = undefined
+              }
+            }
+          } catch {
+            // Ignore errors for ahead/behind calculation
+          }
+        }
+
+        remotes.push({ name, url, ahead, behind })
+      }
     }
 
     const changedFiles = statusOutput
