@@ -1,169 +1,138 @@
-import { For, Show, createEffect, createResource, createSignal } from 'solid-js'
-import Agent from './Agent'
+import { Show, createSignal } from 'solid-js'
 import { fetchJson } from '../lib/http'
-import { buildTasksFromInput } from '../lib/workflows'
-
-type Project = {
-  id: string
-  name: string
-  repositoryPath: string
-}
 
 type WorkflowLaunchModalProps = {
-  onClose: () => void
-  defaultProjectId?: string | null
+  projectId: string
+  workspaceName?: string
+  onClose?: () => void
+  onQueued?: (workflowId: string | null) => void
+}
+
+type WorkflowCreationResponse = {
+  workflow: {
+    id: string
+    projectId: string
+    status: string
+    kind: string
+    createdAt: string
+    updatedAt: string
+  }
+}
+
+type StatusPayload = {
+  kind: 'info' | 'error'
+  message: string
 }
 
 export default function WorkflowLaunchModal(props: WorkflowLaunchModalProps) {
-  const [status, setStatus] = createSignal<string | null>(null)
+  const [prompt, setPrompt] = createSignal('')
+  const [status, setStatus] = createSignal<StatusPayload | null>(null)
   const [submitting, setSubmitting] = createSignal(false)
-  const [form, setForm] = createSignal({
-    projectId: '',
-    kind: 'custom',
-    tasksInput: '',
-    autoStart: true
-  })
-
-  const [projects, { refetch }] = createResource(async () => {
-    const payload = await fetchJson<{ projects: Project[] }>('/api/projects')
-    return payload.projects
-  })
-
-  createEffect(() => {
-    const list = projects()
-    if (!list || !list.length) return
-    const preferred = props.defaultProjectId
-    if (preferred && list.some((project) => project.id === preferred)) {
-      setForm((prev) => (prev.projectId === preferred ? prev : { ...prev, projectId: preferred }))
-      return
-    }
-    if (!form().projectId) {
-      setForm((prev) => ({ ...prev, projectId: list[0].id }))
-    }
-  })
 
   const handleSubmit = async (event: SubmitEvent) => {
     event.preventDefault()
-    if (!form().projectId) {
-      setStatus('Select a project first')
+    const trimmedPrompt = prompt().trim()
+    if (!trimmedPrompt.length) {
+      setStatus({ kind: 'error', message: 'Tell Hyperagent what to build or fix.' })
       return
     }
-    const tasks = buildTasksFromInput(form().tasksInput)
-    if (!tasks.length) {
-      setStatus('Enter at least one task (one per line)')
+    if (!props.projectId) {
+      setStatus({ kind: 'error', message: 'Select a workspace to launch workflows.' })
       return
     }
     setSubmitting(true)
+    setStatus(null)
     try {
-      await fetchJson('/api/workflows', {
+      const payload = buildWorkflowPayload(props.projectId, trimmedPrompt, props.workspaceName)
+      const response = await fetchJson<WorkflowCreationResponse>('/api/workflows', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId: form().projectId,
-          kind: form().kind,
-          tasks,
-          autoStart: form().autoStart
-        })
+        body: JSON.stringify(payload)
       })
-      setForm((prev) => ({ ...prev, tasksInput: '' }))
-      setStatus('Workflow queued')
+      setPrompt('')
+      setStatus({ kind: 'info', message: 'Queued — dockerized multi-agent flow is spinning up.' })
+      const workflowId = response?.workflow?.id ?? null
+      props.onQueued?.(workflowId)
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Failed to queue workflow')
+      setStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Failed to queue workflow'
+      })
     } finally {
       setSubmitting(false)
     }
   }
 
   return (
-    <div class="flex flex-col gap-6">
-      <header class="flex flex-wrap items-center justify-between gap-3">
+    <form class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4" onSubmit={handleSubmit}>
+      <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p class="text-sm uppercase tracking-[0.2em] text-[var(--text-muted)]">Launchpad</p>
-          <h2 class="text-2xl font-semibold text-[var(--text)]">Queue workflows</h2>
-          <p class="text-sm text-[var(--text-muted)]">Craft a plan and hand it off to the workflow engine.</p>
+          <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">Launch workflow</p>
+          <p class="text-base font-semibold text-[var(--text)]">
+            {props.workspaceName ? `For ${props.workspaceName}` : 'Scoped to this workspace'}
+          </p>
+          <p class="text-xs text-[var(--text-muted)]">Single prompt → planned tasks → dockerized multi-agent runs.</p>
         </div>
-        <div class="flex gap-2">
+        {props.onClose && (
           <button
-            class="rounded-xl border border-[var(--border)] px-4 py-2 text-sm text-[var(--text)]"
-            type="button"
-            onClick={() => refetch()}
-          >
-            Refresh projects
-          </button>
-          <button
-            class="rounded-xl border border-[var(--border)] px-4 py-2 text-sm text-[var(--text)]"
+            class="rounded-xl border border-[var(--border)] px-3 py-1.5 text-xs"
             type="button"
             onClick={props.onClose}
           >
             Close
           </button>
-        </div>
-      </header>
-
-      <div class="grid gap-6 lg:grid-cols-2">
-        <form
-          class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4"
-          onSubmit={handleSubmit}
-        >
-          <h3 class="text-lg font-semibold text-[var(--text)]">Workflow blueprint</h3>
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="workflow-project">
-            Project
-          </label>
-          <select
-            id="workflow-project"
-            class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
-            value={form().projectId}
-            onChange={(event) => setForm((prev) => ({ ...prev, projectId: event.currentTarget.value }))}
-          >
-            <Show when={projects()} fallback={<option value="">Loading projects…</option>}>
-              {(list) => (
-                <>
-                  <For each={list()}>{(project) => <option value={project.id}>{project.name}</option>}</For>
-                </>
-              )}
-            </Show>
-          </select>
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="workflow-kind">
-            Kind
-          </label>
-          <input
-            id="workflow-kind"
-            type="text"
-            class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
-            value={form().kind}
-            onInput={(event) => setForm((prev) => ({ ...prev, kind: event.currentTarget.value }))}
-          />
-          <label class="text-xs font-semibold text-[var(--text-muted)]" for="workflow-tasks">
-            Tasks (one per line)
-          </label>
-          <textarea
-            id="workflow-tasks"
-            rows={6}
-            class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm text-[var(--text)]"
-            value={form().tasksInput}
-            onInput={(event) => setForm((prev) => ({ ...prev, tasksInput: event.currentTarget.value }))}
-            placeholder="Design landing page\nWire up API"
-          />
-          <label class="flex items-center gap-2 text-sm text-[var(--text)]">
-            <input
-              type="checkbox"
-              checked={form().autoStart}
-              onChange={(event) => setForm((prev) => ({ ...prev, autoStart: event.currentTarget.checked }))}
-            />
-            Auto start once queued
-          </label>
-          <button
-            class="rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white disabled:opacity-60"
-            type="submit"
-            disabled={submitting()}
-          >
-            {submitting() ? 'Queuing…' : 'Queue workflow'}
-          </button>
-          <Show when={status()}>{(message) => <p class="text-xs text-[var(--text-muted)]">{message()}</p>}</Show>
-        </form>
-
-        <Agent />
+        )}
       </div>
-    </div>
+      <textarea
+        rows={4}
+        class="rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-3 text-sm"
+        value={prompt()}
+        onInput={(event) => setPrompt(event.currentTarget.value)}
+        placeholder="Ship docs for the new API, add tests, and prep a release checklist."
+      />
+      <Show when={status()} keyed>
+        {(entry) => (
+          <p class={entry().kind === 'error' ? 'text-xs text-red-500' : 'text-xs text-[var(--text-muted)]'}>
+            {entry().message}
+          </p>
+        )}
+      </Show>
+      <div class="flex flex-wrap items-center gap-3">
+        <button
+          class="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+          type="submit"
+          disabled={submitting()}
+        >
+          {submitting() ? 'Queuing…' : 'Launch workflow'}
+        </button>
+        <p class="text-xs text-[var(--text-muted)]">Auto-started with dockerized runners per task.</p>
+      </div>
+    </form>
   )
+}
+
+function buildWorkflowPayload(projectId: string, prompt: string, workspaceName?: string) {
+  const taskId = `prompt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  const title = prompt.length > 80 ? `${prompt.slice(0, 77)}…` : prompt || 'Workflow prompt'
+  return {
+    projectId,
+    kind: 'prompt',
+    tasks: [
+      {
+        id: taskId,
+        title,
+        instructions: prompt,
+        metadata: {
+          source: 'prompt_form',
+          workspaceName: workspaceName ?? null
+        }
+      }
+    ],
+    data: {
+      prompt,
+      workspaceName: workspaceName ?? null,
+      source: 'prompt_form'
+    },
+    autoStart: true
+  }
 }

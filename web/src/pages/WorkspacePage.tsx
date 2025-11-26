@@ -1067,6 +1067,14 @@ function WorkflowsWidget(props: { workspaceId: string; workspaceName: string }) 
     setSearchParams({ sessionId: undefined })
   }
 
+  const handleWorkflowQueued = (workflowId: string | null) => {
+    if (workflowId) {
+      focusWorkflow(workflowId)
+    }
+    void refetch()
+    setLaunchOpen(false)
+  }
+
   return (
     <div class="flex h-full flex-col gap-4 p-6 text-[var(--text)]">
       <div class="flex flex-wrap items-center justify-between gap-4">
@@ -1082,12 +1090,20 @@ function WorkflowsWidget(props: { workspaceId: string; workspaceName: string }) 
           <button
             class="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white"
             type="button"
-            onClick={() => setLaunchOpen(true)}
+            onClick={() => setLaunchOpen((prev) => !prev)}
           >
-            Launch workflow
+            {launchOpen() ? 'Hide launcher' : 'Launch workflow'}
           </button>
         </div>
       </div>
+      <Show when={launchOpen()}>
+        <WorkflowLaunchModal
+          projectId={props.workspaceId}
+          workspaceName={props.workspaceName}
+          onClose={() => setLaunchOpen(false)}
+          onQueued={handleWorkflowQueued}
+        />
+      </Show>
       <section class="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
         <div class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 text-sm">
           <p class="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">Status breakdown</p>
@@ -1145,19 +1161,6 @@ function WorkflowsWidget(props: { workspaceId: string; workspaceName: string }) 
             <WorkflowDetailView workflowId={workflowId()} />
           </div>
         )}
-      </Show>
-      <Show when={launchOpen()}>
-        <div
-          class="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setLaunchOpen(false)}
-        >
-          <div
-            class="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-3xl border border-[var(--border)] bg-[var(--bg-card)] p-6"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <WorkflowLaunchModal defaultProjectId={props.workspaceId} onClose={() => setLaunchOpen(false)} />
-          </div>
-        </div>
       </Show>
     </div>
   )
