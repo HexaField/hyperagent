@@ -1,3 +1,19 @@
+export type GitFileChange = {
+  path: string
+  displayPath: string
+  stagedStatus: string
+  worktreeStatus: string
+  renameFrom?: string | null
+  renameTo?: string | null
+  isUntracked: boolean
+}
+
+export type GitFileStashEntry = {
+  name: string
+  filePath: string
+  message: string
+}
+
 export type GitInfo = {
   repositoryPath: string
   branch: string | null
@@ -14,4 +30,7 @@ export type GitInfo = {
   } | null
   diffStat?: string | null
   diffText?: string | null
+  changes?: GitFileChange[]
+  stashes?: GitFileStashEntry[]
+  branches?: string[]
 }

@@ -1,10 +1,12 @@
 import fs from 'fs/promises'
 import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
-import { once } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import { createServer as createHttpServer } from 'node:http'
 import { request as httpsRequest } from 'node:https'
+import type { IncomingMessage } from 'node:http'
 import { AddressInfo } from 'node:net'
+import type { Socket } from 'node:net'
 import { TextDecoder } from 'node:util'
 import { pathToFileURL } from 'node:url'
 import os from 'os'
@@ -12,7 +14,7 @@ import path from 'path'
 import selfsigned from 'selfsigned'
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import type WebSocketType from 'ws'
-import type { RawData as WsRawData } from 'ws'
+import type { RawData as WsRawData, WebSocketServer as WebSocketServerType } from 'ws'
 import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../../src/modules/agent'
 import type { CodeServerController, CodeServerHandle, CodeServerOptions } from '../../src/modules/codeServer'
 import type { TerminalSessionRecord } from '../../src/modules/database'
@@ -268,12 +270,60 @@ async function createIntegrationHarness(options?: {
   publicOrigin?: string
   opencodeStorage?: OpencodeStorage
   opencodeRunner?: OpencodeRunner
+  webSockets?: {
+    WebSocket: typeof WebSocketType
+    WebSocketServer: typeof WebSocketServerType
+  }
 }) {
   const tmpBase = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-ui-server-tests-'))
   const dbFile = path.join(tmpBase, 'runtime.db')
   const fakeCodeServer = await startFakeCodeServer()
   const radicleWorkspaceRoot = path.join(tmpBase, 'radicle-workspaces')
   await fs.mkdir(radicleWorkspaceRoot, { recursive: true })
+
+  const resolveWebSockets = (): {
+    WebSocket: typeof WebSocketType
+    WebSocketServer: typeof WebSocketServerType
+  } => {
+    class FakeWebSocket extends EventEmitter {
+      static OPEN = 1
+      static CLOSED = 3
+      readyState = FakeWebSocket.OPEN
+      send(_data?: unknown) {}
+      close(): void {
+        if (this.readyState === FakeWebSocket.CLOSED) return
+        this.readyState = FakeWebSocket.CLOSED
+        this.emit('close')
+      }
+    }
+
+    class FakeWebSocketServer extends EventEmitter {
+      clients = new Set<FakeWebSocket>()
+      handleUpgrade(
+        _req: IncomingMessage,
+        _socket: Socket,
+        _head: Buffer,
+        callback: (ws: WebSocketType) => void
+      ): void {
+        const ws = new FakeWebSocket()
+        this.clients.add(ws)
+        ws.on('close', () => this.clients.delete(ws))
+        callback(ws as unknown as WebSocketType)
+      }
+      close(cb?: () => void): this {
+        this.clients.forEach((client) => client.close())
+        this.clients.clear()
+        cb?.()
+        return this
+      }
+    }
+
+    return {
+      WebSocket: FakeWebSocket as unknown as typeof WebSocketType,
+      WebSocketServer: FakeWebSocketServer as unknown as typeof WebSocketServerType
+    }
+  }
+  const webSockets = options?.webSockets ?? resolveWebSockets()
 
   const runLoop = vi.fn<[AgentLoopOptions], Promise<AgentLoopResult>>(async (options) => {
     const chunk: AgentStreamEvent = {
@@ -319,7 +369,8 @@ async function createIntegrationHarness(options?: {
     tls: tlsMaterials,
     publicOrigin: options?.publicOrigin,
     opencodeStorage: options?.opencodeStorage,
-    opencodeRunner: options?.opencodeRunner
+    opencodeRunner: options?.opencodeRunner,
+    webSockets
   })
 
   const httpsServer = appServer.start(0)
@@ -864,6 +915,39 @@ describe('createServerApp', () => {
     } finally {
       await harness.close()
       await fs.rm(repoDir, { recursive: true, force: true })
+    }
+  })
+
+  it('reports unstaged modifications accurately in git metadata', async () => {
+    const harness = await createIntegrationHarness()
+    const repoDir = await createGitTestRepo()
+    const canonicalRepoDir = await fs.realpath(repoDir)
+    await fs.mkdir(path.join(canonicalRepoDir, '.hyperagent'), { recursive: true })
+    await fs.appendFile(path.join(canonicalRepoDir, 'README.md'), '\nlocal edit\n')
+    try {
+      const projectResponse = await fetch(`${harness.baseUrl}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Git Accuracy', repositoryPath: canonicalRepoDir })
+      })
+      const projectPayload = await projectResponse.json()
+      if (projectResponse.status !== 201) {
+        throw new Error(`Failed to create project: ${projectResponse.status} ${JSON.stringify(projectPayload)}`)
+      }
+      const project = projectPayload
+
+      const detailResponse = await fetch(`${harness.baseUrl}/api/projects/${project.id}`)
+      expect(detailResponse.status).toBe(200)
+      const detail = await detailResponse.json()
+      const git = detail.project?.git
+      expect(git).toBeTruthy()
+      const readmeChange = git?.changes?.find((entry: any) => entry.path === 'README.md')
+      expect(readmeChange).toBeTruthy()
+      expect(readmeChange?.stagedStatus).toBe(' ')
+      expect(readmeChange?.worktreeStatus).toBe('M')
+    } finally {
+      await harness.close()
+      await fs.rm(canonicalRepoDir, { recursive: true, force: true })
     }
   })
 

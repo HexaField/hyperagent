@@ -1,47 +1,16 @@
-const loadWebSocketModule = async (): Promise<{
+type WebSocketBindings = {
   WebSocket: typeof WebSocketType
   WebSocketServer: typeof WebSocketServerType
-}> => {
+}
+
+const loadWebSocketModule = async (): Promise<WebSocketBindings> => {
   const nodeRequire = eval('require') as NodeJS.Require
-
-  const loadFromLibFiles = (): {
-    WebSocket: typeof WebSocketType
-    WebSocketServer: typeof WebSocketServerType
-  } | null => {
-    try {
-      const resolvedEntry = nodeRequire.resolve('ws')
-      const packageDir = path.dirname(resolvedEntry)
-      const loadLib = (relativePath: string) => {
-        const mod = nodeRequire(path.join(packageDir, relativePath))
-        return (mod && typeof mod === 'object' && 'default' in mod ? (mod as any).default : mod) as typeof WebSocketType
-      }
-      const WebSocket = loadLib('lib/websocket.js') as unknown as typeof WebSocketType
-      const WebSocketServer = loadLib('lib/websocket-server.js') as unknown as typeof WebSocketServerType
-      if (typeof WebSocketServer === 'function') {
-        return { WebSocket, WebSocketServer }
-      }
-    } catch {
-      // ignore and fall through
-    }
-    return null
-  }
-
-  const libResult = loadFromLibFiles()
-  if (libResult) {
-    return libResult
-  }
-
   const tryImport = async (specifier: string) => {
     const module = await import(specifier)
-    const defaultExport = module.default as typeof WebSocketType & {
-      Server?: typeof WebSocketServerType
-      WebSocketServer?: typeof WebSocketServerType
-    }
+    const defaultExport = (module as any).default
     const candidates = [
       module.WebSocketServer,
       module.Server,
-      defaultExport?.WebSocketServer,
-      defaultExport?.Server,
       (module as any).default?.WebSocketServer,
       (module as any).default?.Server
     ]
@@ -276,6 +245,22 @@ type GraphEdge = {
   to: string
 }
 
+export type GitFileChange = {
+  path: string
+  displayPath: string
+  stagedStatus: string
+  worktreeStatus: string
+  renameFrom?: string | null
+  renameTo?: string | null
+  isUntracked: boolean
+}
+
+export type GitFileStashEntry = {
+  name: string
+  filePath: string
+  message: string
+}
+
 type GitMetadata = {
   repositoryPath: string
   branch: string | null
@@ -292,6 +277,69 @@ type GitMetadata = {
   }
   diffStat?: string | null
   diffText?: string | null
+  changes?: GitFileChange[]
+  stashes?: GitFileStashEntry[]
+  branches?: string[]
+}
+
+export const FILE_STASH_PREFIX = 'hyperagent:file:'
+
+export const parseGitStatusOutput = (output: string | null): GitFileChange[] => {
+  if (!output) return []
+  const entries: GitFileChange[] = []
+  output.split('\n').forEach((rawLine) => {
+    const line = rawLine.replace(/\r$/, '')
+    if (!line.trim()) return
+    if (line.startsWith('!!')) {
+      return
+    }
+    const statusPart = line.slice(0, 2)
+    const stagedStatus = statusPart[0] ?? ' '
+    const worktreeStatus = statusPart[1] ?? ' '
+    const isUntracked = statusPart === '??'
+    let remainder = line.slice(2)
+    if (!isUntracked && remainder.startsWith(' ')) {
+      remainder = remainder.slice(1)
+    }
+    remainder = remainder.trim()
+    let renameFrom: string | null = null
+    let renameTo: string | null = null
+    if (remainder.includes('->')) {
+      const [from, to] = remainder.split('->').map((segment) => segment.trim())
+      renameFrom = from
+      renameTo = to
+      remainder = to
+    }
+    entries.push({
+      path: remainder,
+      displayPath: remainder,
+      stagedStatus,
+      worktreeStatus,
+      renameFrom,
+      renameTo,
+      isUntracked
+    })
+  })
+  return entries
+}
+
+export const parseGitStashList = (output: string | null): GitFileStashEntry[] => {
+  if (!output) return []
+  const entries: GitFileStashEntry[] = []
+  output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .forEach((line) => {
+      const [namePart, messagePart] = line.split('::')
+      const name = namePart ?? ''
+      const message = messagePart ?? ''
+      if (!message.startsWith(FILE_STASH_PREFIX)) return
+      const filePath = message.slice(FILE_STASH_PREFIX.length).trim()
+      if (!filePath) return
+      entries.push({ name, filePath, message })
+    })
+  return entries
 }
 
 export type CreateServerOptions = {
@@ -313,6 +361,7 @@ export type CreateServerOptions = {
   corsOrigin?: string
   opencodeStorage?: OpencodeStorage
   opencodeRunner?: OpencodeRunner
+  webSockets?: WebSocketBindings
 }
 
 export type ServerInstance = {
@@ -328,7 +377,7 @@ export type ServerInstance = {
 }
 
 export async function createServerApp(options: CreateServerOptions = {}): Promise<ServerInstance> {
-  const wsModule = await loadWebSocketModule()
+  const wsModule = options.webSockets ?? (await loadWebSocketModule())
   const WebSocketCtor = wsModule.WebSocket
   const WebSocketServerCtor = wsModule.WebSocketServer
   const runLoop = options.runLoop ?? runVerifierWorkerLoop
@@ -766,25 +815,36 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       return null
     }
 
-    const readValue = async (args: string[]): Promise<string | null> => {
+    const readValue = async (
+      args: string[],
+      options?: {
+        preserveWhitespace?: boolean
+      }
+    ): Promise<string | null> => {
       try {
         const output = await runGitCommand(args, resolved)
+        if (options?.preserveWhitespace) {
+          return output.replace(/\r/g, '')
+        }
         return output.trim()
       } catch {
         return null
       }
     }
 
-    const [branch, commitHash, commitMessage, commitTimestamp, remotesRaw, statusOutput, diffStat, diffText] = await Promise.all([
+    const [branch, commitHash, commitMessage, commitTimestamp, remotesRaw, statusOutput, diffStat, diffText, stashOutput, branchList] =
+      await Promise.all([
       readValue(['rev-parse', '--abbrev-ref', 'HEAD']),
       readValue(['rev-parse', 'HEAD']),
       readValue(['log', '-1', '--pretty=%s']),
       readValue(['log', '-1', '--pretty=%cI']),
       readValue(['remote', '-v']),
-      readValue(['status', '--short']),
-      readValue(['diff', '--stat']),
-      readValue(['diff', '--no-color'])
-    ])
+      readValue(['status', '--short'], { preserveWhitespace: true }),
+        readValue(['diff', '--stat']),
+        readValue(['diff', '--no-color']),
+        readValue(['stash', 'list', '--pretty=%gd::%s']),
+        listGitBranches(resolved)
+      ])
 
     const remotes: Array<{ name: string; url: string }> = []
     if (remotesRaw) {
@@ -828,7 +888,10 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         summary: statusOutput ? statusOutput.split('\n').slice(0, 8).join('\n') : null
       },
       diffStat: diffStat ?? null,
-      diffText: diffText ?? null
+      diffText: diffText ?? null,
+      changes: parseGitStatusOutput(statusOutput),
+      stashes: parseGitStashList(stashOutput),
+      branches: branchList
     }
   }
 
@@ -1493,6 +1556,29 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 
+  const getProjectOr404 = (projectId: string | undefined, res: Response) => {
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' })
+      return null
+    }
+    const project = persistence.projects.getById(projectId)
+    if (!project) {
+      res.status(404).json({ error: 'Unknown project' })
+      return null
+    }
+    return project
+  }
+
+  const respondWithUpdatedGit = async (res: Response, repoPath: string) => {
+    try {
+      const git = await readGitMetadata(repoPath)
+      res.json({ git })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to read git metadata'
+      res.status(500).json({ error: message })
+    }
+  }
+
   const projectDevspaceHandler: RequestHandler = async (req, res) => {
     const projectId = req.params.projectId
     if (!projectId) {
@@ -1554,6 +1640,131 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to compute project diff'
       res.status(500).json({ error: message })
+    }
+  }
+
+  const gitStageHandler: RequestHandler = async (req, res) => {
+    const project = getProjectOr404(req.params.projectId, res)
+    if (!project) return
+    const body = req.body ?? {}
+    const paths = Array.isArray(body.paths)
+      ? body.paths
+          .filter((entry: unknown): entry is string => typeof entry === 'string')
+          .map((entry: string) => entry.trim())
+          .filter((entry: string) => entry.length)
+      : []
+    const mode = body.mode === 'unstage' ? 'unstage' : 'stage'
+    if (!paths.length) {
+      res.status(400).json({ error: 'paths are required' })
+      return
+    }
+    try {
+      if (mode === 'stage') {
+        await runGitCommand(['add', '--', ...paths], project.repositoryPath)
+      } else {
+        await runGitCommand(['reset', 'HEAD', '--', ...paths], project.repositoryPath)
+      }
+      await respondWithUpdatedGit(res, project.repositoryPath)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update git stage'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const gitDiscardHandler: RequestHandler = async (req, res) => {
+    const project = getProjectOr404(req.params.projectId, res)
+    if (!project) return
+    const { path: targetPath, isUntracked } = req.body ?? {}
+    if (typeof targetPath !== 'string' || !targetPath.trim()) {
+      res.status(400).json({ error: 'path is required' })
+      return
+    }
+    try {
+      if (isUntracked) {
+        await runGitCommand(['clean', '-f', '-d', '--', targetPath], project.repositoryPath)
+      } else {
+        await runGitCommand(['checkout', '--', targetPath], project.repositoryPath)
+      }
+      await respondWithUpdatedGit(res, project.repositoryPath)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to discard changes'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const gitCommitHandler: RequestHandler = async (req, res) => {
+    const project = getProjectOr404(req.params.projectId, res)
+    if (!project) return
+    const message = typeof req.body?.message === 'string' ? req.body.message.trim() : ''
+    if (!message) {
+      res.status(400).json({ error: 'Commit message is required' })
+      return
+    }
+    try {
+      await runGitCommand(['commit', '-m', message], project.repositoryPath)
+      await respondWithUpdatedGit(res, project.repositoryPath)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : 'Failed to commit changes'
+      res.status(500).json({ error: text })
+    }
+  }
+
+  const gitCheckoutHandler: RequestHandler = async (req, res) => {
+    const project = getProjectOr404(req.params.projectId, res)
+    if (!project) return
+    const ref = typeof req.body?.ref === 'string' ? req.body.ref.trim() : ''
+    if (!ref) {
+      res.status(400).json({ error: 'ref is required' })
+      return
+    }
+    try {
+      await runGitCommand(['checkout', ref], project.repositoryPath)
+      await respondWithUpdatedGit(res, project.repositoryPath)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : 'Failed to checkout ref'
+      res.status(500).json({ error: text })
+    }
+  }
+
+  const gitStashHandler: RequestHandler = async (req, res) => {
+    const project = getProjectOr404(req.params.projectId, res)
+    if (!project) return
+    const pathInput = typeof req.body?.path === 'string' ? req.body.path.trim() : ''
+    if (!pathInput) {
+      res.status(400).json({ error: 'path is required' })
+      return
+    }
+    try {
+      await runGitCommand(['stash', 'push', '--include-untracked', '-m', `${FILE_STASH_PREFIX}${pathInput}`, '--', pathInput], project.repositoryPath)
+      await respondWithUpdatedGit(res, project.repositoryPath)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : 'Failed to stash file'
+      res.status(500).json({ error: text })
+    }
+  }
+
+  const gitUnstashHandler: RequestHandler = async (req, res) => {
+    const project = getProjectOr404(req.params.projectId, res)
+    if (!project) return
+    const pathInput = typeof req.body?.path === 'string' ? req.body.path.trim() : ''
+    if (!pathInput) {
+      res.status(400).json({ error: 'path is required' })
+      return
+    }
+    try {
+      const stashListRaw = await runGitCommand(['stash', 'list', '--pretty=%gd::%s'], project.repositoryPath)
+      const stashEntries = parseGitStashList(stashListRaw)
+      const entry = stashEntries.find((candidate) => candidate.filePath === pathInput)
+      if (!entry) {
+        res.status(404).json({ error: 'No stash found for path' })
+        return
+      }
+      await runGitCommand(['checkout', entry.name, '--', pathInput], project.repositoryPath)
+      await runGitCommand(['stash', 'drop', entry.name], project.repositoryPath)
+      await respondWithUpdatedGit(res, project.repositoryPath)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : 'Failed to apply stash'
+      res.status(500).json({ error: text })
     }
   }
 
@@ -2266,6 +2477,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   app.get('/api/reviews/active', listActiveReviewsHandler)
   app.post('/api/projects/:projectId/pull-requests', createProjectPullRequestHandler)
   app.get('/api/projects/:projectId', projectDetailHandler)
+  app.post('/api/projects/:projectId/git/stage', gitStageHandler)
+  app.post('/api/projects/:projectId/git/discard', gitDiscardHandler)
+  app.post('/api/projects/:projectId/git/commit', gitCommitHandler)
+  app.post('/api/projects/:projectId/git/checkout', gitCheckoutHandler)
+  app.post('/api/projects/:projectId/git/stash', gitStashHandler)
+  app.post('/api/projects/:projectId/git/unstash', gitUnstashHandler)
   app.post('/api/projects', createProjectHandler)
   app.get('/api/pull-requests/:prId', pullRequestDetailHandler)
   app.get('/api/pull-requests/:prId/diff', pullRequestDiffHandler)
