@@ -395,7 +395,7 @@ function createWidgetConfig(options: CreateWidgetConfigOptions): CanvasWidgetCon
         removable,
         pages: () => [
           {
-            title: 'New',
+            title: 'List',
             content: () => (
               <OpencodeConsole
                 workspaceFilter={workspace.repositoryPath}
@@ -405,22 +405,12 @@ function createWidgetConfig(options: CreateWidgetConfigOptions): CanvasWidgetCon
             )
           },
           {
-            title: 'List',
-            content: () => (
-              <OpencodeConsole
-                workspaceFilter={workspace.repositoryPath}
-                onWorkspaceFilterChange={() => {}}
-                mobilePage={1}
-              />
-            )
-          },
-          {
             title: 'Details',
             content: () => (
               <OpencodeConsole
                 workspaceFilter={workspace.repositoryPath}
                 onWorkspaceFilterChange={() => {}}
-                mobilePage={2}
+                mobilePage={1}
               />
             )
           }
