@@ -3,6 +3,20 @@ type WebSocketBindings = {
   WebSocketServer: typeof WebSocketServerType
 }
 
+type OpencodeCommandOptions = {
+  cwd?: string
+}
+
+export type OpencodeCommandResult = {
+  stdout: string
+  stderr: string
+}
+
+export type OpencodeCommandRunner = (
+  args: string[],
+  options?: OpencodeCommandOptions
+) => Promise<OpencodeCommandResult | void>
+
 const loadWebSocketModule = async (): Promise<WebSocketBindings> => {
   const nodeRequire = eval('require') as NodeJS.Require
   const tryImport = async (specifier: string) => {
@@ -81,11 +95,7 @@ import {
 import { listBranchCommits, listGitBranches } from '../../src/modules/git'
 import type { Provider } from '../../src/modules/llm'
 import { createOpencodeRunner, DEFAULT_OPENCODE_MODEL, type OpencodeRunner } from '../../src/modules/opencodeRunner'
-import {
-  createOpencodeStorage,
-  resolveDefaultOpencodeRoot,
-  type OpencodeStorage
-} from '../../src/modules/opencodeStorage'
+import { createOpencodeStorage, type OpencodeStorage } from '../../src/modules/opencodeStorage'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import { createDiffModule } from '../../src/modules/review/diff'
 import { createReviewEngineModule } from '../../src/modules/review/engine'
@@ -365,6 +375,7 @@ export type CreateServerOptions = {
   corsOrigin?: string
   opencodeStorage?: OpencodeStorage
   opencodeRunner?: OpencodeRunner
+  opencodeCommandRunner?: OpencodeCommandRunner
   webSockets?: WebSocketBindings
 }
 
@@ -452,6 +463,9 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
 
   const opencodeStorage = options.opencodeStorage ?? createOpencodeStorage()
   const opencodeRunner = options.opencodeRunner ?? createOpencodeRunner()
+  const opencodeCommandRunner =
+    options.opencodeCommandRunner ??
+    (async (args: string[], commandOptions?: OpencodeCommandOptions) => await runOpencodeCli(args, commandOptions))
 
   const gitAuthor = detectGitAuthorFromCli()
   const commitAuthor = {
@@ -792,6 +806,36 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     if (!pathName.startsWith(prefix)) return pathName
     const trimmed = pathName.slice(prefix.length)
     return trimmed.length ? trimmed : '/'
+  }
+
+  async function runOpencodeCli(
+    args: string[],
+    commandOptions?: OpencodeCommandOptions
+  ): Promise<OpencodeCommandResult> {
+    return await new Promise((resolve, reject) => {
+      const child = spawn('opencode', args, {
+        cwd: commandOptions?.cwd,
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+      let stdout = ''
+      let stderr = ''
+      child.stdout?.on('data', (chunk) => {
+        stdout += chunk.toString()
+      })
+      child.stderr?.on('data', (chunk) => {
+        stderr += chunk.toString()
+      })
+      child.once('error', reject)
+      child.once('close', (code) => {
+        if (code === 0) {
+          resolve({ stdout, stderr })
+          return
+        }
+        const message = stderr.trim() || stdout.trim() || `opencode ${args.join(' ')} failed with code ${code}`
+        reject(new Error(message))
+      })
+    })
   }
 
   async function runGitCommand(args: string[], cwd: string): Promise<string> {
@@ -2714,30 +2758,28 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         res.status(404).json({ error: 'Unknown session' })
         return
       }
-      const root = (opencodeStorage as any).rootDir || resolveDefaultOpencodeRoot()
-      const messageDirPath = path.join(root, 'storage', 'message', sessionId)
-      await fs.mkdir(messageDirPath, { recursive: true })
-      const messageId = `msg_${sessionId}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
-      const messagePayload = {
-        id: messageId,
-        sessionID: sessionId,
-        role,
-        time: { created: Date.now() },
-        model: { providerID: 'opencode', modelID: DEFAULT_OPENCODE_MODEL },
-        providerID: 'opencode'
+      if (role !== 'user') {
+        console.warn(`[opencode] Unsupported role "${role}" for session ${sessionId}; sending as user message.`)
       }
-      const messageFile = path.join(messageDirPath, `${messageId}.json`)
-      await fs.writeFile(messageFile, JSON.stringify(messagePayload, null, 2), 'utf8')
-
-      const partDirPath = path.join(root, 'storage', 'part', messageId)
-      await fs.mkdir(partDirPath, { recursive: true })
-      const partId = `prt_${messageId}_1`
-      const partPayload = { id: partId, type: 'text', text, time: { start: Date.now() } }
-      const partFile = path.join(partDirPath, `${partId}.json`)
-      await fs.writeFile(partFile, JSON.stringify(partPayload, null, 2), 'utf8')
-
+      try {
+        await ensureWorkspaceDirectory(existing.session.workspacePath)
+      } catch {
+        res.status(400).json({ error: 'Session workspace is unavailable' })
+        return
+      }
+      const resolvedModel =
+        existing.messages
+          .slice()
+          .reverse()
+          .map((message) => (typeof message.modelId === 'string' ? message.modelId.trim() : ''))
+          .find((candidate) => candidate.length) ?? DEFAULT_OPENCODE_MODEL
+      const cliArgs = ['run', text, '--session', sessionId, '--format', 'json']
+      if (resolvedModel && resolvedModel.length) {
+        cliArgs.push('--model', resolvedModel)
+      }
+      await opencodeCommandRunner(cliArgs, { cwd: existing.session.workspacePath })
       const updated = await opencodeStorage.getSession(sessionId)
-      res.status(201).json(updated)
+      res.status(201).json(updated ?? existing)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to post opencode message'
       res.status(500).json({ error: message })

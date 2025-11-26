@@ -28,7 +28,7 @@ import {
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import type { LiveTerminalSession, TerminalModule } from '../../src/modules/terminal'
 import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from '../../src/modules/workflowRunnerGateway'
-import { createServerApp } from './app'
+import { createServerApp, type CreateServerOptions } from './app'
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
 
@@ -291,6 +291,7 @@ async function createIntegrationHarness(options?: {
   publicOrigin?: string
   opencodeStorage?: OpencodeStorage
   opencodeRunner?: OpencodeRunner
+  opencodeCommandRunner?: CreateServerOptions['opencodeCommandRunner']
   webSockets?: {
     WebSocket: typeof WebSocketType
     WebSocketServer: typeof WebSocketServerType
@@ -391,6 +392,7 @@ async function createIntegrationHarness(options?: {
     publicOrigin: options?.publicOrigin,
     opencodeStorage: options?.opencodeStorage,
     opencodeRunner: options?.opencodeRunner,
+    opencodeCommandRunner: options?.opencodeCommandRunner,
     webSockets
   })
 
@@ -1413,6 +1415,70 @@ describe('opencode session endpoints', () => {
       const killRes = await fetch(`${harness.baseUrl}/api/opencode/sessions/${summary.id}/kill`, { method: 'POST' })
       expect(killRes.status).toBe(200)
       expect(runnerStub.killRun).toHaveBeenCalledWith(summary.id)
+    } finally {
+      await harness.close()
+      await fs.rm(workspaceRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('routes posted messages through the opencode CLI runner', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-opencode-workspace-'))
+    const workspacePath = path.join(workspaceRoot, 'repo-beta')
+    await fs.mkdir(workspacePath, { recursive: true })
+
+    const summary: OpencodeSessionSummary = {
+      id: 'ses_beta',
+      title: 'Beta Session',
+      workspacePath,
+      projectId: 'hash-beta',
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      summary: { additions: 4, deletions: 2, files: 1 }
+    }
+    const detail: OpencodeSessionDetail = {
+      session: summary,
+      messages: [
+        {
+          id: 'msg_beta_1',
+          role: 'assistant',
+          createdAt: new Date(0).toISOString(),
+          completedAt: new Date(0).toISOString(),
+          modelId: 'github-copilot/gpt-5-large',
+          providerId: 'opencode',
+          text: 'Initial response',
+          parts: []
+        }
+      ]
+    }
+    const storageStub = createFakeOpencodeStorageStub(detail)
+    const runnerStub = createFakeOpencodeRunnerStub()
+    const cliRunner = vi.fn(async () => ({ stdout: '', stderr: '' }))
+    const harness = await createIntegrationHarness({
+      opencodeStorage: storageStub,
+      opencodeRunner: runnerStub,
+      opencodeCommandRunner: cliRunner
+    })
+
+    try {
+      const response = await fetch(`${harness.baseUrl}/api/opencode/sessions/${summary.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'user', text: 'Continue the plan' })
+      })
+      expect(response.status).toBe(201)
+      const payload = (await response.json()) as OpencodeSessionDetail
+      expect(payload.session.id).toBe(summary.id)
+      expect(cliRunner).toHaveBeenCalledTimes(1)
+      const [args, commandOptions] = cliRunner.mock.calls[0] as unknown as [string[], { cwd?: string }]
+      expect(args.slice(0, 2)).toEqual(['run', 'Continue the plan'])
+      expect(args).toContain('--session')
+      expect(args).toContain(summary.id)
+      expect(args).toContain('--format')
+      expect(args).toContain('json')
+      expect(args).toContain('--model')
+      expect(args).toContain('github-copilot/gpt-5-large')
+      expect(commandOptions).toEqual({ cwd: workspacePath })
+      expect((storageStub.getSession as Mock).mock.calls.filter(([id]) => id === summary.id).length).toBeGreaterThanOrEqual(2)
     } finally {
       await harness.close()
       await fs.rm(workspaceRoot, { recursive: true, force: true })
