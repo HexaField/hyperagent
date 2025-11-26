@@ -1,12 +1,12 @@
 import type { RouteSectionProps } from '@solidjs/router'
 import { Route, Router } from '@solidjs/router'
 import { For, Show, createResource, createSignal, type JSX } from 'solid-js'
-import { fetchJson } from './lib/http'
-import WorkspacePage from './pages/WorkspacePage'
-import { CanvasNavigatorContext, useCanvasNavigator } from './contexts/CanvasNavigatorContext'
-import { WorkspaceSelectionProvider } from './contexts/WorkspaceSelectionContext'
 import RepositoryNavigator from './components/navigation/RepositoryNavigator'
 import { WIDGET_TEMPLATES, type WidgetAddEventDetail } from './constants/widgetTemplates'
+import { CanvasNavigatorContext, useCanvasNavigator } from './contexts/CanvasNavigatorContext'
+import { WorkspaceSelectionProvider } from './contexts/WorkspaceSelectionContext'
+import { fetchJson } from './lib/http'
+import WorkspacePage from './pages/WorkspacePage'
 
 type RadicleStatus = {
   reachable: boolean
@@ -74,7 +74,10 @@ function CanvasChrome() {
   const toggleWorkspaceMenu = () => (navigator.isOpen() ? navigator.close() : navigator.open())
 
   return (
-    <div class="absolute inset-x-0 top-0 flex justify-between px-6 py-6" onPointerDown={stopCanvasPropagation}>
+    <div
+      class="pointer-events-none absolute inset-x-0 top-0 flex justify-between px-6 py-6"
+      onPointerDown={stopCanvasPropagation}
+    >
       <div class="pointer-events-auto flex flex-col gap-3">
         <button
           type="button"
@@ -133,7 +136,11 @@ function ChromePanel(props: ChromePanelProps) {
       <p class="text-xs uppercase tracking-[0.35em] text-[var(--text-muted)]">{props.title}</p>
       <Show
         when={props.actions?.length}
-        fallback={<div class="rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-left text-[var(--text)]">{props.children}</div>}
+        fallback={
+          <div class="rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-left text-[var(--text)]">
+            {props.children}
+          </div>
+        }
       >
         <For each={props.actions}>
           {(action) => (

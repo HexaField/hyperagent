@@ -2,6 +2,7 @@ export type WidgetTemplateId =
   | 'workspace-summary'
   | 'workspace-workflows'
   | 'workspace-terminal'
+  | 'workspace-code-server'
   | 'workspace-sessions'
 
 export type WidgetTemplate = {
@@ -29,6 +30,11 @@ export const WIDGET_TEMPLATES: WidgetTemplate[] = [
     id: 'workspace-terminal',
     label: 'Terminal',
     description: 'Shell access scoped to this workspace'
+  },
+  {
+    id: 'workspace-code-server',
+    label: 'Code workspace',
+    description: 'Embedded code-server experience for this repo'
   },
   {
     id: 'workspace-sessions',
