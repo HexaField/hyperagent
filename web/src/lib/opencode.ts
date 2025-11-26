@@ -82,3 +82,18 @@ export async function fetchOpencodeRuns(): Promise<OpencodeRunRecord[]> {
   const payload = await fetchJson<{ runs: OpencodeRunRecord[] }>(`/api/opencode/runs`)
   return payload.runs
 }
+
+export async function postOpencodeMessage(
+  sessionId: string,
+  input: { role?: string; text: string }
+): Promise<OpencodeSessionDetail> {
+  const payload = await fetchJson<OpencodeSessionDetail>(
+    `/api/opencode/sessions/${encodeURIComponent(sessionId)}/messages`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: input.role ?? 'user', text: input.text })
+    }
+  )
+  return payload
+}

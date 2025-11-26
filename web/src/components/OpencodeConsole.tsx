@@ -91,8 +91,10 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
 
   const [prompt, setPrompt] = createSignal(props.defaultPrompt ?? '')
   const [title, setTitle] = createSignal('')
+  const [replyText, setReplyText] = createSignal('')
   const [error, setError] = createSignal<string | null>(null)
   const [submitting, setSubmitting] = createSignal(false)
+  const [replying, setReplying] = createSignal(false)
   const [killing, setKilling] = createSignal(false)
 
   const selectedDetail = createMemo<OpencodeSessionDetail | null>(() => sessionDetail() ?? null)
@@ -170,6 +172,28 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
       setError(message)
     } finally {
       setKilling(false)
+    }
+  }
+
+  const handleReply: JSX.EventHandlerUnion<HTMLFormElement, SubmitEvent> = async (event) => {
+    event.preventDefault()
+    const sessionId = selectedSessionId()
+    if (!sessionId) return
+    const text = replyText().trim()
+    if (!text) return
+    setReplying(true)
+    setError(null)
+    try {
+      // lazy import to avoid circular deps in tests
+      const mod = await import('../lib/opencode')
+      await mod.postOpencodeMessage(sessionId, { text })
+      setReplyText('')
+      await Promise.all([refetchSessionDetail(), refetchSessions()])
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to post message'
+      setError(message)
+    } finally {
+      setReplying(false)
     }
   }
 
@@ -356,6 +380,24 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
             </For>
           </div>
         </Show>
+
+        <form class="mt-3 flex gap-2" onSubmit={handleReply}>
+          <input
+            type="text"
+            class="flex-1 rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2 text-sm"
+            placeholder="Reply to session"
+            value={replyText()}
+            onInput={(e) => setReplyText(e.currentTarget.value)}
+            disabled={!selectedSessionId() || replying()}
+          />
+          <button
+            type="submit"
+            class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            disabled={!selectedSessionId() || replying()}
+          >
+            {replying() ? 'Sending…' : 'Reply'}
+          </button>
+        </form>
       </section>
     </div>
   )

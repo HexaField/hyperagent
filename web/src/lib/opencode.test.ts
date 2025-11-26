@@ -5,6 +5,7 @@ import {
   fetchOpencodeSessionDetail,
   fetchOpencodeSessions,
   killOpencodeSession,
+  postOpencodeMessage,
   startOpencodeRun
 } from './opencode'
 
@@ -47,5 +48,16 @@ describe('opencode client helpers', () => {
     fetchJsonMock.mockResolvedValue({ success: true })
     await killOpencodeSession('ses_test')
     expect(fetchJsonMock).toHaveBeenCalledWith('/api/opencode/sessions/ses_test/kill', { method: 'POST' })
+  })
+
+  it('posts messages to sessions', async () => {
+    const detail = { session: { id: 'ses_test' }, messages: [] }
+    fetchJsonMock.mockResolvedValue(detail)
+    await postOpencodeMessage('ses_test', { text: 'Hello' })
+    expect(fetchJsonMock).toHaveBeenCalledWith('/api/opencode/sessions/ses_test/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'user', text: 'Hello' })
+    })
   })
 })
