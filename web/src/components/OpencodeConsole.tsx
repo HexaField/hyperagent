@@ -367,13 +367,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
   })
 
   createEffect(() => {
-    if (!isMobile()) {
-      setDrawerOpen(false)
-      return
-    }
-    if (!selectedSessionId() && !draftingSession()) {
-      setDrawerOpen(true)
-    }
+    if (!isMobile()) setDrawerOpen(false)
   })
 
   const selectedDetail = createMemo<OpencodeSessionDetail | null>(() => {
@@ -426,10 +420,13 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
 
   function SessionsPanel(options?: { class?: string; variant?: 'desktop' | 'drawer' }) {
     const variant = options?.variant ?? 'desktop'
-    const sectionClass =
-      variant === 'desktop'
-        ? `rounded-2xl border border-[var(--border)] p-4 ${options?.class ?? ''}`
-        : `p-3 ${options?.class ?? ''}`
+    const isDrawerVariant = variant === 'drawer'
+    const sectionClass = isDrawerVariant
+      ? `flex h-full flex-col gap-3 rounded-t-3xl bg-[var(--bg)] p-4 ${options?.class ?? ''}`
+      : `rounded-2xl border border-[var(--border)] p-4 ${options?.class ?? ''}`
+    const listClass = isDrawerVariant
+      ? 'flex flex-1 flex-col gap-2 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm'
+      : 'flex max-h-[420px] flex-col gap-2 overflow-y-auto text-sm'
     return (
       <section class={sectionClass}>
         <header class="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -449,7 +446,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
           when={sessionRows().length > 0}
           fallback={<p class="text-sm text-[var(--text-muted)]">No sessions yet.</p>}
         >
-          <ul class="flex max-h-[420px] flex-col gap-2 overflow-y-auto text-sm">
+          <ul class={listClass}>
             <For each={sessionRows()}>
               {(session) => (
                 <li>
@@ -736,19 +733,27 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
         {SessionDetail({ variant: 'mobile', class: 'flex h-full min-h-0 flex-col p-4 overflow-hidden' })}
       </div>
       <Show when={drawerOpen()}>
-        <div class="fixed inset-0 z-40 flex flex-col bg-[var(--bg)]">
-          <div class="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
-            <h2 class="text-base font-semibold">Sessions</h2>
-            <button
-              type="button"
-              class="rounded-full border border-[var(--border)] px-3 py-1 text-xs"
-              onClick={() => setDrawerOpen(false)}
-            >
-              Close
-            </button>
-          </div>
-          <div class="flex-1 overflow-auto px-4 py-4">
-            {SessionsPanel({ variant: 'drawer', class: 'h-full space-y-3' })}
+        <div class="fixed inset-0 z-40">
+          <button
+            type="button"
+            class="absolute inset-0 bg-black/40"
+            aria-label="Close session list"
+            onClick={() => setDrawerOpen(false)}
+          />
+          <div class="relative flex h-full w-full flex-col bg-[var(--bg)] shadow-2xl">
+            <div class="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+              <h2 class="text-base font-semibold">Sessions</h2>
+              <button
+                type="button"
+                class="rounded-full border border-[var(--border)] px-3 py-1 text-xs"
+                onClick={() => setDrawerOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+            <div class="flex-1 overflow-auto px-4 py-4">
+              {SessionsPanel({ variant: 'drawer', class: 'h-full' })}
+            </div>
           </div>
         </div>
       </Show>
