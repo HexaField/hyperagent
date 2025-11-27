@@ -18,6 +18,11 @@ const STORAGE_PREFIX = 'opencode-console:v1'
 const STATE_EVENT = 'opencode-console:state'
 const SEARCH_PARAM_SESSION = 'opencodeSession'
 const DEFAULT_WORKSPACE_KEY = '__default__'
+const MODEL_OPTIONS = [
+  { id: 'github-copilot/gpt-5-mini', label: 'GitHub Copilot · GPT-5 Mini' },
+  { id: 'github-copilot/gpt-4o', label: 'GitHub Copilot · GPT-4o' },
+  { id: 'openai/gpt-4o-mini', label: 'OpenAI · GPT-4o Mini' }
+]
 type PersistedState = {
   selectedSessionId?: string | null
 }
@@ -35,6 +40,15 @@ function normalizeWorkspaceKey(value: string | null | undefined): string {
 
 function storageKeyFor(workspaceKey: string): string {
   return `${STORAGE_PREFIX}:${workspaceKey}`
+}
+
+function modelOverridesKeyFor(workspaceKey: string): string {
+  return `${storageKeyFor(workspaceKey)}:models`
+}
+
+function normalizeModelId(value: string | null | undefined): string {
+  if (!value) return MODEL_OPTIONS[0].id
+  return MODEL_OPTIONS.some((option) => option.id === value) ? value : MODEL_OPTIONS[0].id
 }
 
 function readStoredState(workspaceKey: string): PersistedState {
@@ -149,14 +163,20 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
   const [replyText, setReplyText] = createSignal('')
   const [error, setError] = createSignal<string | null>(null)
   const [replying, setReplying] = createSignal(false)
-  const [killing, setKilling] = createSignal(false)
   const [draftingSession, setDraftingSession] = createSignal(false)
   const [draftingWorkspace, setDraftingWorkspace] = createSignal<string | null>(null)
   const [pendingSessionId, setPendingSessionId] = createSignal<string | null>(null)
   const [isMobile, setIsMobile] = createSignal(false)
   const [drawerOpen, setDrawerOpen] = createSignal(false)
   const [drawerVisible, setDrawerVisible] = createSignal(false)
+  const [sessionSettingsId, setSessionSettingsId] = createSignal<string | null>(null)
+  const [sessionSettingsModel, setSessionSettingsModel] = createSignal(MODEL_OPTIONS[0].id)
+  const [sessionModelOverrides, setSessionModelOverrides] = createSignal<Record<string, string>>({})
+  const [killingSessionId, setKillingSessionId] = createSignal<string | null>(null)
   let drawerHideTimeout: number | null = null
+  let lastScrollDistanceFromBottom = 0
+
+  const closeSessionSettings = () => setSessionSettingsId(null)
 
   const ensureDrawerVisible = () => {
     if (!drawerVisible()) setDrawerVisible(true)
@@ -291,19 +311,20 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     }
   }
 
-  const handleKill = async () => {
-    const sessionId = selectedSessionId()
+  const killSession = async (targetId?: string | null) => {
+    const sessionId = targetId ?? selectedSessionId()
     if (!sessionId) return
-    setKilling(true)
+    setKillingSessionId(sessionId)
     setError(null)
     try {
       await killOpencodeSession(sessionId)
       await Promise.all([refetchRuns(), refetchSessions()])
+      if (sessionSettingsId() === sessionId) closeSessionSettings()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to kill session'
       setError(message)
     } finally {
-      setKilling(false)
+      setKillingSessionId((current) => (current === sessionId ? null : current))
     }
   }
 
@@ -410,6 +431,34 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     }
   })
 
+  let lastModelOverridesWorkspace: string | null = null
+  createEffect(() => {
+    const key = workspaceKey()
+    if (!key || typeof window === 'undefined') return
+    if (lastModelOverridesWorkspace === key) return
+    lastModelOverridesWorkspace = key
+    try {
+      const raw = window.localStorage.getItem(modelOverridesKeyFor(key))
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (parsed && typeof parsed === 'object') {
+          setSessionModelOverrides(parsed as Record<string, string>)
+          return
+        }
+      }
+    } catch {}
+    setSessionModelOverrides({})
+  })
+
+  createEffect(() => {
+    const key = workspaceKey()
+    if (!key || typeof window === 'undefined') return
+    if (lastModelOverridesWorkspace !== key) return
+    try {
+      window.localStorage.setItem(modelOverridesKeyFor(key), JSON.stringify(sessionModelOverrides()))
+    } catch {}
+  })
+
   const selectedDetail = createMemo<OpencodeSessionDetail | null>(() => {
     if (draftingSession()) return null
     return sessionDetail() ?? null
@@ -420,21 +469,28 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     messages()
     const el = messagesEl()
     if (!el) return
-    if (autoScroll()) {
-      requestAnimationFrame(() => {
-        try {
-          el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-        } catch {}
-      })
-    }
+    const shouldAutoScroll = autoScroll()
+    requestAnimationFrame(() => {
+      try {
+        if (shouldAutoScroll) {
+          el.scrollTop = el.scrollHeight
+          lastScrollDistanceFromBottom = 0
+        } else {
+          const desiredTop = Math.max(0, el.scrollHeight - el.clientHeight - lastScrollDistanceFromBottom)
+          el.scrollTop = desiredTop
+        }
+      } catch {}
+    })
   })
 
   createEffect(() => {
     const el = messagesEl()
     if (!el) return
     const handler = () => {
-      const atBottom = Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop) < 20
+      const distance = Math.max(0, el.scrollHeight - el.clientHeight - el.scrollTop)
+      const atBottom = distance <= 4
       setAutoScroll(atBottom)
+      lastScrollDistanceFromBottom = distance
     }
     el.addEventListener('scroll', handler)
     onCleanup(() => el.removeEventListener('scroll', handler))
@@ -457,6 +513,39 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     if (!sessionId) return null
     return sessionRows().find((row) => row.id === sessionId) ?? null
   })
+
+  const sessionSettingsTarget = createMemo<SessionRow | null>(() => {
+    const targetId = sessionSettingsId()
+    if (!targetId) return null
+    return sessionRows().find((row) => row.id === targetId) ?? null
+  })
+
+  createEffect(() => {
+    const targetId = sessionSettingsId()
+    if (!targetId) return
+    const exists = sessionRows().some((row) => row.id === targetId)
+    if (!exists) closeSessionSettings()
+  })
+
+  const resolveSessionModel = (sessionId: string | null | undefined): string => {
+    if (!sessionId) return MODEL_OPTIONS[0].id
+    const overrides = sessionModelOverrides()
+    if (overrides && overrides[sessionId]) return normalizeModelId(overrides[sessionId])
+    const session = sessionRows().find((row) => row.id === sessionId)
+    return normalizeModelId(session?.run?.model)
+  }
+
+  const openSessionSettings = (sessionId: string) => {
+    setSessionSettingsModel(resolveSessionModel(sessionId))
+    setSessionSettingsId(sessionId)
+  }
+
+  const handleSessionModelSave = () => {
+    const targetId = sessionSettingsId()
+    if (!targetId) return
+    setSessionModelOverrides((prev) => ({ ...prev, [targetId]: sessionSettingsModel() }))
+    closeSessionSettings()
+  }
 
   function SessionsPanel(options?: { class?: string; variant?: 'desktop' | 'drawer' }) {
     const variant = options?.variant ?? 'desktop'
@@ -490,27 +579,38 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
             <For each={sessionRows()}>
               {(session) => (
                 <li>
-                  <button
-                    type="button"
-                    class="w-full rounded-xl border border-[var(--border)] px-3 py-2 text-left transition hover:border-blue-400"
-                    classList={{
-                      'border-blue-500 bg-blue-50 dark:bg-blue-950/30': selectedSessionId() === session.id,
-                      'border-emerald-500 ring-2 ring-emerald-200 dark:ring-emerald-900': session.state === 'running'
-                    }}
-                    onClick={() => handleSessionSelect(session.id)}
-                  >
-                    <div class="min-w-0">
-                      <p class="truncate font-semibold text-[var(--text)]">{session.title || session.id}</p>
-                      <span
-                        class={`rounded-full px-2 py-0.5 text-xs font-semibold ${sessionStateBadgeClass(session.state)}`}
-                      >
-                        {sessionStateLabel(session.state)}
-                      </span>
-                    </div>
-                    <p class="mt-1 text-xs text-[var(--text-muted)]">
-                      Updated {new Date(session.updatedAt).toLocaleString()}
-                    </p>
-                  </button>
+                  <div class="flex items-start gap-2">
+                    <button
+                      type="button"
+                      class="w-full flex-1 rounded-xl border border-[var(--border)] px-3 py-2 text-left transition hover:border-blue-400"
+                      classList={{
+                        'border-blue-500 bg-blue-50 dark:bg-blue-950/30': selectedSessionId() === session.id,
+                        'border-emerald-500 ring-2 ring-emerald-200 dark:ring-emerald-900': session.state === 'running'
+                      }}
+                      onClick={() => handleSessionSelect(session.id)}
+                    >
+                      <div class="min-w-0">
+                        <p class="truncate font-semibold text-[var(--text)]">{session.title || session.id}</p>
+                        <span
+                          class={`rounded-full px-2 py-0.5 text-xs font-semibold ${sessionStateBadgeClass(session.state)}`}
+                        >
+                          {sessionStateLabel(session.state)}
+                        </span>
+                      </div>
+                      <p class="mt-1 text-xs text-[var(--text-muted)]">
+                        Updated {new Date(session.updatedAt).toLocaleString()}
+                      </p>
+                      <p class="mt-1 text-xs text-[var(--text-muted)]">Model: {resolveSessionModel(session.id)}</p>
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded-full border border-[var(--border)] p-2 text-sm text-[var(--text-muted)] transition hover:text-[var(--text)]"
+                      aria-label="Session settings"
+                      onClick={() => openSessionSettings(session.id)}
+                    >
+                      ⚙️
+                    </button>
+                  </div>
                 </li>
               )}
             </For>
@@ -613,15 +713,6 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
             )}
           </Show>
         </div>
-
-        <button
-          type="button"
-          class="rounded-xl border border-[var(--border)] px-3 py-2 text-sm"
-          onClick={handleKill}
-          disabled={!selectedSessionId() || killing() || draftingSession()}
-        >
-          {killing() ? 'Stopping…' : 'Kill session'}
-        </button>
       </div>
     )
 
@@ -695,7 +786,6 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     if (isMobileVariant) {
       return (
         <section class={sectionClass}>
-          <div class="shrink-0 pb-3">{infoBlock}</div>
           <div class="flex-1 min-h-0">{transcriptBlock}</div>
           <div class="shrink-0 pt-3">{replyForm}</div>
         </section>
@@ -802,6 +892,70 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     </div>
   )
 
+  const SessionSettingsModal = () => (
+    <Show when={sessionSettingsTarget()} keyed>
+      {(target) => (
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--bg)]/95 px-4 py-8">
+          <button
+            type="button"
+            class="absolute inset-0"
+            aria-label="Close session settings"
+            tabIndex={-1}
+            onClick={closeSessionSettings}
+          />
+          <div class="relative w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-5 shadow-2xl">
+            <div class="mb-4">
+              <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">Session settings</p>
+              <h3 class="text-lg font-semibold text-[var(--text)]">{target.title || target.id}</h3>
+              <p class="text-xs text-[var(--text-muted)]">ID: {target.id}</p>
+            </div>
+            <div class="space-y-2">
+              <label class="text-sm font-semibold text-[var(--text)]" for="session-settings-model">
+                Model
+              </label>
+              <select
+                id="session-settings-model"
+                class="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2 text-sm"
+                value={sessionSettingsModel()}
+                onInput={(event) => setSessionSettingsModel(event.currentTarget.value)}
+              >
+                <For each={MODEL_OPTIONS}>
+                  {(option) => (
+                    <option value={option.id}>{option.label}</option>
+                  )}
+                </For>
+              </select>
+            </div>
+            <div class="mt-5 flex flex-wrap gap-3">
+              <button
+                type="button"
+                class="rounded-xl border border-[var(--border)] px-4 py-2 text-sm"
+                onClick={closeSessionSettings}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white"
+                onClick={handleSessionModelSave}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                class="ml-auto rounded-xl border border-red-500 px-4 py-2 text-sm font-semibold text-red-500"
+                onClick={() => killSession(target.id)}
+                disabled={killingSessionId() === target.id}
+              >
+                {killingSessionId() === target.id ? 'Stopping…' : 'Kill session'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Show>
+  )
+
   const rootClass = () =>
     [
       props.class ?? '',
@@ -830,6 +984,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
       <div class="flex-1 min-h-0">
         {isMobile() ? MobileLayout : DesktopLayout}
       </div>
+      {SessionSettingsModal()}
     </div>
   )
 }
