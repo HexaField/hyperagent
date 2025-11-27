@@ -11,6 +11,7 @@ import {
   type OpencodeSessionDetail as CodingAgentSessionDetail,
   type OpencodeSessionSummary as CodingAgentSessionSummary
 } from '../lib/opencode'
+import { fetchCodingAgentProviders, type CodingAgentProvider } from '../lib/codingAgent'
 
 const REFRESH_INTERVAL_MS = 4000
 const STORAGE_PREFIXES = ['coding-agent-console:v1', 'opencode-console:v1'] as const
@@ -22,7 +23,7 @@ const STATE_EVENT_ALIASES = [STATE_EVENT, 'opencode-console:state'] as const
 const SEARCH_PARAM_SESSION = 'codingAgentSession'
 const LEGACY_SEARCH_PARAM_SESSION = 'opencodeSession'
 const DEFAULT_WORKSPACE_KEY = '__default__'
-const CODING_AGENT_PROVIDERS = [
+const FALLBACK_CODING_AGENT_PROVIDERS: CodingAgentProvider[] = [
   {
     id: 'opencode',
     label: 'Coding Agent (Opencode CLI)',
@@ -33,17 +34,14 @@ const CODING_AGENT_PROVIDERS = [
       { id: 'openai/gpt-4o-mini', label: 'OpenAI · GPT-4o Mini' }
     ]
   }
-] as const
-type CodingAgentProviderConfig = (typeof CODING_AGENT_PROVIDERS)[number]
-type CodingAgentProviderId = CodingAgentProviderConfig['id']
+]
+type CodingAgentProviderId = CodingAgentProvider['id']
+type CodingAgentModelOption = CodingAgentProvider['models'][number]
 type SessionOverride = {
   providerId?: CodingAgentProviderId
   modelId?: string
 }
-const PROVIDER_CONFIG_MAP = new Map<CodingAgentProviderId, CodingAgentProviderConfig>(
-  CODING_AGENT_PROVIDERS.map((config) => [config.id, config])
-)
-const DEFAULT_PROVIDER = CODING_AGENT_PROVIDERS[0]
+const DEFAULT_PROVIDER = FALLBACK_CODING_AGENT_PROVIDERS[0]
 const DEFAULT_MODEL_ID = DEFAULT_PROVIDER.defaultModelId
 type PersistedState = {
   selectedSessionId?: string | null
@@ -70,34 +68,6 @@ function sessionOverridesKeyFor(workspaceKey: string, prefix: string = STORAGE_P
 
 function legacyModelOverridesKeyFor(workspaceKey: string, prefix: string = STORAGE_PREFIX): string {
   return `${storageKeyFor(workspaceKey, prefix)}${LEGACY_MODEL_OVERRIDES_SUFFIX}`
-}
-
-function normalizeProviderId(value: string | null | undefined): CodingAgentProviderId {
-  if (!value) return DEFAULT_PROVIDER.id
-  return PROVIDER_CONFIG_MAP.has(value as CodingAgentProviderId)
-    ? (value as CodingAgentProviderId)
-    : DEFAULT_PROVIDER.id
-}
-
-function providerConfigFor(providerId: string | null | undefined): CodingAgentProviderConfig {
-  const normalized = normalizeProviderId(providerId)
-  return PROVIDER_CONFIG_MAP.get(normalized) ?? DEFAULT_PROVIDER
-}
-
-function normalizeModelId(providerId: string | null | undefined, value: string | null | undefined): string {
-  const config = providerConfigFor(providerId)
-  if (!value) return config.defaultModelId
-  return config.models.some((option) => option.id === value) ? value : config.defaultModelId
-}
-
-function providerLabel(providerId: string | null | undefined): string {
-  return providerConfigFor(providerId).label
-}
-
-function modelLabel(providerId: string | null | undefined, modelId: string | null | undefined): string {
-  const config = providerConfigFor(providerId)
-  const normalizedModel = normalizeModelId(config.id, modelId)
-  return config.models.find((option) => option.id === normalizedModel)?.label ?? normalizedModel
 }
 
 function readStoredState(workspaceKey: string): PersistedState {
@@ -170,62 +140,6 @@ function updateSearchParam(name: string, value: string | null | undefined) {
   } catch {}
 }
 
-function readSessionOverrides(workspaceKey: string): Record<string, SessionOverride> {
-  if (typeof window === 'undefined') return {}
-  for (const prefix of STORAGE_PREFIXES) {
-    const parsed = parseSessionOverrides(window.localStorage.getItem(sessionOverridesKeyFor(workspaceKey, prefix)))
-    if (parsed) return parsed
-  }
-  for (const prefix of STORAGE_PREFIXES) {
-    const parsed = parseLegacyModelOverrides(window.localStorage.getItem(legacyModelOverridesKeyFor(workspaceKey, prefix)))
-    if (parsed) return parsed
-  }
-  return {}
-}
-
-function parseSessionOverrides(raw: string | null): Record<string, SessionOverride> | null {
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return null
-    const next: Record<string, SessionOverride> = {}
-    for (const [sessionId, value] of Object.entries(parsed)) {
-      if (!sessionId || typeof value !== 'object' || value === null) continue
-      const entry = value as Partial<SessionOverride> & { providerId?: string; modelId?: string }
-      const providerId = entry.providerId ? normalizeProviderId(entry.providerId) : undefined
-      const modelId = entry.modelId ? String(entry.modelId) : undefined
-      if (providerId || modelId) {
-        next[sessionId] = {
-          ...(providerId ? { providerId } : {}),
-          ...(modelId ? { modelId: normalizeModelId(providerId ?? DEFAULT_PROVIDER.id, modelId) } : {})
-        }
-      }
-    }
-    return next
-  } catch {
-    return null
-  }
-}
-
-function parseLegacyModelOverrides(raw: string | null): Record<string, SessionOverride> | null {
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return null
-    const next: Record<string, SessionOverride> = {}
-    for (const [sessionId, modelId] of Object.entries(parsed)) {
-      if (!sessionId || typeof modelId !== 'string') continue
-      next[sessionId] = {
-        providerId: DEFAULT_PROVIDER.id,
-        modelId: normalizeModelId(DEFAULT_PROVIDER.id, modelId)
-      }
-    }
-    return next
-  } catch {
-    return null
-  }
-}
-
 function persistSessionOverrides(workspaceKey: string, overrides: Record<string, SessionOverride>) {
   if (typeof window === 'undefined') return
   try {
@@ -255,6 +169,98 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     return props.workspaceFilter ?? ''
   }
   const workspaceKey = createMemo(() => normalizeWorkspaceKey(workspaceForFetch()))
+
+  const [providerResource] = createResource<CodingAgentProvider[]>(fetchCodingAgentProviders)
+  const providers = createMemo<CodingAgentProvider[]>(() => {
+    const fetched = providerResource() ?? []
+    return fetched.length ? fetched : FALLBACK_CODING_AGENT_PROVIDERS
+  })
+  const providerMap = createMemo(() => new Map(providers().map((provider) => [provider.id, provider])))
+  const defaultProvider = createMemo<CodingAgentProvider>(() => providers()[0] ?? DEFAULT_PROVIDER)
+  const defaultProviderId = (): CodingAgentProviderId => (defaultProvider()?.id ?? DEFAULT_PROVIDER.id) as CodingAgentProviderId
+
+  const normalizeProviderId = (value: string | null | undefined): CodingAgentProviderId => {
+    if (value && providerMap().has(value as CodingAgentProviderId)) {
+      return value as CodingAgentProviderId
+    }
+    return defaultProviderId()
+  }
+
+  const providerConfigFor = (providerId: string | null | undefined): CodingAgentProvider => {
+    const normalized = normalizeProviderId(providerId)
+    return providerMap().get(normalized) ?? defaultProvider() ?? DEFAULT_PROVIDER
+  }
+
+  const normalizeModelId = (providerId: string | null | undefined, value: string | null | undefined): string => {
+    const config = providerConfigFor(providerId)
+    if (!value) return config.defaultModelId
+    return config.models.some((option: CodingAgentModelOption) => option.id === value) ? value : config.defaultModelId
+  }
+
+  const providerLabel = (providerId: string | null | undefined): string => providerConfigFor(providerId).label
+
+  const modelLabel = (providerId: string | null | undefined, modelId: string | null | undefined): string => {
+    const config = providerConfigFor(providerId)
+    const normalizedModel = normalizeModelId(config.id, modelId)
+    return config.models.find((option: CodingAgentModelOption) => option.id === normalizedModel)?.label ?? normalizedModel
+  }
+
+  const parseSessionOverrides = (raw: string | null): Record<string, SessionOverride> | null => {
+    if (!raw) return null
+    try {
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object') return null
+      const next: Record<string, SessionOverride> = {}
+      for (const [sessionId, value] of Object.entries(parsed)) {
+        if (!sessionId || typeof value !== 'object' || value === null) continue
+        const entry = value as Partial<SessionOverride> & { providerId?: string; modelId?: string }
+        const providerId = entry.providerId ? normalizeProviderId(entry.providerId) : undefined
+        const hasModel = typeof entry.modelId === 'string' && entry.modelId.trim().length > 0
+        if (!providerId && !hasModel) continue
+        const resolvedProviderId = providerId ?? defaultProviderId()
+        next[sessionId] = {
+          ...(providerId ? { providerId } : {}),
+          ...(hasModel ? { modelId: normalizeModelId(resolvedProviderId, entry.modelId!) } : {})
+        }
+      }
+      return next
+    } catch {
+      return null
+    }
+  }
+
+  const parseLegacyModelOverrides = (raw: string | null): Record<string, SessionOverride> | null => {
+    if (!raw) return null
+    try {
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object') return null
+      const fallbackProviderId = defaultProviderId()
+      const next: Record<string, SessionOverride> = {}
+      for (const [sessionId, modelId] of Object.entries(parsed)) {
+        if (!sessionId || typeof modelId !== 'string') continue
+        next[sessionId] = {
+          providerId: fallbackProviderId,
+          modelId: normalizeModelId(fallbackProviderId, modelId)
+        }
+      }
+      return next
+    } catch {
+      return null
+    }
+  }
+
+  const readSessionOverrides = (key: string): Record<string, SessionOverride> => {
+    if (typeof window === 'undefined') return {}
+    for (const prefix of STORAGE_PREFIXES) {
+      const parsed = parseSessionOverrides(window.localStorage.getItem(sessionOverridesKeyFor(key, prefix)))
+      if (parsed) return parsed
+    }
+    for (const prefix of STORAGE_PREFIXES) {
+      const parsed = parseLegacyModelOverrides(window.localStorage.getItem(legacyModelOverridesKeyFor(key, prefix)))
+      if (parsed) return parsed
+    }
+    return {}
+  }
 
   const [sessions, { refetch: refetchSessions }] = createResource(workspaceForFetch, async (value) => {
     const trimmed = value?.trim()
@@ -398,8 +404,8 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         if (!workspacePath) {
           throw new Error('Workspace path is required')
         }
-        const providerId = DEFAULT_PROVIDER.id
-        const modelId = DEFAULT_MODEL_ID
+        const providerId = defaultProviderId()
+        const modelId = providerConfigFor(providerId).defaultModelId
         const run = await startOpencodeRun({
           workspacePath,
           prompt: text,
@@ -574,9 +580,9 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
 
   let lastSessionOverridesWorkspace: string | null = null
   createEffect(() => {
+    providers()
     const key = workspaceKey()
     if (!key || typeof window === 'undefined') return
-    if (lastSessionOverridesWorkspace === key) return
     lastSessionOverridesWorkspace = key
     setSessionOverrides(readSessionOverrides(key))
   })
@@ -657,11 +663,12 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   })
 
   const resolveSessionProvider = (sessionId: string | null | undefined): CodingAgentProviderId => {
-    if (!sessionId) return DEFAULT_PROVIDER.id
+    const fallbackProviderId = defaultProviderId()
+    if (!sessionId) return fallbackProviderId
     const overrides = sessionOverrides()
     const override = overrides?.[sessionId]
     if (override?.providerId) return normalizeProviderId(override.providerId)
-    return DEFAULT_PROVIDER.id
+    return fallbackProviderId
   }
 
   const resolveSessionModel = (sessionId: string | null | undefined): string => {
@@ -1111,7 +1118,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                     setSessionSettingsModel((current) => normalizeModelId(nextProvider, current))
                   }}
                 >
-                  <For each={CODING_AGENT_PROVIDERS}>
+                  <For each={providers()}>
                     {(provider) => (
                       <option value={provider.id}>{provider.label}</option>
                     )}

@@ -1369,6 +1369,32 @@ describe('opencode session endpoints', () => {
     await harnessB.close()
   })
 
+  it('lists coding agent providers via the opencode CLI', async () => {
+    const cliRunner = vi.fn(async () => ({
+      stdout: 'github-copilot/gpt-4o\nopenai/gpt-4o-mini\n',
+      stderr: ''
+    }))
+    const harness = await createIntegrationHarness({ opencodeCommandRunner: cliRunner })
+
+    try {
+      const response = await fetch(`${harness.baseUrl}/api/coding-agent/providers`)
+      expect(response.status).toBe(200)
+      expect(cliRunner).toHaveBeenCalledWith(['models'])
+      const payload = (await response.json()) as {
+        providers: Array<{ id: string; models: Array<{ id: string; label: string }>; defaultModelId: string }>
+      }
+      expect(Array.isArray(payload.providers)).toBe(true)
+      expect(payload.providers).toHaveLength(1)
+      const provider = payload.providers[0]
+      expect(provider.id).toBe('opencode')
+      expect(provider.defaultModelId).toBe('github-copilot/gpt-5-mini')
+      expect(provider.models[0]?.id).toBe('github-copilot/gpt-5-mini')
+      expect(provider.models.some((model) => model.id === 'openai/gpt-4o-mini')).toBe(true)
+    } finally {
+      await harness.close()
+    }
+  })
+
   it('proxies runner lifecycle operations and session detail lookups', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hyperagent-opencode-workspace-'))
     const workspacePath = path.join(workspaceRoot, 'repo-alpha')

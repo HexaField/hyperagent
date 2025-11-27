@@ -123,6 +123,17 @@ const WORKFLOW_AGENT_PROVIDER =
   normalizeWorkflowProvider(process.env.WORKFLOW_AGENT_PROVIDER) ?? ('opencode' as Provider)
 const WORKFLOW_AGENT_MODEL = process.env.WORKFLOW_AGENT_MODEL ?? 'github-copilot/gpt-5-mini'
 const WORKFLOW_AGENT_MAX_ROUNDS = parsePositiveInteger(process.env.WORKFLOW_AGENT_MAX_ROUNDS)
+const CODING_AGENT_PROVIDER_ID = 'opencode'
+const FALLBACK_OPENCODE_MODEL_IDS = [
+  'github-copilot/gpt-5-mini',
+  'github-copilot/gpt-4o',
+  'openai/gpt-4o-mini'
+]
+const KNOWN_OPENCODE_MODEL_LABELS: Record<string, string> = {
+  'github-copilot/gpt-5-mini': 'GitHub Copilot · GPT-5 Mini',
+  'github-copilot/gpt-4o': 'GitHub Copilot · GPT-4o',
+  'openai/gpt-4o-mini': 'OpenAI · GPT-4o Mini'
+}
 
 function normalizeWorkflowProvider(raw?: string | null): Provider | undefined {
   if (!raw) return undefined
@@ -1358,6 +1369,118 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 
+  type CodingAgentProviderModelDescription = {
+    id: string
+    label: string
+  }
+
+  type CodingAgentProviderDescription = {
+    id: string
+    label: string
+    defaultModelId: string
+    models: CodingAgentProviderModelDescription[]
+  }
+
+  const titleizeModelSegment = (segment: string): string => {
+    return segment
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map((part) => {
+        const upper = part.toUpperCase()
+        if (upper === 'GPT') return 'GPT'
+        if (upper === 'LLM') return 'LLM'
+        return part.charAt(0).toUpperCase() + part.slice(1)
+      })
+      .join(' ')
+  }
+
+  const formatCodingAgentModelLabel = (modelId: string): string => {
+    if (!modelId) return 'Unknown model'
+    const known = KNOWN_OPENCODE_MODEL_LABELS[modelId]
+    if (known) return known
+    const [providerSegment, nameSegment] = modelId.split('/', 2)
+    if (!nameSegment) {
+      return titleizeModelSegment(providerSegment)
+    }
+    return `${titleizeModelSegment(providerSegment)} · ${titleizeModelSegment(nameSegment)}`
+  }
+
+  const parseOpencodeModelList = (raw: string | null | undefined): string[] => {
+    if (!raw) return []
+    const trimmed = raw.trim()
+    if (!trimmed.length) return []
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) {
+        return parsed.filter((entry): entry is string => typeof entry === 'string').map((entry) => entry.trim()).filter(Boolean)
+      }
+      if (Array.isArray((parsed as any).models)) {
+        return ((parsed as any).models as unknown[])
+          .filter((entry): entry is string => typeof entry === 'string')
+          .map((entry) => entry.trim())
+          .filter(Boolean)
+      }
+    } catch {
+      // fall back to newline parsing
+    }
+    return trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  }
+
+  const ensureOpencodeModelList = (models: string[]): string[] => {
+    const seen = new Set<string>()
+    const append = (value: string) => {
+      const normalized = value.trim()
+      if (!normalized.length || seen.has(normalized)) return
+      seen.add(normalized)
+    }
+    models.filter((value) => typeof value === 'string').forEach(append)
+    if (!seen.size) {
+      FALLBACK_OPENCODE_MODEL_IDS.forEach(append)
+    }
+    if (!seen.has(DEFAULT_OPENCODE_MODEL)) {
+      append(DEFAULT_OPENCODE_MODEL)
+    }
+    const ordered = Array.from(seen)
+    const prioritized = ordered.filter((id) => id !== DEFAULT_OPENCODE_MODEL)
+    return [DEFAULT_OPENCODE_MODEL, ...prioritized]
+  }
+
+  const listOpencodeModelIds = async (): Promise<string[]> => {
+    try {
+      const result = await opencodeCommandRunner(['models'])
+      const stdout = result?.stdout ?? ''
+      return ensureOpencodeModelList(parseOpencodeModelList(stdout))
+    } catch (error) {
+      console.warn('Failed to list coding agent models via opencode CLI, falling back to defaults.', error)
+      return ensureOpencodeModelList([])
+    }
+  }
+
+  const describeOpencodeProvider = async (): Promise<CodingAgentProviderDescription> => {
+    const modelIds = await listOpencodeModelIds()
+    const defaultModelId = modelIds[0] ?? DEFAULT_OPENCODE_MODEL
+    return {
+      id: CODING_AGENT_PROVIDER_ID,
+      label: 'Coding Agent (Opencode CLI)',
+      defaultModelId,
+      models: modelIds.map((id) => ({ id, label: formatCodingAgentModelLabel(id) }))
+    }
+  }
+
+  const listCodingAgentProviders = async (): Promise<CodingAgentProviderDescription[]> => {
+    return [await describeOpencodeProvider()]
+  }
+
+  const listCodingAgentProvidersHandler: RequestHandler = async (_req, res) => {
+    try {
+      const providers = await listCodingAgentProviders()
+      res.json({ providers })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to list coding agent providers'
+      res.status(500).json({ error: message })
+    }
+  }
+
   const listOpencodeSessionsHandler: RequestHandler = async (req, res) => {
     try {
       const workspaceParam = req.query.workspacePath
@@ -1400,7 +1523,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   }
 
   const startOpencodeSessionHandler: RequestHandler = async (req, res) => {
-    const { workspacePath, prompt, title } = req.body ?? {}
+    const { workspacePath, prompt, title, model } = req.body ?? {}
     if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
       res.status(400).json({ error: 'workspacePath is required' })
       return
@@ -1418,11 +1541,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       return
     }
     try {
+      const resolvedModel = typeof model === 'string' && model.trim().length ? model.trim() : DEFAULT_OPENCODE_MODEL
       const run = await opencodeRunner.startRun({
         workspacePath: normalizedWorkspace,
         prompt: prompt.trim(),
         title: typeof title === 'string' ? title : undefined,
-        model: DEFAULT_OPENCODE_MODEL
+        model: resolvedModel
       })
       res.status(202).json({ run })
     } catch (error) {
@@ -2736,6 +2860,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   app.get('/api/terminal/sessions', listTerminalSessionsHandler)
   app.post('/api/terminal/sessions', createTerminalSessionHandler)
   app.delete('/api/terminal/sessions/:sessionId', deleteTerminalSessionHandler)
+  app.get('/api/coding-agent/providers', listCodingAgentProvidersHandler)
   app.get('/api/opencode/sessions', listOpencodeSessionsHandler)
   app.get('/api/opencode/sessions/:sessionId', getOpencodeSessionHandler)
 
