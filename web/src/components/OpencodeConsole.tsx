@@ -462,7 +462,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     const variant = options?.variant ?? 'desktop'
     const isDrawerVariant = variant === 'drawer'
     const sectionClass = isDrawerVariant
-      ? `flex h-full flex-col gap-3 rounded-t-3xl bg-[var(--bg)] p-4 ${options?.class ?? ''}`
+      ? `flex h-full flex-col gap-3 rounded-t-3xl bg-[var(--bg-muted)] p-4 ${options?.class ?? ''}`
       : `rounded-2xl border border-[var(--border)] p-4 ${options?.class ?? ''}`
     const listClass = isDrawerVariant
       ? 'flex flex-1 flex-col gap-2 overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm'
@@ -753,7 +753,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
 
   const MobileLayout = (
     <div class="flex h-full min-h-0 flex-col overflow-hidden">
-      <header class="sticky top-0 z-20 border-b border-[var(--border)] bg-[var(--bg)] px-4 py-3">
+      <header class="sticky top-0 z-20 border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
         <div class="flex items-center gap-3">
           <button
             type="button"
@@ -773,7 +773,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
         {SessionDetail({ variant: 'mobile', class: 'flex h-full min-h-0 flex-col p-4 overflow-hidden' })}
       </div>
       <Show when={drawerVisible()}>
-        <div class="fixed inset-0 z-40 flex bg-[var(--bg)]">
+        <div class="fixed inset-0 z-40 flex bg-[var(--bg-muted)]">
           <button
             type="button"
             aria-label="Close session list"
@@ -781,7 +781,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
             onClick={closeSessionDrawer}
           />
           <div
-            class={`relative flex h-full w-full max-w-[420px] flex-col bg-[var(--bg)] shadow-2xl transition-transform duration-300 ease-in-out ${drawerOpen() ? 'translate-x-0' : '-translate-x-full'}`}
+            class={`relative flex h-full w-full max-w-[420px] flex-col bg-[var(--bg-muted)] shadow-2xl transition-transform duration-300 ease-in-out ${drawerOpen() ? 'translate-x-0' : '-translate-x-full'}`}
           >
             <div class="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
               <h2 class="text-base font-semibold">Sessions</h2>
