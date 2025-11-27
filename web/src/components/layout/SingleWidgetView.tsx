@@ -3,61 +3,6 @@ import { WIDGET_TEMPLATES } from '../../constants/widgetTemplates'
 import ThemeToggle from '../ThemeToggle'
 import type { CanvasWidgetConfig } from './CanvasWorkspace'
 
-const PAGE_STORAGE_PREFIX = 'single-widget:page'
-const PAGE_QUERY_PARAM = 'widgetPage'
-
-function getWidgetPageStorageKey(id: string) {
-  return `${PAGE_STORAGE_PREFIX}:${id}`
-}
-
-function readWidgetPage(id: string | null | undefined): number | null {
-  if (!id || typeof window === 'undefined') return null
-  try {
-    const raw = window.localStorage.getItem(getWidgetPageStorageKey(id))
-    if (raw === null) return null
-    const value = Number(JSON.parse(raw))
-    return Number.isNaN(value) ? null : value
-  } catch {
-    return null
-  }
-}
-
-function persistWidgetPage(id: string | null | undefined, value: number) {
-  if (!id || typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(getWidgetPageStorageKey(id), JSON.stringify(value))
-  } catch {}
-}
-
-function readPageFromQuery(): { widgetId: string | null; page: number } | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const params = new URLSearchParams(window.location.search)
-    const raw = params.get(PAGE_QUERY_PARAM)
-    if (raw === null) return null
-    if (raw.includes(':')) {
-      const [idPart, pagePart] = raw.split(':')
-      const parsed = Number(pagePart)
-      if (Number.isNaN(parsed)) return null
-      return { widgetId: idPart || null, page: parsed }
-    }
-    const fallback = Number(raw)
-    return Number.isNaN(fallback) ? null : { widgetId: null, page: fallback }
-  } catch {
-    return null
-  }
-}
-
-function updatePageQueryParam(widgetId: string, value: number) {
-  if (typeof window === 'undefined') return
-  try {
-    const url = new URL(window.location.href)
-    if (value > 0) url.searchParams.set(PAGE_QUERY_PARAM, `${widgetId}:${value}`)
-    else url.searchParams.delete(PAGE_QUERY_PARAM)
-    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
-  } catch {}
-}
-
 export type SingleWidgetViewProps = {
   storageKey: string
   widgets: CanvasWidgetConfig[]
@@ -118,17 +63,6 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
       if (typeof mq.addEventListener === 'function') mq.addEventListener('change', handler)
       else mq.addListener(handler)
 
-      const titleHandler = (e: Event) => {
-        const ce = e as CustomEvent
-        try {
-          const title = typeof ce.detail?.title === 'string' ? ce.detail.title : null
-          if (title !== null) {
-            ;(window as any).__singleWidgetPageTitle = title
-          }
-        } catch {}
-      }
-      window.addEventListener('single-widget:page-title', titleHandler)
-
       const keydownHandler = (e: KeyboardEvent) => {
         if (e.key === 'Escape') {
           if (widgetMenuOpen()) setWidgetMenuOpen(false)
@@ -138,7 +72,6 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
       window.addEventListener('keydown', keydownHandler)
 
       onCleanup(() => {
-        window.removeEventListener('single-widget:page-title', titleHandler)
         window.removeEventListener('keydown', keydownHandler)
       })
     } catch {
@@ -201,146 +134,6 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
     if (!id || !list.some((w) => w.id === id)) setSelectedId(list[0].id)
   })
 
-  // mobile paging state and refs
-  const [page, setPage] = createSignal(0)
-  const [pageTitles, setPageTitles] = createSignal<string[]>([])
-  const [singleRoot, setSingleRoot] = createSignal<HTMLDivElement | undefined>(undefined)
-  let lastWidgetForPageRestore: string | null = null
-
-  createEffect(() => {
-    const widget = selectedWidget()
-    if (!widget || !widget.id) return
-    if (widget.id === lastWidgetForPageRestore) return
-    lastWidgetForPageRestore = widget.id
-    const queryValue = readPageFromQuery()
-    if (queryValue && (queryValue.widgetId === null || queryValue.widgetId === widget.id)) {
-      setPage(Math.max(0, Math.floor(queryValue.page)))
-      return
-    }
-    const storedValue = readWidgetPage(widget.id)
-    if (storedValue !== null) {
-      setPage(Math.max(0, Math.floor(storedValue)))
-    } else {
-      setPage(0)
-    }
-  })
-
-  // update pages info whenever selected widget changes or widget declares pages()
-  createEffect(() => {
-    const widget = selectedWidget()
-    const root = singleRoot()
-    if (!root) return
-
-    // If widget provides a pages API, prefer that (strongly-typed)
-    try {
-      const pagesApi = (widget as any)?.pages as
-        | (() => { title: string; content: () => HTMLElement | any }[])
-        | undefined
-      if (typeof pagesApi === 'function') {
-        const entries = pagesApi() ?? []
-        const titles = entries.map((e, idx) => (e && typeof e.title === 'string' ? e.title : `Page ${idx + 1}`))
-        setPageTitles(titles)
-        setPage((p) => Math.min(p, Math.max(0, entries.length - 1)))
-        // ensure transform will be applied by the page effect (clamped to available pages)
-        requestAnimationFrame(() => {
-          const container = root.querySelector<HTMLElement>('.single-widget-pages')
-          const maxIndex = Math.max(0, (entries?.length ?? 0) - 1)
-          const cur = Math.min(page(), maxIndex)
-          if (container) container.style.transform = `translateX(-${cur * 100}%)`
-        })
-        return
-      }
-    } catch {
-      // fallthrough to DOM detection
-    }
-
-    // collect page elements in DOM (fallback) — use :scope to avoid nested widget carousels
-    const pages = Array.from(root.querySelectorAll<HTMLElement>(':scope > .single-widget-pages > .single-widget-page'))
-    if (!pages.length) {
-      setPageTitles([])
-      setPage(0)
-      return
-    }
-    const titles = pages.map((el, idx) => el.getAttribute('data-single-widget-title') ?? `Page ${idx + 1}`)
-    setPageTitles(titles)
-    // clamp page
-    setPage((p) => Math.min(p, Math.max(0, pages.length - 1)))
-    // ensure transform
-    requestAnimationFrame(() => {
-      const container = root.querySelector<HTMLElement>('.single-widget-pages')
-      if (container) container.style.transform = `translateX(-${page() * 100}%)`
-    })
-  })
-
-  // helper: authoritative max page index (prefer widget.pages())
-  const getMaxIndex = () => {
-    const widget = selectedWidget()
-    try {
-      const pagesApi = (widget as any)?.pages as (() => any[]) | undefined
-      if (typeof pagesApi === 'function') {
-        const entries = pagesApi() ?? []
-        if (entries.length > 0) return Math.max(0, entries.length - 1)
-      }
-    } catch {
-      // ignore
-    }
-    const titlesLen = pageTitles().length
-    return Math.max(0, titlesLen - 1)
-  }
-
-  // listen for prev/next/set events to update local page state
-  onMount(() => {
-    const prevHandler = () => setPage((p) => Math.max(0, p - 1))
-    const nextHandler = () => {
-      const max = getMaxIndex()
-      setPage((p) => Math.min(max, p + 1))
-    }
-    const setHandler = (e: Event) => {
-      const ce = e as CustomEvent
-      const pg = Number(ce?.detail?.page)
-      const max = getMaxIndex()
-      if (!Number.isNaN(pg)) setPage(() => Math.max(0, Math.min(pg, max)))
-      if (typeof ce?.detail?.title === 'string')
-        setPageTitles((titles) => {
-          const next = [...titles]
-          if (pg >= 0 && pg < next.length) next[pg] = ce.detail.title
-          return next
-        })
-    }
-    try {
-      window.addEventListener('single-widget:page-prev', prevHandler)
-      window.addEventListener('single-widget:page-next', nextHandler)
-      window.addEventListener('single-widget:page-set', setHandler as EventListener)
-    } catch {}
-    onCleanup(() => {
-      try {
-        window.removeEventListener('single-widget:page-prev', prevHandler)
-        window.removeEventListener('single-widget:page-next', nextHandler)
-        window.removeEventListener('single-widget:page-set', setHandler as EventListener)
-      } catch {}
-    })
-  })
-
-  createEffect(() => {
-    // apply transform when page changes
-    const root = singleRoot()
-    if (!root) return
-    const container = root.querySelector<HTMLElement>('.single-widget-pages')
-    if (container) {
-      container.style.transition = 'transform 300ms'
-      const maxIndex = getMaxIndex()
-      const cur = Math.min(Math.max(0, page()), maxIndex)
-      container.style.transform = `translateX(-${cur * 100}%)`
-    }
-  })
-
-  createEffect(() => {
-    const widget = selectedWidget()
-    if (!widget || !widget.id) return
-    const value = Math.max(0, Math.floor(page()))
-    persistWidgetPage(widget.id, value)
-    updatePageQueryParam(widget.id, value)
-  })
 
   // helper to open a single widget directly (used when selecting from widget menu)
   const openSingleWidgetByTemplate = (templateId: string) => {
@@ -363,9 +156,6 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
 .single-widget-root code, .single-widget-root pre { max-width: 100% !important; white-space: pre-wrap !important; overflow-wrap: anywhere !important; word-break: break-word !important; }
 /* Ensure flex children can shrink to avoid overflow */
 .single-widget-root .flex, .single-widget-root .flex-1, .single-widget-root [class*="min-w-"] { min-width: 0 !important; }
-/* paging container behaviour */
-.single-widget-pages { display: flex; width: 100%; height: 100%; }
-.single-widget-pages > .single-widget-page { flex: 0 0 100%; width: 100%; }
 `}</style>
           <div class="flex flex-col h-full w-full">
             {/* Mobile standardized header: left widget menu, center title, right settings (theme) */}
@@ -444,74 +234,11 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
             </Show>
 
             <div class="flex-1 overflow-y-auto overflow-x-hidden">
-              <div
-                class="single-widget-root w-full max-w-full box-border m-0 p-0"
-                ref={(el) => setSingleRoot(el ?? undefined)}
-              >
+              <div class="single-widget-root w-full max-w-full box-border m-0 p-0">
                 {selectedWidget() ? (
-                  typeof (selectedWidget() as any).pages === 'function' ? (
-                    <div
-                      class="single-widget-pages flex h-full transition-transform duration-300"
-                      style={{ transform: `translateX(-${page() * 100}%)` }}
-                    >
-                      <For each={(selectedWidget() as any).pages() ?? []}>
-                        {(entry) => (
-                          <div
-                            class="single-widget-page w-full p-4 overflow-auto"
-                            data-single-widget-title={entry.title ?? 'Page'}
-                          >
-                            {entry.content()}
-                          </div>
-                        )}
-                      </For>
-                    </div>
-                  ) : (
-                    <div class="w-full max-w-full box-border">{selectedWidget()!.content?.()}</div>
-                  )
+                  <div class="w-full max-w-full box-border">{selectedWidget()!.content?.()}</div>
                 ) : (
                   <div class="p-2 text-[var(--text-muted)]">No widgets available</div>
-                )}
-              </div>
-            </div>
-
-            {/* mobile footer: keep small pager controls below header so swipe area is undisturbed */}
-            <div class="border-t border-[var(--border)] bg-[var(--bg-card)] px-3 py-2">
-              <div class="mx-auto flex max-w-[720px] items-center justify-center gap-3">
-                {page() > 0 ? (
-                  <button
-                    type="button"
-                    class="text-sm rounded p-1"
-                    aria-label="Previous page"
-                    onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  >
-                    ‹
-                  </button>
-                ) : (
-                  <div class="w-6" />
-                )}
-
-                <div class="flex-1 h-8 flex items-center justify-center text-xs text-[var(--text-muted)]">
-                  {(() => {
-                    const w = selectedWidget()
-                    if (w && typeof (w as any).pages === 'function') {
-                      const entries = (w as any).pages() ?? []
-                      return entries[page()]?.title ?? `Page ${page() + 1}`
-                    }
-                    return pageTitles()[page()] ?? 'Pages'
-                  })()}
-                </div>
-
-                {page() < getMaxIndex() ? (
-                  <button
-                    type="button"
-                    class="text-sm rounded p-1"
-                    aria-label="Next page"
-                    onClick={() => setPage((p) => Math.min(getMaxIndex(), p + 1))}
-                  >
-                    ›
-                  </button>
-                ) : (
-                  <div class="w-6" />
                 )}
               </div>
             </div>
