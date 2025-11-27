@@ -676,7 +676,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     )
 
     const infoBlock = (
-      <div class="flex items-start justify-between gap-3">
+      <div class="flex items-start gap-3">
         <div class="flex-1 min-w-0">
           <p class="text-sm font-semibold text-[var(--text-muted)]">Session detail</p>
           <Show
@@ -713,6 +713,16 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
             )}
           </Show>
         </div>
+        <Show when={!isMobileVariant && selectedSessionId() && !draftingSession()}>
+          <button
+            type="button"
+            class="rounded-full border border-[var(--border)] p-2 text-sm text-[var(--text-muted)] transition hover:text-[var(--text)]"
+            aria-label="Session settings"
+            onClick={() => selectedSessionId() && openSessionSettings(selectedSessionId()!)}
+          >
+            ⚙️
+          </button>
+        </Show>
       </div>
     )
 
@@ -852,9 +862,21 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
           >
             ← Sessions
           </button>
-          <div class="flex-1 truncate text-sm font-semibold text-[var(--text)]">
-            <Show when={selectedDetail()} keyed fallback={<span class="text-[var(--text-muted)]">No session selected</span>}>
-              {(detail) => <span>{detail.session.title || detail.session.id}</span>}
+          <div class="flex flex-1 items-center gap-2">
+            <div class="flex-1 truncate text-sm font-semibold text-[var(--text)]">
+              <Show when={selectedDetail()} keyed fallback={<span class="text-[var(--text-muted)]">No session selected</span>}>
+                {(detail) => <span>{detail.session.title || detail.session.id}</span>}
+              </Show>
+            </div>
+            <Show when={selectedSessionId() && !draftingSession()}>
+              <button
+                type="button"
+                class="rounded-full border border-[var(--border)] p-2 text-sm text-[var(--text-muted)] transition hover:text-[var(--text)]"
+                aria-label="Session settings"
+                onClick={() => selectedSessionId() && openSessionSettings(selectedSessionId()!)}
+              >
+                ⚙️
+              </button>
             </Show>
           </div>
         </div>
