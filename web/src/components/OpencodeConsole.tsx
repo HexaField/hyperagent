@@ -177,7 +177,9 @@ function readSessionOverrides(workspaceKey: string): Record<string, SessionOverr
     if (parsed) return parsed
   }
   for (const prefix of STORAGE_PREFIXES) {
-    const parsed = parseLegacyModelOverrides(window.localStorage.getItem(legacyModelOverridesKeyFor(workspaceKey, prefix)))
+    const parsed = parseLegacyModelOverrides(
+      window.localStorage.getItem(legacyModelOverridesKeyFor(workspaceKey, prefix))
+    )
     if (parsed) return parsed
   }
   return {}
@@ -296,6 +298,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [isMobile, setIsMobile] = createSignal(false)
   const [drawerOpen, setDrawerOpen] = createSignal(false)
   const [drawerVisible, setDrawerVisible] = createSignal(false)
+  const [widgetMenuOpen, setWidgetMenuOpen] = createSignal(false)
   const [sessionSettingsId, setSessionSettingsId] = createSignal<string | null>(null)
   const [sessionSettingsProvider, setSessionSettingsProvider] = createSignal<CodingAgentProviderId>(DEFAULT_PROVIDER.id)
   const [sessionSettingsModel, setSessionSettingsModel] = createSignal<string>(DEFAULT_MODEL_ID)
@@ -755,9 +758,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                       <p class="mt-1 text-xs text-[var(--text-muted)]">
                         Provider: {resolveSessionProviderLabel(session.id)}
                       </p>
-                      <p class="mt-1 text-xs text-[var(--text-muted)]">
-                        Model: {resolveSessionModelLabel(session.id)}
-                      </p>
+                      <p class="mt-1 text-xs text-[var(--text-muted)]">Model: {resolveSessionModelLabel(session.id)}</p>
                     </button>
                     <button
                       type="button"
@@ -786,9 +787,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         ? 'flex h-full min-h-0 flex-col'
         : 'flex flex-col gap-4 rounded-2xl border border-[var(--border)] p-5')
     const hasMessages = () => messages().length > 0
-    const transcriptContainerClass = isMobileVariant
-      ? 'relative flex h-full min-h-0 flex-col'
-      : 'relative'
+    const transcriptContainerClass = isMobileVariant ? 'relative flex h-full min-h-0 flex-col' : 'relative'
     const transcriptScrollerClass = isMobileVariant
       ? 'flex-1 min-h-0 space-y-3 overflow-y-auto'
       : 'max-h-[520px] space-y-3 overflow-y-auto pr-1'
@@ -884,7 +883,9 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     )
 
     const noTranscriptBlock = isMobileVariant ? (
-      <div class="flex h-full min-h-0 items-center justify-center text-sm text-[var(--text-muted)]">No transcript yet.</div>
+      <div class="flex h-full min-h-0 items-center justify-center text-sm text-[var(--text-muted)]">
+        No transcript yet.
+      </div>
     ) : (
       <p class="text-sm text-[var(--text-muted)]">No transcript yet.</p>
     )
@@ -939,13 +940,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           onClick={() => void submitReply()}
           disabled={replying() || (!draftingSession() && !selectedSessionId())}
         >
-          {replying()
-            ? draftingSession()
-              ? 'Starting…'
-              : 'Sending…'
-            : draftingSession()
-              ? 'Start session'
-              : 'Reply'}
+          {replying() ? (draftingSession() ? 'Starting…' : 'Sending…') : draftingSession() ? 'Start session' : 'Reply'}
         </button>
       </form>
     )
@@ -1012,16 +1007,22 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     <div class="flex h-full min-h-0 flex-col overflow-hidden">
       <header class="sticky top-0 z-20 border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
         <div class="flex items-center gap-3">
-          <button
-            type="button"
-            class="inline-flex items-center gap-1 rounded-full border border-[var(--border)] px-3 py-1 text-sm font-semibold"
-            onClick={openSessionDrawer}
-          >
-            ← Sessions
-          </button>
+          <div class="relative">
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 rounded-full border border-[var(--border)] px-3 py-1 text-sm font-semibold"
+              onClick={() => openSessionDrawer()}
+            >
+              ← Sessions
+            </button>
+          </div>
           <div class="flex flex-1 items-center gap-2">
             <div class="flex-1 truncate text-sm font-semibold text-[var(--text)]">
-              <Show when={selectedDetail()} keyed fallback={<span class="text-[var(--text-muted)]">No session selected</span>}>
+              <Show
+                when={selectedDetail()}
+                keyed
+                fallback={<span class="text-[var(--text-muted)]">No session selected</span>}
+              >
                 {(detail) => <span>{detail.session.title || detail.session.id}</span>}
               </Show>
             </div>
@@ -1052,8 +1053,50 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           <div
             class={`relative flex h-full w-full max-w-[420px] flex-col bg-[var(--bg-muted)] shadow-2xl transition-transform duration-300 ease-in-out ${drawerOpen() ? 'translate-x-0' : '-translate-x-full'}`}
           >
-            <div class="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
-              <h2 class="text-base font-semibold">Sessions</h2>
+            <div class="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3 relative">
+              <div class="flex items-center gap-2">
+                <div class="relative">
+                  <button
+                    type="button"
+                    class="rounded-full border border-[var(--border)] px-3 py-1 text-sm"
+                    aria-label="Open widgets menu"
+                    onClick={() => setWidgetMenuOpen((v) => !v)}
+                  >
+                    ☰
+                  </button>
+                  <Show when={widgetMenuOpen()}>
+                    <>
+                      <button
+                        type="button"
+                        class="fixed inset-0"
+                        aria-label="Close widget menu"
+                        onClick={() => setWidgetMenuOpen(false)}
+                      />
+                      <div class="fixed left-0 right-0 top-14 z-50 max-w-none border-t border-b border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-lg">
+                        <For each={WIDGET_TEMPLATES}>
+                          {(template) => (
+                            <button
+                              type="button"
+                              class="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-[var(--bg-muted)]"
+                              onClick={() => {
+                                try {
+                                  window.dispatchEvent(
+                                    new CustomEvent('workspace:add-widget', { detail: { templateId: template.id } })
+                                  )
+                                } catch {}
+                                setWidgetMenuOpen(false)
+                              }}
+                            >
+                              {template.label}
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </>
+                  </Show>
+                </div>
+                <h2 class="text-base font-semibold">Sessions</h2>
+              </div>
               <button
                 type="button"
                 class="rounded-full border border-[var(--border)] px-3 py-1 text-xs"
@@ -1062,9 +1105,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                 Close
               </button>
             </div>
-            <div class="flex-1 overflow-auto px-4 py-4">
-              {SessionsPanel({ variant: 'drawer', class: 'h-full' })}
-            </div>
+            <div class="flex-1 overflow-auto px-4 py-4">{SessionsPanel({ variant: 'drawer', class: 'h-full' })}</div>
           </div>
         </div>
       </Show>
@@ -1104,9 +1145,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                   }}
                 >
                   <For each={CODING_AGENT_PROVIDERS}>
-                    {(provider) => (
-                      <option value={provider.id}>{provider.label}</option>
-                    )}
+                    {(provider) => <option value={provider.id}>{provider.label}</option>}
                   </For>
                 </select>
               </div>
@@ -1121,9 +1160,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                   onInput={(event) => setSessionSettingsModel(event.currentTarget.value)}
                 >
                   <For each={providerConfigFor(sessionSettingsProvider()).models}>
-                    {(option) => (
-                      <option value={option.id}>{option.label}</option>
-                    )}
+                    {(option) => <option value={option.id}>{option.label}</option>}
                   </For>
                 </select>
               </div>
@@ -1159,12 +1196,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   )
 
   const rootClass = () =>
-    [
-      props.class ?? '',
-      isMobile()
-        ? 'flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden'
-        : 'flex h-full flex-col'
-    ]
+    [props.class ?? '', isMobile() ? 'flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden' : 'flex h-full flex-col']
       .filter(Boolean)
       .join(' ')
 
@@ -1183,9 +1215,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           </Show>
         </header>
       </Show>
-      <div class="flex-1 min-h-0">
-        {isMobile() ? MobileLayout : DesktopLayout}
-      </div>
+      <div class="flex-1 min-h-0">{isMobile() ? MobileLayout : DesktopLayout}</div>
       {SessionSettingsModal()}
     </div>
   )

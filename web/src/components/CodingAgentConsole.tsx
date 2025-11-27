@@ -1,5 +1,6 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
+import { WIDGET_TEMPLATES } from '../constants/widgetTemplates'
 import { fetchCodingAgentProviders, type CodingAgentProvider } from '../lib/codingAgent'
 import {
   fetchOpencodeRuns,
@@ -322,6 +323,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [isMobile, setIsMobile] = createSignal(false)
   const [drawerOpen, setDrawerOpen] = createSignal(false)
   const [drawerVisible, setDrawerVisible] = createSignal(false)
+  const [widgetMenuOpen, setWidgetMenuOpen] = createSignal(false)
   const [sessionSettingsId, setSessionSettingsId] = createSignal<string | null>(null)
   const [sessionSettingsProvider, setSessionSettingsProvider] = createSignal<CodingAgentProviderId>(DEFAULT_PROVIDER.id)
   const [sessionSettingsModel, setSessionSettingsModel] = createSignal<string>(DEFAULT_MODEL_ID)
@@ -1134,13 +1136,15 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     <div class="flex h-full min-h-0 flex-col overflow-hidden">
       <header class="sticky top-0 z-20 border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
         <div class="flex items-center gap-3">
-          <button
-            type="button"
-            class="inline-flex items-center gap-1 rounded-full border border-[var(--border)] px-3 py-1 text-sm font-semibold"
-            onClick={openSessionDrawer}
-          >
-            ← Sessions
-          </button>
+          <div class="relative">
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 rounded-full border border-[var(--border)] px-3 py-1 text-sm font-semibold"
+              onClick={() => openSessionDrawer()}
+            >
+              ← Sessions
+            </button>
+          </div>
           <div class="flex flex-1 items-center gap-2">
             <div class="flex-1 truncate text-sm font-semibold text-[var(--text)]">
               <Show
@@ -1178,8 +1182,50 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           <div
             class={`relative flex h-full w-full max-w-[420px] flex-col bg-[var(--bg-muted)] shadow-2xl transition-transform duration-300 ease-in-out ${drawerOpen() ? 'translate-x-0' : '-translate-x-full'}`}
           >
-            <div class="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
-              <h2 class="text-base font-semibold">Sessions</h2>
+            <div class="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3 relative">
+              <div class="flex items-center gap-2">
+                <div class="relative">
+                  <button
+                    type="button"
+                    class="rounded-full border border-[var(--border)] px-3 py-1 text-sm"
+                    aria-label="Open widgets menu"
+                    onClick={() => setWidgetMenuOpen((v) => !v)}
+                  >
+                    ☰
+                  </button>
+                  <Show when={widgetMenuOpen()}>
+                    <>
+                      <button
+                        type="button"
+                        class="fixed inset-0"
+                        aria-label="Close widget menu"
+                        onClick={() => setWidgetMenuOpen(false)}
+                      />
+                      <div class="fixed left-0 right-0 top-14 z-50 max-w-none border-t border-b border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-lg">
+                        <For each={WIDGET_TEMPLATES}>
+                          {(template) => (
+                            <button
+                              type="button"
+                              class="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-[var(--bg-muted)]"
+                              onClick={() => {
+                                try {
+                                  window.dispatchEvent(
+                                    new CustomEvent('workspace:add-widget', { detail: { templateId: template.id } })
+                                  )
+                                } catch {}
+                                setWidgetMenuOpen(false)
+                              }}
+                            >
+                              {template.label}
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </>
+                  </Show>
+                </div>
+                <h2 class="text-base font-semibold">Sessions</h2>
+              </div>
               <button
                 type="button"
                 class="rounded-full border border-[var(--border)] px-3 py-1 text-xs"
@@ -1191,6 +1237,37 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
             <div class="flex-1 overflow-auto px-4 py-4">{SessionsPanel({ variant: 'drawer', class: 'h-full' })}</div>
           </div>
         </div>
+      </Show>
+
+      <Show when={widgetMenuOpen()}>
+        <>
+          <button
+            type="button"
+            class="fixed inset-0 z-50"
+            aria-label="Close widget menu"
+            onClick={() => setWidgetMenuOpen(false)}
+          />
+          <div class="fixed left-0 right-0 top-14 z-50 max-w-none border-t border-b border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-lg">
+            <For each={WIDGET_TEMPLATES}>
+              {(template) => (
+                <button
+                  type="button"
+                  class="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-[var(--bg-muted)]"
+                  onClick={() => {
+                    try {
+                      window.dispatchEvent(
+                        new CustomEvent('workspace:add-widget', { detail: { templateId: template.id } })
+                      )
+                    } catch {}
+                    setWidgetMenuOpen(false)
+                  }}
+                >
+                  {template.label}
+                </button>
+              )}
+            </For>
+          </div>
+        </>
       </Show>
     </div>
   )
