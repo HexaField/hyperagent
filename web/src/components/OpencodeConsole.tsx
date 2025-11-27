@@ -321,7 +321,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
       await Promise.all([refetchRuns(), refetchSessions()])
       if (sessionSettingsId() === sessionId) closeSessionSettings()
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to kill session'
+      const message = err instanceof Error ? err.message : 'Failed to end session'
       setError(message)
     } finally {
       setKillingSessionId((current) => (current === sessionId ? null : current))
@@ -969,7 +969,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
                 onClick={() => killSession(target.id)}
                 disabled={killingSessionId() === target.id}
               >
-                {killingSessionId() === target.id ? 'Stopping…' : 'Kill session'}
+                {killingSessionId() === target.id ? 'Stopping…' : 'End session'}
               </button>
             </div>
           </div>
