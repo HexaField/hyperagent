@@ -917,7 +917,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
   const SessionSettingsModal = () => (
     <Show when={sessionSettingsTarget()} keyed>
       {(target) => (
-        <div class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--bg)]/95 px-4 py-8">
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--bg)]/90 px-4 py-8 backdrop-blur-sm">
           <button
             type="button"
             class="absolute inset-0"
@@ -925,7 +925,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
             tabIndex={-1}
             onClick={closeSessionSettings}
           />
-          <div class="relative w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-5 shadow-2xl">
+          <div class="relative w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-5 shadow-2xl">
             <div class="mb-4">
               <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">Session settings</p>
               <h3 class="text-lg font-semibold text-[var(--text)]">{target.title || target.id}</h3>
