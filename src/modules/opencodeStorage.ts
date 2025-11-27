@@ -24,8 +24,10 @@ export type OpencodeMessagePart = {
   id: string
   type: string
   text?: string
-  start?: string
-  end?: string
+  start?: string | null
+  end?: string | null
+  // preserve any extra metadata the agent may include, e.g. cost, tokens, reason
+  [key: string]: unknown
 }
 
 export type OpencodeMessage = {
@@ -35,6 +37,8 @@ export type OpencodeMessage = {
   completedAt: string | null
   modelId: string | null
   providerId: string | null
+  // The text field will be a convenience concatenation for simple clients, but UIs
+  // should prefer the structured `parts` array when present.
   text: string
   parts: OpencodeMessagePart[]
 }
@@ -217,24 +221,45 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
         const parsed = JSON.parse(raw) as MessageJson
         if (!parsed.id || parsed.sessionID !== sessionId || !parsed.role) continue
         const parts = await readParts(parsed.id)
-        const text = parts
-          .map((part) => {
-            if (part.type === 'text' && typeof part.text === 'string') {
-              return part.text?.trim() ?? ''
-            }
-            if (part.type === 'tool') {
-              return `🔧 Tool: ${part.text || 'Executing tool'}`
-            }
-            if (part.type === 'step-start') {
-              return `▶️ Step: ${part.text || 'Starting step'}`
-            }
-            if (part.type === 'step-finish') {
-              return `✅ Step: ${part.text || 'Step completed'}`
-            }
-            return null
-          })
-          .filter(Boolean)
-          .join('\n')
+        // Build a fallback flat text for older clients, but keep the structured parts
+        const fallbackLines: string[] = []
+        for (const part of parts) {
+          const timeParts: string[] = []
+          if (part.start) timeParts.push(`start: ${part.start}`)
+          if (part.end) timeParts.push(`end: ${part.end}`)
+          const meta = timeParts.length ? ` (${timeParts.join(', ')})` : ''
+
+          if (part.type === 'text' && typeof part.text === 'string') {
+            fallbackLines.push(part.text.trim())
+            continue
+          }
+          if (part.type === 'tool') {
+            const desc = typeof part.text === 'string' && part.text.trim().length ? part.text.trim() : 'Executing tool'
+            fallbackLines.push(`🔧 Tool: ${desc}${meta}`)
+            continue
+          }
+          if (part.type === 'step-start') {
+            const desc = typeof part.text === 'string' && part.text.trim().length ? part.text.trim() : 'Starting step'
+            fallbackLines.push(`▶️ Step: ${desc}${meta}`)
+            continue
+          }
+          if (part.type === 'step-finish') {
+            const desc = typeof part.text === 'string' && part.text.trim().length ? part.text.trim() : 'Step completed'
+            fallbackLines.push(`✅ Step: ${desc}${meta}`)
+            continue
+          }
+          if (part.type === 'file-diff' || part.type === 'diff') {
+            fallbackLines.push(`🧾 Diff: ${typeof part.text === 'string' ? part.text : ''}`)
+            continue
+          }
+          if (typeof part.text === 'string' && part.text.trim().length) {
+            fallbackLines.push(part.text.trim())
+            continue
+          }
+        }
+        const text = fallbackLines.filter(Boolean).join('\n')
+        // Only include the message if it has at least some meaningful structured parts or text
+        if (!text && parts.length === 0) continue
         messages.push({
           id: parsed.id,
           role: parsed.role,
@@ -265,13 +290,21 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
         const raw = await fileReader(filePath, 'utf-8')
         const parsed = JSON.parse(raw) as PartJson
         if (!parsed.id || !parsed.type) continue
-        parts.push({
+        // preserve raw part fields and coerce time fields to ISO if present
+        const partObj: OpencodeMessagePart = {
           id: parsed.id,
-          type: parsed.type,
+          type: parsed.type ?? 'unknown',
           text: typeof parsed.text === 'string' ? parsed.text : undefined,
-          start: coerceIso(parsed.time?.start),
-          end: coerceIso(parsed.time?.end)
-        })
+          start: coerceIsoOrNull(parsed.time?.start),
+          end: coerceIsoOrNull(parsed.time?.end)
+        }
+        // copy over any additional keys on the parsed object to preserve metadata
+        for (const key of Object.keys(parsed)) {
+          if (key === 'id' || key === 'type' || key === 'text' || key === 'time') continue
+          // @ts-ignore allow copying unknown props
+          partObj[key] = (parsed as any)[key]
+        }
+        parts.push(partObj)
       } catch (error: any) {
         if (error?.code === 'ENOENT') continue
         throw error
@@ -353,14 +386,16 @@ export function resolveDefaultOpencodeRoot(): string {
   }
   const home = os.homedir()
   const candidates: string[] = []
+  // Prefer local share and fallback to platform-specific directories
+  candidates.push(path.join(home, '.local', 'share', 'opencode'))
   if (process.platform === 'darwin') {
     candidates.push(path.join(home, 'Library', 'Application Support', 'opencode'))
   }
   if (process.platform === 'win32') {
     candidates.push(path.join(home, 'AppData', 'Roaming', 'opencode'))
   }
-  candidates.push(path.join(home, '.local', 'share', 'opencode'))
   candidates.push(path.join(home, '.opencode'))
+
   for (const candidate of candidates) {
     if (candidate && candidate.trim().length && pathExists(candidate)) {
       return candidate

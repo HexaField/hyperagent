@@ -832,7 +832,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                 <span>{new Date(message.createdAt).toLocaleString()}</span>
               </header>
               <div class="whitespace-pre-wrap text-[var(--text)] break-words text-sm">
-                {renderMessageContent(message.text)}
+                {renderMessageParts(message)}
               </div>
             </article>
           )}
@@ -972,37 +972,90 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     )
   }
 
-  function renderMessageContent(text: string) {
-    return text.split('\n').map((line) => {
-      if (line.startsWith('🔧 Tool:')) {
-        return (
-          <div class="flex items-center gap-2 text-blue-600 dark:text-blue-400">
-            <span>🔧</span>
-            <span class="font-medium">Tool:</span>
-            <span class="break-words">{line.slice('🔧 Tool:'.length).trim()}</span>
+  function renderMetadata(meta: Record<string, unknown>) {
+    const entries = Object.entries(meta).filter(([k]) => !['text', 'type', 'start', 'end', 'id'].includes(k))
+    if (entries.length === 0) return null
+    return (
+      <div class="mt-1 rounded-md bg-[var(--bg-muted)] p-2 text-xs text-[var(--text-muted)]">
+        {entries.map(([k, v]) => (
+          <div>
+            <span class="font-semibold">{k}:</span>{' '}
+            {typeof v === 'object' && v !== null ? (
+              <pre class="whitespace-pre-wrap rounded bg-[var(--bg-card)] p-2 text-xs">
+                {JSON.stringify(v, null, 2)}
+              </pre>
+            ) : (
+              <span>{String(v)}</span>
+            )}
           </div>
-        )
+        ))}
+      </div>
+    )
+  }
+
+  function renderMessageParts(message: CodingAgentMessage) {
+    // Concise renderer: show human-facing text, step-finish, and tool outputs
+    const parts: any[] = (message as any).parts ?? []
+    if (!parts || parts.length === 0) {
+      return message.text.split('\n').map((line) => <p class="mb-1 last:mb-0 break-words">{line}</p>)
+    }
+
+    const elements: JSX.Element[] = []
+
+    for (const part of parts) {
+      if (!part) continue
+
+      if (part.type === 'text') {
+        if (typeof part.text === 'string' && part.text.trim()) {
+          elements.push(<p class="mb-1 last:mb-0 break-words">{part.text.trim()}</p>)
+        }
+        continue
       }
-      if (line.startsWith('▶️ Step:')) {
-        return (
-          <div class="flex items-center gap-2 text-amber-600 dark:text-amber-400">
-            <span>▶️</span>
-            <span class="font-medium">Step:</span>
-            <span class="break-words">{line.slice('▶️ Step:'.length).trim()}</span>
-          </div>
-        )
+
+      if (part.type === 'step-finish') {
+        if (typeof part.text === 'string' && part.text.trim()) {
+          elements.push(<p class="mb-1 last:mb-0 break-words">{part.text.trim()}</p>)
+        }
+        continue
       }
-      if (line.startsWith('✅ Step:')) {
-        return (
-          <div class="flex items-center gap-2 text-green-600 dark:text-green-400">
-            <span>✅</span>
-            <span class="font-medium">Step:</span>
-            <span class="break-words">{line.slice('✅ Step:'.length).trim()}</span>
-          </div>
-        )
+
+      if (part.type === 'tool') {
+        const toolName = part.tool ?? part.toolName ?? part.name ?? null
+        const text = typeof part.text === 'string' && part.text.trim() ? part.text.trim() : null
+        const output =
+          typeof (part.state?.output ?? part.output) === 'string' ? (part.state?.output ?? part.output) : null
+
+        if (output) {
+          const preview = output.length > 2000 ? output.slice(0, 2000) + '\n\n…(truncated)' : output
+          elements.push(
+            <div>
+              <div class="font-medium">Tool{toolName ? ` (${toolName})` : ''}</div>
+              <pre class="rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-2 text-xs overflow-auto">
+                {preview}
+              </pre>
+            </div>
+          )
+          continue
+        }
+
+        if (text) {
+          elements.push(<p class="mb-1 last:mb-0 break-words">{text}</p>)
+          continue
+        }
+
+        continue
       }
-      return <p class="mb-1 last:mb-0 break-words">{line}</p>
-    })
+
+      if (part.type === 'file-diff' || part.type === 'diff') {
+        elements.push(<p class="mb-1 last:mb-0 break-words">[diff]</p>)
+        continue
+      }
+
+      // ignore other noisy types
+    }
+
+    if (elements.length === 0) return null
+    return elements
   }
 
   const DesktopLayout = (
