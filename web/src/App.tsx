@@ -91,11 +91,19 @@ function CanvasChrome() {
     description: template.description,
     onSelect: () => {
       if (typeof window === 'undefined') return
-      window.dispatchEvent(
-        new CustomEvent<WidgetAddEventDetail>('workspace:add-widget', {
-          detail: { templateId: template.id }
-        })
-      )
+      try {
+        const isMobile =
+          typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 640px)').matches
+        if (isMobile) {
+          window.dispatchEvent(new CustomEvent('workspace:open-single-widget', { detail: { templateId: template.id } }))
+        } else {
+          window.dispatchEvent(
+            new CustomEvent<WidgetAddEventDetail>('workspace:add-widget', {
+              detail: { templateId: template.id }
+            })
+          )
+        }
+      } catch {}
     }
   }))
 

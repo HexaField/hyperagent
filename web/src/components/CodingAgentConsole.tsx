@@ -14,6 +14,7 @@ import {
   type OpencodeSessionSummary as CodingAgentSessionSummary
 } from '../lib/opencode'
 import ThemeToggle from './ThemeToggle'
+import SingleWidgetHeader from './layout/SingleWidgetHeader'
 
 const REFRESH_INTERVAL_MS = 4000
 const STORAGE_PREFIXES = ['coding-agent-console:v1', 'opencode-console:v1'] as const
@@ -563,6 +564,11 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   })
 
   onMount(() => {
+    const keydownHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && widgetMenuOpen()) setWidgetMenuOpen(false)
+    }
+    if (typeof window !== 'undefined') window.addEventListener('keydown', keydownHandler)
+
     if (typeof window === 'undefined') return
     const mq = window.matchMedia('(max-width: 640px)')
     const handler = () => setIsMobile(mq.matches)
@@ -596,6 +602,9 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           window.removeEventListener(eventName, stateHandler as EventListener)
         } catch {}
       }
+      try {
+        window.removeEventListener('keydown', keydownHandler)
+      } catch {}
     })
   })
 
@@ -1134,40 +1143,13 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
 
   const MobileLayout = (
     <div class="flex h-full min-h-0 flex-col overflow-hidden">
-      <header class="sticky top-0 z-20 border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
-        <div class="flex items-center gap-3">
-          <div class="relative">
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 rounded-full border border-[var(--border)] px-3 py-1 text-sm font-semibold"
-              onClick={() => openSessionDrawer()}
-            >
-              ← Sessions
-            </button>
-          </div>
-          <div class="flex flex-1 items-center gap-2">
-            <div class="flex-1 truncate text-sm font-semibold text-[var(--text)]">
-              <Show
-                when={selectedDetail()}
-                keyed
-                fallback={<span class="text-[var(--text-muted)]">No session selected</span>}
-              >
-                {(detail) => <span>{detail.session.title || detail.session.id}</span>}
-              </Show>
-            </div>
-            <Show when={selectedSessionId() && !draftingSession()}>
-              <button
-                type="button"
-                class="rounded-full border border-[var(--border)] p-2 text-sm text-[var(--text-muted)] transition hover:text-[var(--text)]"
-                aria-label="Session settings"
-                onClick={() => selectedSessionId() && openSessionSettings(selectedSessionId()!)}
-              >
-                ⚙️
-              </button>
-            </Show>
-          </div>
-        </div>
-      </header>
+      <SingleWidgetHeader
+        title={() =>
+          selectedDetail() ? selectedDetail()!.session.title || selectedDetail()!.session.id : 'No session selected'
+        }
+        onBack={() => openSessionDrawer()}
+        backLabel="← Sessions"
+      />
       <div class="flex-1 min-h-0 overflow-hidden">
         {SessionDetail({ variant: 'mobile', class: 'flex h-full min-h-0 flex-col p-4 overflow-hidden' })}
       </div>
@@ -1209,9 +1191,17 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                               class="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-[var(--bg-muted)]"
                               onClick={() => {
                                 try {
-                                  window.dispatchEvent(
-                                    new CustomEvent('workspace:add-widget', { detail: { templateId: template.id } })
-                                  )
+                                  if (isMobile()) {
+                                    window.dispatchEvent(
+                                      new CustomEvent('workspace:open-single-widget', {
+                                        detail: { templateId: template.id }
+                                      })
+                                    )
+                                  } else {
+                                    window.dispatchEvent(
+                                      new CustomEvent('workspace:add-widget', { detail: { templateId: template.id } })
+                                    )
+                                  }
                                 } catch {}
                                 setWidgetMenuOpen(false)
                               }}
@@ -1255,9 +1245,15 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                   class="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-[var(--bg-muted)]"
                   onClick={() => {
                     try {
-                      window.dispatchEvent(
-                        new CustomEvent('workspace:add-widget', { detail: { templateId: template.id } })
-                      )
+                      if (isMobile()) {
+                        window.dispatchEvent(
+                          new CustomEvent('workspace:open-single-widget', { detail: { templateId: template.id } })
+                        )
+                      } else {
+                        window.dispatchEvent(
+                          new CustomEvent('workspace:add-widget', { detail: { templateId: template.id } })
+                        )
+                      }
                     } catch {}
                     setWidgetMenuOpen(false)
                   }}

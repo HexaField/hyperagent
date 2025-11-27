@@ -1,4 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import { WIDGET_TEMPLATES } from '../../constants/widgetTemplates'
+import ThemeToggle from '../ThemeToggle'
 import type { CanvasWidgetConfig } from './CanvasWorkspace'
 
 const PAGE_STORAGE_PREFIX = 'single-widget:page'
@@ -67,6 +69,8 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
   const widgetList = createMemo(() => props.widgets ?? [])
   const [selectedId, setSelectedId] = createSignal<string | null>(null)
   const [mobile, setMobile] = createSignal(false)
+  const [widgetMenuOpen, setWidgetMenuOpen] = createSignal(false)
+  const [settingsOpen, setSettingsOpen] = createSignal(false)
   const storageKey = () => `single-view:${props.storageKey || 'default'}`
 
   const sharedSingleWidgetStyles = `
@@ -124,8 +128,18 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
         } catch {}
       }
       window.addEventListener('single-widget:page-title', titleHandler)
+
+      const keydownHandler = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          if (widgetMenuOpen()) setWidgetMenuOpen(false)
+          if (settingsOpen()) setSettingsOpen(false)
+        }
+      }
+      window.addEventListener('keydown', keydownHandler)
+
       onCleanup(() => {
         window.removeEventListener('single-widget:page-title', titleHandler)
+        window.removeEventListener('keydown', keydownHandler)
       })
     } catch {
       // ignore
@@ -328,6 +342,14 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
     updatePageQueryParam(widget.id, value)
   })
 
+  // helper to open a single widget directly (used when selecting from widget menu)
+  const openSingleWidgetByTemplate = (templateId: string) => {
+    try {
+      if (typeof window === 'undefined') return
+      window.dispatchEvent(new CustomEvent('workspace:open-single-widget', { detail: { templateId } }))
+    } catch {}
+  }
+
   return (
     <div class={`relative h-full min-h-[100dvh] w-full bg-[var(--bg-app)] overflow-visible ${props.class ?? ''}`}>
       {mobile() ? (
@@ -346,85 +368,78 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
 .single-widget-pages > .single-widget-page { flex: 0 0 100%; width: 100%; }
 `}</style>
           <div class="flex flex-col h-full w-full">
-            {/* Mobile header with centered minimal swipe zone (middle 50%) */}
+            {/* Mobile standardized header: left widget menu, center title, right settings (theme) */}
             <Show when={!hideSingleHeader()}>
               <div class="flex items-center justify-between px-3 py-2 border-b border-[var(--border)] bg-[var(--bg-muted)]">
-              <div class="w-1/4 text-sm font-semibold text-[var(--text-muted)]">
-                {selectedWidget() ? selectedWidget()!.title : ''}
-              </div>
-              <div class="flex items-center justify-center w-1/2 gap-2">
-                {page() > 0 ? (
-                  <button
-                    type="button"
-                    class="text-sm rounded p-1"
-                    aria-label="Previous page"
-                    onTouchStart={(e) => e.stopPropagation()}
-                    onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  >
-                    ‹
-                  </button>
-                ) : (
-                  <div class="w-6" />
-                )}
-
-                <div
-                  class="flex-1 h-8"
-                  onTouchStart={(e) => {
-                    e.stopPropagation()
-                    const te = e as TouchEvent
-                    ;(window as any).__singleWidgetTouchStartX = te.touches[0].clientX
-                  }}
-                  onTouchMove={(e) => {
-                    const te = e as TouchEvent
-                    ;(window as any).__singleWidgetTouchLastX = te.touches[0].clientX
-                  }}
-                  onTouchEnd={() => {
-                    const start = (window as any).__singleWidgetTouchStartX ?? 0
-                    const last = (window as any).__singleWidgetTouchLastX ?? start
-                    const delta = last - start
-                    const threshold = 50
-                    if (delta > threshold) {
-                      setPage((p) => Math.max(0, p - 1))
-                    } else if (delta < -threshold) {
-                      const max = getMaxIndex()
-                      setPage((p) => Math.min(max, p + 1))
-                    }
-                    ;(window as any).__singleWidgetTouchStartX = undefined
-                    ;(window as any).__singleWidgetTouchLastX = undefined
-                  }}
-                  role="group"
-                  aria-label="Swipe pages"
-                >
-                  <div class="h-full flex items-center justify-center text-xs text-[var(--text-muted)]">
-                    {(() => {
-                      const w = selectedWidget()
-                      if (w && typeof (w as any).pages === 'function') {
-                        const entries = (w as any).pages() ?? []
-                        return entries[page()]?.title ?? `Page ${page() + 1}`
-                      }
-                      return pageTitles()[page()] ?? 'Pages'
-                    })()}
+                <div class="flex items-center gap-2 w-1/4">
+                  <div class="relative">
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1 text-sm font-semibold"
+                      aria-label="Open widgets menu"
+                      onClick={() => setWidgetMenuOpen((v) => !v)}
+                    >
+                      ☰
+                    </button>
+                    <Show when={widgetMenuOpen()}>
+                      <>
+                        <button
+                          type="button"
+                          class="fixed inset-0"
+                          aria-label="Close widget menu"
+                          onClick={() => setWidgetMenuOpen(false)}
+                        />
+                        <div class="fixed left-0 right-0 top-12 z-50 max-w-none border-t border-b border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-lg">
+                          <For each={WIDGET_TEMPLATES}>
+                            {(template) => (
+                              <button
+                                type="button"
+                                class="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-[var(--bg-muted)]"
+                                onClick={() => {
+                                  openSingleWidgetByTemplate(template.id)
+                                  setWidgetMenuOpen(false)
+                                }}
+                              >
+                                {template.label}
+                              </button>
+                            )}
+                          </For>
+                        </div>
+                      </>
+                    </Show>
                   </div>
                 </div>
 
-                {page() < getMaxIndex() ? (
-                  <button
-                    type="button"
-                    class="text-sm rounded p-1"
-                    aria-label="Next page"
-                    onTouchStart={(e) => e.stopPropagation()}
-                    onClick={() => {
-                      const max = getMaxIndex()
-                      setPage((p) => Math.min(max, p + 1))
-                    }}
-                  >
-                    ›
-                  </button>
-                ) : (
-                  <div class="w-6" />
-                )}
-              </div>
-              <div class="w-1/4" />
+                <div class="flex-1 text-center text-sm font-semibold">
+                  {selectedWidget() ? selectedWidget()!.title : ''}
+                </div>
+
+                <div class="flex items-center justify-end gap-2 w-1/4">
+                  <div class="relative">
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1 text-sm"
+                      aria-label="Open widget settings"
+                      onClick={() => setSettingsOpen((v) => !v)}
+                    >
+                      ⚙️
+                    </button>
+                    <Show when={settingsOpen()}>
+                      <>
+                        <button
+                          type="button"
+                          class="fixed inset-0"
+                          aria-label="Close settings"
+                          onClick={() => setSettingsOpen(false)}
+                        />
+                        <div class="absolute right-0 mt-2 w-56 z-50 rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-lg">
+                          <p class="text-xs text-[var(--text-muted)] mb-2">Display</p>
+                          <ThemeToggle />
+                        </div>
+                      </>
+                    </Show>
+                  </div>
+                </div>
               </div>
             </Show>
 
@@ -455,6 +470,48 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
                   )
                 ) : (
                   <div class="p-2 text-[var(--text-muted)]">No widgets available</div>
+                )}
+              </div>
+            </div>
+
+            {/* mobile footer: keep small pager controls below header so swipe area is undisturbed */}
+            <div class="border-t border-[var(--border)] bg-[var(--bg-card)] px-3 py-2">
+              <div class="mx-auto flex max-w-[720px] items-center justify-center gap-3">
+                {page() > 0 ? (
+                  <button
+                    type="button"
+                    class="text-sm rounded p-1"
+                    aria-label="Previous page"
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  >
+                    ‹
+                  </button>
+                ) : (
+                  <div class="w-6" />
+                )}
+
+                <div class="flex-1 h-8 flex items-center justify-center text-xs text-[var(--text-muted)]">
+                  {(() => {
+                    const w = selectedWidget()
+                    if (w && typeof (w as any).pages === 'function') {
+                      const entries = (w as any).pages() ?? []
+                      return entries[page()]?.title ?? `Page ${page() + 1}`
+                    }
+                    return pageTitles()[page()] ?? 'Pages'
+                  })()}
+                </div>
+
+                {page() < getMaxIndex() ? (
+                  <button
+                    type="button"
+                    class="text-sm rounded p-1"
+                    aria-label="Next page"
+                    onClick={() => setPage((p) => Math.min(getMaxIndex(), p + 1))}
+                  >
+                    ›
+                  </button>
+                ) : (
+                  <div class="w-6" />
                 )}
               </div>
             </div>

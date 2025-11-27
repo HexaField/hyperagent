@@ -14,9 +14,9 @@ import {
   onCleanup,
   onMount
 } from 'solid-js'
+import CodingAgentConsole from '../components/CodingAgentConsole'
 import DiffViewer from '../components/DiffViewer'
 import CanvasWorkspace, { type CanvasWidgetConfig } from '../components/layout/CanvasWorkspace'
-import CodingAgentConsole from '../components/CodingAgentConsole'
 import WorkflowDetailView from '../components/WorkflowDetailView'
 import WorkflowLaunchModal from '../components/WorkflowLaunchModal'
 import { WIDGET_TEMPLATES, type WidgetAddEventDetail, type WidgetTemplateId } from '../constants/widgetTemplates'
@@ -214,11 +214,36 @@ export default function WorkspacePage() {
         // ignore storage errors
       }
     }
+    const handleOpenSingleWidget = (event: Event) => {
+      const custom = event as CustomEvent<{ templateId?: WidgetTemplateId }>
+      const detail = custom.detail
+      if (!detail || !detail.templateId || !TEMPLATE_ID_SET.has(detail.templateId)) return
+      const ws = activeWorkspace()
+      if (!ws) return
+      const instanceId = generateWidgetInstanceId(detail.templateId)
+      try {
+        const widget = createWidgetConfig({
+          templateId: detail.templateId,
+          workspace: ws,
+          instanceId,
+          offsetIndex: 0,
+          navigator,
+          removable: true
+        })
+        window.dispatchEvent(
+          new CustomEvent('workspace:open-single-view', {
+            detail: { storageKey: `workspace:${ws.id}`, widgets: [widget] }
+          })
+        )
+      } catch {}
+    }
     window.addEventListener('workspace:add-widget', handleAddWidget)
     window.addEventListener('workspace:view-change', handleViewChange)
+    window.addEventListener('workspace:open-single-widget', handleOpenSingleWidget)
     onCleanup(() => {
       window.removeEventListener('workspace:add-widget', handleAddWidget)
       window.removeEventListener('workspace:view-change', handleViewChange)
+      window.removeEventListener('workspace:open-single-widget', handleOpenSingleWidget)
     })
   })
 
