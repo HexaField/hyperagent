@@ -155,6 +155,39 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
   const [pendingSessionId, setPendingSessionId] = createSignal<string | null>(null)
   const [isMobile, setIsMobile] = createSignal(false)
   const [drawerOpen, setDrawerOpen] = createSignal(false)
+  const [drawerVisible, setDrawerVisible] = createSignal(false)
+  let drawerHideTimeout: number | null = null
+
+  const ensureDrawerVisible = () => {
+    if (!drawerVisible()) setDrawerVisible(true)
+  }
+
+  const openSessionDrawer = () => {
+    if (typeof window !== 'undefined' && drawerHideTimeout) {
+      window.clearTimeout(drawerHideTimeout)
+      drawerHideTimeout = null
+    }
+    ensureDrawerVisible()
+    const activate = () => setDrawerOpen(true)
+    if (typeof window !== 'undefined') window.requestAnimationFrame(activate)
+    else activate()
+  }
+
+  const closeSessionDrawer = () => {
+    setDrawerOpen(false)
+    if (typeof window === 'undefined') {
+      setDrawerVisible(false)
+      return
+    }
+    if (drawerHideTimeout) {
+      window.clearTimeout(drawerHideTimeout)
+      drawerHideTimeout = null
+    }
+    drawerHideTimeout = window.setTimeout(() => {
+      setDrawerVisible(false)
+      drawerHideTimeout = null
+    }, 260)
+  }
 
   const [messagesEl, setMessagesEl] = createSignal<HTMLElement | null>(null)
   const [replyEl, setReplyEl] = createSignal<HTMLTextAreaElement | null>(null)
@@ -193,7 +226,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     setSelectedSessionId(null)
     setReplyText(props.defaultPrompt?.trim() ?? '')
     requestAnimationFrame(() => resizeReply())
-    if (isMobile()) setDrawerOpen(false)
+    if (isMobile()) closeSessionDrawer()
     focusReplyInput()
   }
 
@@ -202,7 +235,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     setDraftingSession(false)
     setDraftingWorkspace(null)
     setPendingSessionId(null)
-    if (isMobile()) setDrawerOpen(false)
+    if (isMobile()) closeSessionDrawer()
     focusReplyInput()
   }
 
@@ -231,7 +264,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
         setSelectedSessionId(run.sessionId)
         await Promise.all([refetchSessions(), refetchRuns()])
         props.onRunStarted?.(run.sessionId)
-        if (isMobile()) setDrawerOpen(false)
+        if (isMobile()) closeSessionDrawer()
         focusReplyInput()
         return
       }
@@ -367,7 +400,14 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
   })
 
   createEffect(() => {
-    if (!isMobile()) setDrawerOpen(false)
+    if (!isMobile()) closeSessionDrawer()
+  })
+
+  onCleanup(() => {
+    if (typeof window !== 'undefined' && drawerHideTimeout) {
+      window.clearTimeout(drawerHideTimeout)
+      drawerHideTimeout = null
+    }
   })
 
   const selectedDetail = createMemo<OpencodeSessionDetail | null>(() => {
@@ -718,7 +758,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
           <button
             type="button"
             class="inline-flex items-center gap-1 rounded-full border border-[var(--border)] px-3 py-1 text-sm font-semibold"
-            onClick={() => setDrawerOpen(true)}
+            onClick={openSessionDrawer}
           >
             ← Sessions
           </button>
@@ -732,21 +772,23 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
       <div class="flex-1 min-h-0 overflow-hidden">
         {SessionDetail({ variant: 'mobile', class: 'flex h-full min-h-0 flex-col p-4 overflow-hidden' })}
       </div>
-      <Show when={drawerOpen()}>
-        <div class="fixed inset-0 z-40">
+      <Show when={drawerVisible()}>
+        <div class="fixed inset-0 z-40 flex">
           <button
             type="button"
-            class="absolute inset-0 bg-black/40"
             aria-label="Close session list"
-            onClick={() => setDrawerOpen(false)}
+            class={`absolute inset-0 transition-opacity duration-300 ${drawerOpen() ? 'opacity-100 bg-black/40' : 'pointer-events-none opacity-0'}`}
+            onClick={closeSessionDrawer}
           />
-          <div class="relative flex h-full w-full flex-col bg-[var(--bg)] shadow-2xl">
+          <div
+            class={`relative flex h-full w-full max-w-[420px] flex-col bg-[var(--bg)] shadow-2xl transition-transform duration-300 ease-in-out ${drawerOpen() ? 'translate-x-0' : '-translate-x-full'}`}
+          >
             <div class="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
               <h2 class="text-base font-semibold">Sessions</h2>
               <button
                 type="button"
                 class="rounded-full border border-[var(--border)] px-3 py-1 text-xs"
-                onClick={() => setDrawerOpen(false)}
+                onClick={closeSessionDrawer}
               >
                 Close
               </button>
