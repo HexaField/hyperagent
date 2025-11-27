@@ -773,7 +773,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
         {SessionDetail({ variant: 'mobile', class: 'flex h-full min-h-0 flex-col p-4 overflow-hidden' })}
       </div>
       <Show when={drawerVisible()}>
-        <div class="fixed inset-0 z-40 flex">
+        <div class="fixed inset-0 z-40 flex bg-[var(--bg)]">
           <button
             type="button"
             aria-label="Close session list"
@@ -783,7 +783,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
           <div
             class={`relative flex h-full w-full max-w-[420px] flex-col bg-[var(--bg)] shadow-2xl transition-transform duration-300 ease-in-out ${drawerOpen() ? 'translate-x-0' : '-translate-x-full'}`}
           >
-            <div class="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+            <div class="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
               <h2 class="text-base font-semibold">Sessions</h2>
               <button
                 type="button"
