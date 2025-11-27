@@ -11,6 +11,7 @@ import {
   type OpencodeSessionDetail as CodingAgentSessionDetail,
   type OpencodeSessionSummary as CodingAgentSessionSummary
 } from '../lib/opencode'
+import ToolRenderer from '../lib/ToolRenderer'
 import SingleWidgetHeader from './layout/SingleWidgetHeader'
 
 const REFRESH_INTERVAL_MS = 4000
@@ -1025,21 +1026,8 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         const output =
           typeof (part.state?.output ?? part.output) === 'string' ? (part.state?.output ?? part.output) : null
 
-        if (output) {
-          const preview = output.length > 2000 ? output.slice(0, 2000) + '\n\n…(truncated)' : output
-          elements.push(
-            <div>
-              <div class="font-medium">Tool{toolName ? ` (${toolName})` : ''}</div>
-              <pre class="rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-2 text-xs overflow-auto">
-                {preview}
-              </pre>
-            </div>
-          )
-          continue
-        }
-
-        if (text) {
-          elements.push(<p class="mb-1 last:mb-0 break-words">{text}</p>)
+        if (output || text) {
+          elements.push(<ToolRenderer part={part} />)
           continue
         }
 
