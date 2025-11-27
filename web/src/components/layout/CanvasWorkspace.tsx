@@ -25,6 +25,7 @@ export type CanvasWidgetConfig = {
   // Optional mobile pages API: if provided, SingleWidgetView will render these
   pages?: () => { title: string; content: () => JSX.Element }[]
   removable?: boolean
+  hideSingleHeader?: boolean
 }
 
 export type CanvasWorkspaceProps = {

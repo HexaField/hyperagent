@@ -1,4 +1,4 @@
-import { For, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import type { CanvasWidgetConfig } from './CanvasWorkspace'
 
 const PAGE_STORAGE_PREFIX = 'single-widget:page'
@@ -83,8 +83,10 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
     const id = selectedId()
     return (id ? list.find((w) => w.id === id) : null) ?? list[0] ?? null
   })
+  const hideSingleHeader = createMemo(() => Boolean(selectedWidget()?.hideSingleHeader))
 
   let prevOverflowX: string | null = null
+  let prevOverflowY: string | null = null
 
   onMount(() => {
     if (typeof window === 'undefined') return
@@ -130,13 +132,15 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
     }
   })
 
-  // Lock horizontal overflow on the document when the mobile single-widget overlay is visible
+  // Lock document scrolling when the mobile single-widget overlay is visible
   createEffect(() => {
     if (typeof window === 'undefined') return
     if (mobile()) {
       try {
         prevOverflowX = document.documentElement.style.overflowX || null
+        prevOverflowY = document.documentElement.style.overflowY || null
         document.documentElement.style.overflowX = 'hidden'
+        document.documentElement.style.overflowY = 'hidden'
       } catch {
         // ignore
       }
@@ -144,6 +148,8 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
       try {
         if (prevOverflowX !== null) document.documentElement.style.overflowX = prevOverflowX
         else document.documentElement.style.removeProperty('overflow-x')
+        if (prevOverflowY !== null) document.documentElement.style.overflowY = prevOverflowY
+        else document.documentElement.style.removeProperty('overflow-y')
       } catch {
         // ignore
       }
@@ -154,6 +160,8 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
     try {
       if (prevOverflowX !== null) document.documentElement.style.overflowX = prevOverflowX
       else document.documentElement.style.removeProperty('overflow-x')
+      if (prevOverflowY !== null) document.documentElement.style.overflowY = prevOverflowY
+      else document.documentElement.style.removeProperty('overflow-y')
     } catch {
       // ignore
     }
@@ -339,7 +347,8 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
 `}</style>
           <div class="flex flex-col h-full w-full">
             {/* Mobile header with centered minimal swipe zone (middle 50%) */}
-            <div class="flex items-center justify-between px-3 py-2 border-b border-[var(--border)] bg-[var(--bg-muted)]">
+            <Show when={!hideSingleHeader()}>
+              <div class="flex items-center justify-between px-3 py-2 border-b border-[var(--border)] bg-[var(--bg-muted)]">
               <div class="w-1/4 text-sm font-semibold text-[var(--text-muted)]">
                 {selectedWidget() ? selectedWidget()!.title : ''}
               </div>
@@ -416,7 +425,8 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
                 )}
               </div>
               <div class="w-1/4" />
-            </div>
+              </div>
+            </Show>
 
             <div class="flex-1 overflow-y-auto overflow-x-hidden">
               <div
@@ -452,24 +462,26 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
         </div>
       ) : (
         <div class="flex h-full flex-col">
-          <header class="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
-            <div>
-              <p class="text-xs uppercase tracking-[0.35em] text-[var(--text-muted)]">Widget</p>
-              <h2 class="text-lg font-semibold">{selectedWidget() ? selectedWidget()!.title : 'No widget'}</h2>
-            </div>
-            <div class="flex items-center gap-2">
-              {selectedWidget()?.headerActions?.() ?? null}
-              {selectedWidget()?.removable !== false ? (
-                <button
-                  type="button"
-                  class="rounded-xl border border-[var(--border)] px-3 py-1 text-sm text-red-500"
-                  onClick={() => selectedWidget() && props.onRemoveWidget?.(selectedWidget()!.id)}
-                >
-                  Remove
-                </button>
-              ) : null}
-            </div>
-          </header>
+          <Show when={!hideSingleHeader()}>
+            <header class="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
+              <div>
+                <p class="text-xs uppercase tracking-[0.35em] text-[var(--text-muted)]">Widget</p>
+                <h2 class="text-lg font-semibold">{selectedWidget() ? selectedWidget()!.title : 'No widget'}</h2>
+              </div>
+              <div class="flex items-center gap-2">
+                {selectedWidget()?.headerActions?.() ?? null}
+                {selectedWidget()?.removable !== false ? (
+                  <button
+                    type="button"
+                    class="rounded-xl border border-[var(--border)] px-3 py-1 text-sm text-red-500"
+                    onClick={() => selectedWidget() && props.onRemoveWidget?.(selectedWidget()!.id)}
+                  >
+                    Remove
+                  </button>
+                ) : null}
+              </div>
+            </header>
+          </Show>
 
           <div class="flex-1 overflow-auto p-4 box-border">
             {selectedWidget() ? (

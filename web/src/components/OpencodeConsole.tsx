@@ -17,13 +17,9 @@ const OPENCODE_MODEL = 'github-copilot/gpt-5-mini'
 const STORAGE_PREFIX = 'opencode-console:v1'
 const STATE_EVENT = 'opencode-console:state'
 const SEARCH_PARAM_SESSION = 'opencodeSession'
-const SEARCH_PARAM_PAGE = 'opencodePage'
 const DEFAULT_WORKSPACE_KEY = '__default__'
-const MAX_PAGE_INDEX = 1
-const DEFAULT_SESSION_PROMPT = 'Initialize the workspace and wait for user instructions.'
 type PersistedState = {
   selectedSessionId?: string | null
-  page?: number
 }
 type SessionState = 'running' | 'waiting' | 'completed' | 'failed' | 'terminated'
 
@@ -58,11 +54,6 @@ function readPersistedState(workspaceKey: string): PersistedState {
     const params = new URLSearchParams(window.location.search)
     const sessionParam = params.get(SEARCH_PARAM_SESSION)
     if (sessionParam) state.selectedSessionId = sessionParam
-    const pageParam = params.get(SEARCH_PARAM_PAGE)
-    if (pageParam !== null) {
-      const parsed = Number(pageParam)
-      if (!Number.isNaN(parsed)) state.page = parsed
-    }
   } catch {}
   return state
 }
@@ -101,11 +92,6 @@ function updateSearchParam(name: string, value: string | null | undefined) {
   } catch {}
 }
 
-function clampPage(value: number | undefined | null): number {
-  if (value === undefined || value === null || Number.isNaN(value)) return 0
-  return Math.max(0, Math.min(MAX_PAGE_INDEX, Math.floor(value)))
-}
-
 export type OpencodeConsoleProps = {
   workspaceFilter?: string
   onWorkspaceFilterChange?: (value: string) => void
@@ -117,14 +103,6 @@ export type OpencodeConsoleProps = {
   onRunStarted?: (sessionId: string) => void
   headerActions?: JSX.Element
   hideHeader?: boolean
-  mobilePage?: number
-}
-
-export function opencodePages(props: OpencodeConsoleProps) {
-  return [
-    { title: 'List', content: () => <OpencodeConsole {...props} mobilePage={0} /> },
-    { title: 'Details', content: () => <OpencodeConsole {...props} mobilePage={1} /> }
-  ]
 }
 
 export default function OpencodeConsole(props: OpencodeConsoleProps) {
@@ -143,10 +121,13 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
   })
   const [runs, { refetch: refetchRuns }] = createResource(fetchOpencodeRuns)
   const [selectedSessionId, setSelectedSessionId] = createSignal<string | null>(null)
-  const [sessionDetail, { refetch: refetchSessionDetail }] = createResource(selectedSessionId, async (sessionId) => {
-    if (!sessionId) return null
-    return await fetchOpencodeSessionDetail(sessionId)
-  })
+  const [sessionDetail, { refetch: refetchSessionDetail, mutate: mutateSessionDetail }] = createResource(
+    selectedSessionId,
+    async (sessionId) => {
+      if (!sessionId) return null
+      return await fetchOpencodeSessionDetail(sessionId)
+    }
+  )
 
   createEffect(() => {
     const handle = setInterval(() => {
@@ -165,39 +146,16 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     onCleanup(() => clearInterval(handle))
   })
 
-  createEffect(() => {
-    const entries = sessions()
-    if (!entries || entries.length === 0) {
-      setSelectedSessionId(null)
-      return
-    }
-    const current = selectedSessionId()
-    if (!current || !entries.some((entry) => entry.id === current)) {
-      setSelectedSessionId(entries[0].id)
-    }
-  })
-
-  let lastPersistedSessionKey: string | null = null
-  let lastPersistedSessionId: string | null = null
-  createEffect(() => {
-    const key = workspaceKey()
-    if (!key) return
-    const current = selectedSessionId()
-    const normalized = current ?? null
-    if (lastPersistedSessionKey === key && lastPersistedSessionId === normalized) return
-    lastPersistedSessionKey = key
-    lastPersistedSessionId = normalized
-    persistState(key, { selectedSessionId: normalized })
-    updateSearchParam(SEARCH_PARAM_SESSION, normalized ?? undefined)
-  })
-
   const [replyText, setReplyText] = createSignal('')
   const [error, setError] = createSignal<string | null>(null)
-  const [submitting, setSubmitting] = createSignal(false)
   const [replying, setReplying] = createSignal(false)
   const [killing, setKilling] = createSignal(false)
+  const [draftingSession, setDraftingSession] = createSignal(false)
+  const [draftingWorkspace, setDraftingWorkspace] = createSignal<string | null>(null)
+  const [pendingSessionId, setPendingSessionId] = createSignal<string | null>(null)
+  const [isMobile, setIsMobile] = createSignal(false)
+  const [drawerOpen, setDrawerOpen] = createSignal(false)
 
-  // shared UI refs and helpers for replies/messages (used by desktop & mobile variants)
   const [messagesEl, setMessagesEl] = createSignal<HTMLElement | null>(null)
   const [replyEl, setReplyEl] = createSignal<HTMLTextAreaElement | null>(null)
   const [autoScroll, setAutoScroll] = createSignal(true)
@@ -211,14 +169,75 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     } catch {}
   }
 
+  function focusReplyInput() {
+    requestAnimationFrame(() => {
+      const el = replyEl()
+      if (!el) return
+      try {
+        el.focus()
+        el.scrollIntoView({ block: 'nearest' })
+      } catch {}
+    })
+  }
+
+  function startDraftSession() {
+    const workspacePath = workspaceForFetch().trim()
+    if (!workspacePath) {
+      setError('Workspace path is required')
+      return
+    }
+    setError(null)
+    setDraftingSession(true)
+    setDraftingWorkspace(workspacePath)
+    setPendingSessionId(null)
+    setSelectedSessionId(null)
+    setReplyText(props.defaultPrompt?.trim() ?? '')
+    requestAnimationFrame(() => resizeReply())
+    if (isMobile()) setDrawerOpen(false)
+    focusReplyInput()
+  }
+
+  function handleSessionSelect(sessionId: string) {
+    setSelectedSessionId(sessionId)
+    setDraftingSession(false)
+    setDraftingWorkspace(null)
+    setPendingSessionId(null)
+    if (isMobile()) setDrawerOpen(false)
+    focusReplyInput()
+  }
+
   async function submitReply() {
-    const sessionId = selectedSessionId()
-    if (!sessionId) return
     const text = replyText().trim()
     if (!text) return
     setReplying(true)
     setError(null)
     try {
+      if (draftingSession()) {
+        const workspacePath = draftingWorkspace()?.trim() || workspaceForFetch().trim()
+        if (!workspacePath) {
+          throw new Error('Workspace path is required')
+        }
+        const run = await startOpencodeRun({
+          workspacePath,
+          prompt: text,
+          model: OPENCODE_MODEL
+        })
+        setDraftingSession(false)
+        setDraftingWorkspace(null)
+        setReplyText('')
+        const ta = replyEl()
+        if (ta) ta.style.height = 'auto'
+        setPendingSessionId(run.sessionId)
+        setSelectedSessionId(run.sessionId)
+        await Promise.all([refetchSessions(), refetchRuns()])
+        props.onRunStarted?.(run.sessionId)
+        if (isMobile()) setDrawerOpen(false)
+        focusReplyInput()
+        return
+      }
+
+      const sessionId = selectedSessionId()
+      if (!sessionId) return
       const mod = await import('../lib/opencode')
       await mod.postOpencodeMessage(sessionId, { text })
       setReplyText('')
@@ -239,51 +258,79 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     }
   }
 
-  // Mobile carousel state
-  const [isMobile, setIsMobile] = createSignal(false)
-  // pages: 0 = List, 1 = Details
-  const [currentPage, setCurrentPage] = createSignal(0)
-  let lastHydratedWorkspace: string | null = null
+  const handleKill = async () => {
+    const sessionId = selectedSessionId()
+    if (!sessionId) return
+    setKilling(true)
+    setError(null)
+    try {
+      await killOpencodeSession(sessionId)
+      await Promise.all([refetchRuns(), refetchSessions()])
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to kill session'
+      setError(message)
+    } finally {
+      setKilling(false)
+    }
+  }
 
+  let lastHydratedWorkspace: string | null = null
   createEffect(() => {
     const key = workspaceKey()
     if (!key || key === lastHydratedWorkspace) return
     lastHydratedWorkspace = key
     const state = readPersistedState(key)
-    if (state.selectedSessionId) setSelectedSessionId(state.selectedSessionId)
-    else setSelectedSessionId(null)
-    if (props.mobilePage === undefined && state.page !== undefined) {
-      setCurrentPage(clampPage(state.page))
+    if (state.selectedSessionId) {
+      setSelectedSessionId(state.selectedSessionId)
+      setPendingSessionId(null)
+    } else {
+      setSelectedSessionId(null)
+      setPendingSessionId(null)
     }
   })
 
-  let touchStartX = 0
-  let touchLastX = 0
-  let isTouching = false
-
-  function goToDetailsPage() {
-    if (props.mobilePage === undefined) {
-      if (isMobile()) setCurrentPage(1)
+  createEffect(() => {
+    if (draftingSession()) return
+    const entries = sessions()
+    const pending = pendingSessionId()
+    if (!entries || entries.length === 0) {
+      setSelectedSessionId(null)
+      if (pending) setPendingSessionId(null)
       return
     }
-    try {
-      window.dispatchEvent(new CustomEvent('single-widget:page-set', { detail: { page: 1 } }))
-    } catch {}
-  }
+    if (pending && entries.some((entry) => entry.id === pending)) {
+      setPendingSessionId(null)
+    }
+    const current = selectedSessionId()
+    if (!current) {
+      setSelectedSessionId(entries[0].id)
+      return
+    }
+    const hasCurrent = entries.some((entry) => entry.id === current)
+    if (!hasCurrent) {
+      if (pending && current === pending) return
+      setSelectedSessionId(entries[0].id)
+    }
+  })
 
-  let lastPersistedPageKey: string | null = null
-  let lastPersistedPageValue: number | null = null
   createEffect(() => {
-    if (props.mobilePage !== undefined) return
-    if (!isMobile()) return
+    if (!selectedSessionId() || draftingSession()) {
+      mutateSessionDetail?.(null)
+    }
+  })
+
+  let lastPersistedSessionKey: string | null = null
+  let lastPersistedSessionId: string | null = null
+  createEffect(() => {
     const key = workspaceKey()
-    const pageValue = currentPage()
     if (!key) return
-    if (lastPersistedPageKey === key && lastPersistedPageValue === pageValue) return
-    lastPersistedPageKey = key
-    lastPersistedPageValue = pageValue
-    persistState(key, { page: pageValue })
-    updateSearchParam(SEARCH_PARAM_PAGE, pageValue ? String(pageValue) : null)
+    const current = selectedSessionId()
+    const normalized = current ?? null
+    if (lastPersistedSessionKey === key && lastPersistedSessionId === normalized) return
+    lastPersistedSessionKey = key
+    lastPersistedSessionId = normalized
+    persistState(key, { selectedSessionId: normalized })
+    updateSearchParam(SEARCH_PARAM_SESSION, normalized ?? undefined)
   })
 
   onMount(() => {
@@ -294,24 +341,6 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     if (typeof mq.addEventListener === 'function') mq.addEventListener('change', handler)
     else mq.addListener(handler)
 
-    let prevHandler: (() => void) | undefined
-    let nextHandler: (() => void) | undefined
-    let setHandler: ((e: Event) => void) | undefined
-    if (props.mobilePage === undefined) {
-      prevHandler = () => setCurrentPage((p) => Math.max(0, p - 1))
-      nextHandler = () => setCurrentPage((p) => Math.min(1, p + 1))
-      setHandler = (e: Event) => {
-        const ce = e as CustomEvent
-        const page = Number(ce?.detail?.page)
-        if (!Number.isNaN(page)) setCurrentPage(Math.max(0, Math.min(1, page)))
-      }
-      try {
-        window.addEventListener('single-widget:page-prev', prevHandler)
-        window.addEventListener('single-widget:page-next', nextHandler)
-        window.addEventListener('single-widget:page-set', setHandler as EventListener)
-      } catch {}
-    }
-
     const stateHandler = (event: Event) => {
       const ce = event as CustomEvent<{ workspaceKey?: string; state?: PersistedState }>
       const detail = ce?.detail
@@ -321,14 +350,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
         setSelectedSessionId(nextSession)
         lastPersistedSessionKey = workspaceKey()
         lastPersistedSessionId = nextSession
-      }
-      if (props.mobilePage === undefined && detail.state?.page !== undefined) {
-        const desired = clampPage(detail.state.page)
-        if (desired !== currentPage()) {
-          setCurrentPage(desired)
-          lastPersistedPageKey = workspaceKey()
-          lastPersistedPageValue = desired
-        }
+        setPendingSessionId(null)
       }
     }
     try {
@@ -338,13 +360,6 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     onCleanup(() => {
       if (typeof mq.removeEventListener === 'function') mq.removeEventListener('change', handler)
       else mq.removeListener(handler)
-      if (prevHandler && nextHandler && setHandler) {
-        try {
-          window.removeEventListener('single-widget:page-prev', prevHandler)
-          window.removeEventListener('single-widget:page-next', nextHandler)
-          window.removeEventListener('single-widget:page-set', setHandler as EventListener)
-        } catch {}
-      }
       try {
         window.removeEventListener(STATE_EVENT, stateHandler as EventListener)
       } catch {}
@@ -352,21 +367,21 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
   })
 
   createEffect(() => {
-    if (typeof window === 'undefined') return
-    if (props.mobilePage !== undefined) return
-    if (!isMobile()) return
-    const cur = currentPage()
-    const title = cur === 0 ? 'List' : 'Details'
-    try {
-      window.dispatchEvent(new CustomEvent('single-widget:page-set', { detail: { page: cur } }))
-      window.dispatchEvent(new CustomEvent('single-widget:page-title', { detail: { title } }))
-    } catch {}
+    if (!isMobile()) {
+      setDrawerOpen(false)
+      return
+    }
+    if (!selectedSessionId() && !draftingSession()) {
+      setDrawerOpen(true)
+    }
   })
 
-  const selectedDetail = createMemo<OpencodeSessionDetail | null>(() => sessionDetail() ?? null)
+  const selectedDetail = createMemo<OpencodeSessionDetail | null>(() => {
+    if (draftingSession()) return null
+    return sessionDetail() ?? null
+  })
   const messages = createMemo<OpencodeMessage[]>(() => selectedDetail()?.messages ?? [])
 
-  // auto-scroll transcript when new messages arrive (unless user scrolled away)
   createEffect(() => {
     messages()
     const el = messagesEl()
@@ -409,96 +424,22 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     return sessionRows().find((row) => row.id === sessionId) ?? null
   })
 
-  async function startNewSession() {
-    const workspacePath = workspaceForFetch().trim()
-    if (!workspacePath) {
-      setError('Workspace path is required')
-      return
-    }
-    const runPrompt = props.defaultPrompt?.trim() || DEFAULT_SESSION_PROMPT
-    setSubmitting(true)
-    setError(null)
-    try {
-      const run = await startOpencodeRun({
-        workspacePath,
-        prompt: runPrompt,
-        model: OPENCODE_MODEL
-      })
-      await Promise.all([refetchSessions(), refetchRuns()])
-      setSelectedSessionId(run.sessionId)
-      goToDetailsPage()
-      props.onRunStarted?.(run.sessionId)
-      requestAnimationFrame(() => {
-        const el = replyEl()
-        if (!el) return
-        try {
-          el.focus()
-          el.scrollIntoView({ block: 'nearest' })
-        } catch {}
-      })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to start session'
-      setError(message)
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const handleKill = async () => {
-    const sessionId = selectedSessionId()
-    if (!sessionId) return
-    setKilling(true)
-    setError(null)
-    try {
-      await killOpencodeSession(sessionId)
-      await Promise.all([refetchRuns(), refetchSessions()])
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to kill session'
-      setError(message)
-    } finally {
-      setKilling(false)
-    }
-  }
-
-  // swipe handling on the header swipe zone (internal fallback)
-  function onTouchStart(e: TouchEvent) {
-    if (!isMobile()) return
-    const t = e.touches[0]
-    touchStartX = t.clientX
-    touchLastX = touchStartX
-    isTouching = true
-  }
-  function onTouchMove(e: TouchEvent) {
-    if (!isTouching) return
-    touchLastX = e.touches[0].clientX
-  }
-  function onTouchEnd() {
-    if (!isTouching) return
-    const delta = touchLastX - touchStartX
-    const threshold = 50
-    if (delta > threshold) {
-      // inverted: swipe right -> previous page
-      setCurrentPage((p) => Math.max(0, p - 1))
-    } else if (delta < -threshold) {
-      // inverted: swipe left -> next page
-      setCurrentPage((p) => Math.min(1, p + 1))
-    }
-    isTouching = false
-    touchStartX = 0
-    touchLastX = 0
-  }
-
-  function SessionsPanel(options?: { class?: string }) {
+  function SessionsPanel(options?: { class?: string; variant?: 'desktop' | 'drawer' }) {
+    const variant = options?.variant ?? 'desktop'
+    const sectionClass =
+      variant === 'desktop'
+        ? `rounded-2xl border border-[var(--border)] p-4 ${options?.class ?? ''}`
+        : `p-3 ${options?.class ?? ''}`
     return (
-      <section class={`rounded-2xl border border-[var(--border)] p-4 ${options?.class ?? ''}`}>
+      <section class={sectionClass}>
         <header class="mb-3 flex flex-wrap items-center justify-between gap-3">
           <button
             type="button"
             class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            onClick={() => void startNewSession()}
-            disabled={submitting()}
+            onClick={startDraftSession}
+            disabled={draftingSession()}
           >
-            {submitting() ? 'Starting…' : 'New session'}
+            {draftingSession() ? 'Drafting…' : 'New session'}
           </button>
         </header>
         <Show when={error()} keyed>
@@ -519,10 +460,7 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
                       'border-blue-500 bg-blue-50 dark:bg-blue-950/30': selectedSessionId() === session.id,
                       'border-emerald-500 ring-2 ring-emerald-200 dark:ring-emerald-900': session.state === 'running'
                     }}
-                    onClick={() => {
-                      setSelectedSessionId(session.id)
-                      goToDetailsPage()
-                    }}
+                    onClick={() => handleSessionSelect(session.id)}
                   >
                     <div class="min-w-0">
                       <p class="truncate font-semibold text-[var(--text)]">{session.title || session.id}</p>
@@ -545,152 +483,193 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     )
   }
 
-  // helper to render session detail
-  function SessionDetail(options?: { class?: string; variant?: 'desktop' | 'mobile'; showKillAction?: boolean }) {
+  function SessionDetail(options?: { class?: string; variant?: 'desktop' | 'mobile' }) {
     const variant = options?.variant ?? 'desktop'
     const isMobileVariant = variant === 'mobile'
     const sectionClass =
       options?.class ??
-      (isMobileVariant ? 'flex flex-col gap-4' : 'flex flex-col gap-4 rounded-2xl border border-[var(--border)] p-5')
-    const transcriptWrapperClass = isMobileVariant
-      ? 'relative flex-1 min-h-0'
-      : 'flex max-h-[520px] flex-col gap-3 overflow-y-auto pr-1'
-    const transcriptScrollerClass = isMobileVariant ? 'overflow-y-auto pr-1 space-y-3 max-h-[48vh]' : 'space-y-3'
+      (isMobileVariant
+        ? 'flex h-full min-h-0 flex-col'
+        : 'flex flex-col gap-4 rounded-2xl border border-[var(--border)] p-5')
+    const hasMessages = () => messages().length > 0
+    const transcriptContainerClass = isMobileVariant
+      ? 'relative flex h-full min-h-0 flex-col'
+      : 'relative'
+    const transcriptScrollerClass = isMobileVariant
+      ? 'flex-1 min-h-0 space-y-3 overflow-y-auto'
+      : 'max-h-[520px] space-y-3 overflow-y-auto pr-1'
     const articleClass = 'rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-4 text-sm'
-    const showKillAction = options?.showKillAction ?? !isMobileVariant
 
-    return (
-      <section class={sectionClass}>
-        <div class="flex items-start justify-between gap-3">
-          <div class="flex-1 min-w-0">
-            <p class="text-sm font-semibold text-[var(--text-muted)]">Session detail</p>
-            <Show
-              when={selectedDetail()}
-              keyed
-              fallback={<p class="text-xs text-[var(--text-muted)]">Select a session to inspect its transcript.</p>}
-            >
-              {(detail) => (
-                <div class="flex items-center gap-3">
-                  <h3 class={`text-base font-semibold text-[var(--text)] ${isMobileVariant ? 'truncate' : ''}`}>
-                    {detail.session.title || detail.session.id}
-                  </h3>
+    const scrollToBottomButton = (positionClass: string) => (
+      <button
+        type="button"
+        class={`absolute flex h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg ${positionClass}`}
+        classList={{ hidden: autoScroll() }}
+        onClick={() => {
+          const el = messagesEl()
+          if (el) {
+            try {
+              el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+            } catch {}
+          }
+          setAutoScroll(true)
+        }}
+        title="Scroll to bottom"
+      >
+        ↓
+      </button>
+    )
 
-                  <Show when={!isMobileVariant}>
-                    <Show when={selectedSessionMeta()?.state} keyed>
-                      {(state) => (
-                        <span class={`rounded-full px-2 py-0.5 text-xs font-semibold ${sessionStateBadgeClass(state)}`}>
-                          {sessionStateLabel(state)}
-                        </span>
-                      )}
-                    </Show>
+    const transcriptList = (
+      <div ref={(el) => setMessagesEl(el ?? null)} class={transcriptScrollerClass}>
+        <For each={messages()}>
+          {(message) => (
+            <article class={articleClass}>
+              <header class="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
+                <span class="uppercase tracking-wide">{message.role}</span>
+                <span>{new Date(message.createdAt).toLocaleString()}</span>
+              </header>
+              <div class="whitespace-pre-wrap text-[var(--text)] break-words text-sm">
+                {renderMessageContent(message.text)}
+              </div>
+            </article>
+          )}
+        </For>
+      </div>
+    )
+
+    const infoBlock = (
+      <div class="flex items-start justify-between gap-3">
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-semibold text-[var(--text-muted)]">Session detail</p>
+          <Show
+            when={selectedDetail()}
+            keyed
+            fallback={
+              <p class="text-xs text-[var(--text-muted)]">
+                {draftingSession()
+                  ? 'Enter the first prompt below to start a new session.'
+                  : 'Select a session to inspect its transcript.'}
+              </p>
+            }
+          >
+            {(detail) => (
+              <div class="flex items-center gap-3">
+                <h3 class={`text-base font-semibold text-[var(--text)] ${isMobileVariant ? 'truncate' : ''}`}>
+                  {detail.session.title || detail.session.id}
+                </h3>
+                <Show when={!isMobileVariant}>
+                  <Show when={selectedSessionMeta()?.state} keyed>
+                    {(state) => (
+                      <span class={`rounded-full px-2 py-0.5 text-xs font-semibold ${sessionStateBadgeClass(state)}`}>
+                        {sessionStateLabel(state)}
+                      </span>
+                    )}
                   </Show>
-
-                  <Show when={isMobileVariant}>
-                    <Show when={selectedSessionMeta()?.state} keyed>
-                      {(state) => <span class={`${sessionStateDotClass(state)} ml-2`} />}
-                    </Show>
+                </Show>
+                <Show when={isMobileVariant}>
+                  <Show when={selectedSessionMeta()?.state} keyed>
+                    {(state) => <span class={`${sessionStateDotClass(state)} ml-2`} />}
                   </Show>
-                </div>
-              )}
-            </Show>
-          </div>
-
-          <Show when={showKillAction}>
-            <button
-              type="button"
-              class="rounded-xl border border-[var(--border)] px-3 py-2 text-sm"
-              onClick={handleKill}
-              disabled={!selectedSessionId() || killing()}
-            >
-              {killing() ? 'Stopping…' : 'Kill session'}
-            </button>
+                </Show>
+              </div>
+            )}
           </Show>
         </div>
 
-        <Show
-          when={messages().length > 0}
-          fallback={<p class="text-sm text-[var(--text-muted)]">No transcript yet.</p>}
+        <button
+          type="button"
+          class="rounded-xl border border-[var(--border)] px-3 py-2 text-sm"
+          onClick={handleKill}
+          disabled={!selectedSessionId() || killing() || draftingSession()}
         >
-          <div class={transcriptWrapperClass}>
-            <div ref={(el) => setMessagesEl(el ?? null)} class={transcriptScrollerClass}>
-              <For each={messages()}>
-                {(message) => (
-                  <article class={articleClass}>
-                    <header class="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
-                      <span class="uppercase tracking-wide">{message.role}</span>
-                      <span>{new Date(message.createdAt).toLocaleString()}</span>
-                    </header>
-                    <div class="whitespace-pre-wrap text-[var(--text)] break-words text-sm">
-                      {renderMessageContent(message.text)}
-                    </div>
-                  </article>
-                )}
-              </For>
-            </div>
+          {killing() ? 'Stopping…' : 'Kill session'}
+        </button>
+      </div>
+    )
 
-            <Show when={isMobileVariant}>
-              <button
-                type="button"
-                class="absolute right-3 bottom-3 w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center text-base shadow-lg z-50"
-                classList={{ hidden: autoScroll() }}
-                onClick={() => {
-                  const el = messagesEl()
-                  if (el) {
-                    try {
-                      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-                    } catch {}
-                  }
-                  setAutoScroll(true)
-                }}
-                title="Scroll to bottom"
-              >
-                ↓
-              </button>
-            </Show>
-          </div>
-        </Show>
+    const noTranscriptBlock = isMobileVariant ? (
+      <div class="flex h-full min-h-0 items-center justify-center text-sm text-[var(--text-muted)]">No transcript yet.</div>
+    ) : (
+      <p class="text-sm text-[var(--text-muted)]">No transcript yet.</p>
+    )
 
-        <form
-          class="mt-3 flex items-end gap-2"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void submitReply()
+    const transcriptBlock = hasMessages() ? (
+      <div class={transcriptContainerClass}>
+        {transcriptList}
+        {scrollToBottomButton('right-3 bottom-3')}
+      </div>
+    ) : (
+      noTranscriptBlock
+    )
+
+    const replyFormClass = isMobileVariant ? 'flex items-end gap-2 shrink-0 pt-3' : 'mt-3 flex items-end gap-2'
+
+    const replyForm = (
+      <form
+        class={replyFormClass}
+        onSubmit={(e) => {
+          e.preventDefault()
+          void submitReply()
+        }}
+      >
+        <textarea
+          ref={(el) => setReplyEl(el ?? null)}
+          class="flex-1 max-h-48 resize-none rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2 text-sm"
+          placeholder={draftingSession() ? 'Enter the first prompt to start a session' : 'Reply to session'}
+          value={replyText()}
+          onInput={(e) => {
+            setReplyText(e.currentTarget.value)
+            resizeReply()
           }}
+          onFocus={() => {
+            const el = messagesEl()
+            if (el) {
+              try {
+                setTimeout(() => el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }), 120)
+              } catch {}
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              void submitReply()
+            }
+          }}
+          disabled={replying() || (!draftingSession() && !selectedSessionId())}
+        />
+        <button
+          type="button"
+          class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          onClick={() => void submitReply()}
+          disabled={replying() || (!draftingSession() && !selectedSessionId())}
         >
-          <textarea
-            ref={(el) => setReplyEl(el ?? null)}
-            class="flex-1 rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2 text-sm resize-none max-h-48"
-            placeholder="Reply to session"
-            value={replyText()}
-            onInput={(e) => {
-              setReplyText(e.currentTarget.value)
-              resizeReply()
-            }}
-            onFocus={() => {
-              const el = messagesEl()
-              if (el) {
-                try {
-                  setTimeout(() => el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }), 120)
-                } catch {}
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                void submitReply()
-              }
-            }}
-            disabled={!selectedSessionId() || replying()}
-          />
-          <button
-            type="button"
-            class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            onClick={() => void submitReply()}
-            disabled={!selectedSessionId() || replying()}
-          >
-            {replying() ? 'Sending…' : 'Reply'}
-          </button>
-        </form>
+          {replying()
+            ? draftingSession()
+              ? 'Starting…'
+              : 'Sending…'
+            : draftingSession()
+              ? 'Start session'
+              : 'Reply'}
+        </button>
+      </form>
+    )
+
+    if (isMobileVariant) {
+      return (
+        <section class={sectionClass}>
+          <div class="shrink-0 pb-3">{infoBlock}</div>
+          <div class="flex-1 min-h-0">{transcriptBlock}</div>
+          <div class="shrink-0 pt-3">{replyForm}</div>
+        </section>
+      )
+    }
+
+    return (
+      <section class={sectionClass}>
+        {infoBlock}
+        {transcriptBlock}
+        {replyForm}
       </section>
     )
   }
@@ -728,7 +707,6 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     })
   }
 
-  // Desktop/large layout (original)
   const DesktopLayout = (
     <div class="grid gap-6 lg:grid-cols-[320px,1fr]">
       <section class="flex flex-col gap-5">{SessionsPanel()}</section>
@@ -736,83 +714,77 @@ export default function OpencodeConsole(props: OpencodeConsoleProps) {
     </div>
   )
 
-  // Mobile layout: header with centered swipe zone + two pages carousel
   const MobileLayout = (
-    <div class="flex flex-col h-full">
-      <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-muted)]">
-        <div class="w-1/4 text-sm font-semibold text-[var(--text-muted)]">Opencode</div>
-        <div class="flex items-center justify-center w-1/2 gap-2">
-          <Show when={currentPage() > 0} fallback={<div class="w-6" />}>
-            <button
-              type="button"
-              class="text-sm rounded p-1"
-              aria-label="Previous page"
-              onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
-            >
-              ‹
-            </button>
-          </Show>
-
-          <div
-            class="flex-1 h-8"
-            onTouchStart={(e) => onTouchStart(e as unknown as TouchEvent)}
-            onTouchMove={(e) => onTouchMove(e as unknown as TouchEvent)}
-            onTouchEnd={() => onTouchEnd()}
-            role="group"
-            aria-label="Swipe pages"
+    <div class="flex h-full min-h-0 flex-col overflow-hidden">
+      <header class="sticky top-0 z-20 border-b border-[var(--border)] bg-[var(--bg)] px-4 py-3">
+        <div class="flex items-center gap-3">
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-full border border-[var(--border)] px-3 py-1 text-sm font-semibold"
+            onClick={() => setDrawerOpen(true)}
           >
-            <div class="h-full flex items-center justify-center text-xs text-[var(--text-muted)]">
-              {currentPage() === 0 ? 'List' : 'Details'}
-            </div>
+            ← Sessions
+          </button>
+          <div class="flex-1 truncate text-sm font-semibold text-[var(--text)]">
+            <Show when={selectedDetail()} keyed fallback={<span class="text-[var(--text-muted)]">No session selected</span>}>
+              {(detail) => <span>{detail.session.title || detail.session.id}</span>}
+            </Show>
           </div>
-
-          <Show when={currentPage() < 1} fallback={<div class="w-6" />}>
+        </div>
+      </header>
+      <div class="flex-1 min-h-0 overflow-hidden">
+        {SessionDetail({ variant: 'mobile', class: 'flex h-full min-h-0 flex-col p-4 overflow-hidden' })}
+      </div>
+      <Show when={drawerOpen()}>
+        <div class="fixed inset-0 z-40 flex flex-col bg-[var(--bg)]">
+          <div class="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+            <h2 class="text-base font-semibold">Sessions</h2>
             <button
               type="button"
-              class="text-sm rounded p-1"
-              aria-label="Next page"
-              onClick={() => setCurrentPage((p) => Math.min(1, p + 1))}
+              class="rounded-full border border-[var(--border)] px-3 py-1 text-xs"
+              onClick={() => setDrawerOpen(false)}
             >
-              ›
+              Close
             </button>
-          </Show>
-        </div>
-        <div class="w-1/4" />
-      </div>
-
-      <div class="flex-1 overflow-hidden">
-        <div
-          class="single-widget-pages flex h-full transition-transform duration-300"
-          style={{ transform: `translateX(-${currentPage() * 100}%)` }}
-        >
-          <div class="single-widget-page w-full p-4 overflow-auto" data-single-widget-title="List">
-            <div class="flex flex-col gap-4">{SessionsPanel()}</div>
           </div>
-          <div class="single-widget-page w-full p-4 overflow-auto" data-single-widget-title="Details">
-            {SessionDetail({ variant: 'mobile' })}
+          <div class="flex-1 overflow-auto px-4 py-4">
+            {SessionsPanel({ variant: 'drawer', class: 'h-full space-y-3' })}
           </div>
         </div>
-      </div>
+      </Show>
     </div>
   )
 
-  if (typeof props.mobilePage === 'number') {
-    const pageIndex = Math.max(0, Math.min(MAX_PAGE_INDEX, props.mobilePage))
-    if (pageIndex === 0) {
-      return <div class={`flex flex-col gap-4 ${props.class ?? ''}`}>{SessionsPanel()}</div>
-    }
-    return (
-      <div class={`flex h-full flex-col gap-4 ${props.class ?? ''}`}>
-        {SessionDetail({ variant: 'mobile', showKillAction: true })}
+  const rootClass = () =>
+    [
+      props.class ?? '',
+      isMobile()
+        ? 'flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden'
+        : 'flex h-full flex-col'
+    ]
+      .filter(Boolean)
+      .join(' ')
+
+  return (
+    <div class={rootClass()}>
+      <Show when={!props.hideHeader && !isMobile()}>
+        <header class="mb-4 flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p class="text-base font-semibold text-[var(--text)]">{props.heading ?? 'Opencode sessions'}</p>
+            <Show when={props.description} keyed>
+              {(description) => <p class="text-sm text-[var(--text-muted)]">{description}</p>}
+            </Show>
+          </div>
+          <Show when={props.headerActions} keyed>
+            {(actions) => <div class="flex-shrink-0">{actions}</div>}
+          </Show>
+        </header>
+      </Show>
+      <div class="flex-1 min-h-0">
+        {isMobile() ? MobileLayout : DesktopLayout}
       </div>
-    )
-  }
-
-  if (isMobile()) {
-    return MobileLayout
-  }
-
-  return DesktopLayout
+    </div>
+  )
 }
 
 const SESSION_STATE_META: Record<SessionState, { label: string; badgeClass: string }> = {

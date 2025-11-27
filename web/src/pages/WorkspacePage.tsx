@@ -16,7 +16,7 @@ import {
 } from 'solid-js'
 import DiffViewer from '../components/DiffViewer'
 import CanvasWorkspace, { type CanvasWidgetConfig } from '../components/layout/CanvasWorkspace'
-import OpencodeConsole, { opencodePages } from '../components/OpencodeConsole'
+import OpencodeConsole from '../components/OpencodeConsole'
 import WorkflowDetailView from '../components/WorkflowDetailView'
 import WorkflowLaunchModal from '../components/WorkflowLaunchModal'
 import { WIDGET_TEMPLATES, type WidgetAddEventDetail, type WidgetTemplateId } from '../constants/widgetTemplates'
@@ -393,11 +393,7 @@ function createWidgetConfig(options: CreateWidgetConfigOptions): CanvasWidgetCon
         initialSize: { width: 720, height: 520 },
         startOpen: true,
         removable,
-        pages: () =>
-          opencodePages({
-            workspaceFilter: workspace.repositoryPath,
-            lockWorkspace: true
-          }),
+        hideSingleHeader: true,
         content: () => <SessionsWidget workspacePath={workspace.repositoryPath} />
       }
     default:
@@ -1668,11 +1664,7 @@ function SessionsWidget(props: { workspacePath: string }) {
       setFilter(props.workspacePath)
     }
   })
-  return (
-    <div class="flex h-full flex-col gap-4 p-6 text-[var(--text)]">
-      <OpencodeConsole workspaceFilter={filter()} onWorkspaceFilterChange={setFilter} />
-    </div>
-  )
+  return <OpencodeConsole workspaceFilter={filter()} onWorkspaceFilterChange={setFilter} hideHeader />
 }
 
 function formatTimestamp(value: string | null | undefined): string {
