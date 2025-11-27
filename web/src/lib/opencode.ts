@@ -7,6 +7,8 @@ export type OpencodeSessionSummary = {
   projectId: string | null
   createdAt: string
   updatedAt: string
+  providerId?: string | null
+  modelId?: string | null
   summary: {
     additions: number
     deletions: number
@@ -36,6 +38,7 @@ export type OpencodeRunRecord = {
   prompt: string
   title: string | null
   model: string | null
+  providerId: string | null
   logFile: string
   startedAt: string
   updatedAt: string
@@ -59,6 +62,7 @@ export async function startOpencodeRun(input: {
   prompt: string
   title?: string
   model?: string
+  providerId?: string
 }): Promise<OpencodeRunRecord> {
   const payload = await fetchJson<{ run: OpencodeRunRecord }>(`/api/opencode/sessions`, {
     method: 'POST',
@@ -85,14 +89,14 @@ export async function fetchOpencodeRuns(): Promise<OpencodeRunRecord[]> {
 
 export async function postOpencodeMessage(
   sessionId: string,
-  input: { role?: string; text: string }
+  input: { role?: string; text: string; modelId?: string }
 ): Promise<OpencodeSessionDetail> {
   const payload = await fetchJson<OpencodeSessionDetail>(
     `/api/opencode/sessions/${encodeURIComponent(sessionId)}/messages`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: input.role ?? 'user', text: input.text })
+      body: JSON.stringify({ role: input.role ?? 'user', text: input.text, modelId: input.modelId })
     }
   )
   return payload

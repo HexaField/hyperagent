@@ -9,6 +9,7 @@ import os from 'os'
 import path from 'path'
 
 export const DEFAULT_OPENCODE_MODEL = 'github-copilot/gpt-5-mini'
+export const DEFAULT_OPENCODE_PROVIDER = 'opencode'
 
 export type OpencodeRunStatus = 'starting' | 'running' | 'exited' | 'failed' | 'terminated'
 
@@ -19,6 +20,7 @@ export type OpencodeRunRecord = {
   prompt: string
   title: string | null
   model: string | null
+  providerId: string | null
   logFile: string
   startedAt: string
   updatedAt: string
@@ -32,6 +34,7 @@ export type StartRunInput = {
   prompt: string
   title?: string | null
   model?: string | null
+  providerId?: string | null
 }
 
 export type OpencodeRunner = {
@@ -71,6 +74,7 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
     await ensureReady()
     await assertWorkspaceExists(input.workspacePath)
     const resolvedModel = resolveModel(input.model)
+    const resolvedProvider = resolveProvider(input.providerId)
     const env = { ...process.env }
     const args = buildRunArgs({ ...input, model: resolvedModel })
     const child = spawnFn('opencode', args, {
@@ -112,6 +116,7 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
             prompt: input.prompt,
             title: input.title?.trim() || null,
             model: resolvedModel,
+            providerId: resolvedProvider,
             logFile,
             startedAt,
             updatedAt: startedAt,
@@ -164,6 +169,7 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
                 prompt: input.prompt,
                 title: input.title?.trim() || null,
                 model: resolvedModel,
+                providerId: resolvedProvider,
                 logFile,
                 startedAt,
                 updatedAt: new Date().toISOString(),
@@ -251,6 +257,14 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
     }
     const trimmed = candidate.trim()
     return trimmed.length ? trimmed : DEFAULT_OPENCODE_MODEL
+  }
+
+  function resolveProvider(candidate?: string | null): string {
+    if (typeof candidate !== 'string') {
+      return DEFAULT_OPENCODE_PROVIDER
+    }
+    const trimmed = candidate.trim()
+    return trimmed.length ? trimmed : DEFAULT_OPENCODE_PROVIDER
   }
 
   function createJsonAccumulator(onObject: (event: any) => void): JsonAccumulator {

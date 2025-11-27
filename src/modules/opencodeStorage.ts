@@ -11,6 +11,8 @@ export type OpencodeSessionSummary = {
   projectId: string | null
   createdAt: string
   updatedAt: string
+  providerId?: string | null
+  modelId?: string | null
   summary: {
     additions: number
     deletions: number

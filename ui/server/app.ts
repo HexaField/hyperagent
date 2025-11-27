@@ -94,7 +94,12 @@ import {
 } from '../../src/modules/database'
 import { listBranchCommits, listGitBranches } from '../../src/modules/git'
 import type { Provider } from '../../src/modules/llm'
-import { createOpencodeRunner, DEFAULT_OPENCODE_MODEL, type OpencodeRunner } from '../../src/modules/opencodeRunner'
+import {
+  createOpencodeRunner,
+  DEFAULT_OPENCODE_MODEL,
+  DEFAULT_OPENCODE_PROVIDER,
+  type OpencodeRunner
+} from '../../src/modules/opencodeRunner'
 import { createOpencodeStorage, type OpencodeStorage } from '../../src/modules/opencodeStorage'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import { createDiffModule } from '../../src/modules/review/diff'
@@ -123,7 +128,7 @@ const WORKFLOW_AGENT_PROVIDER =
   normalizeWorkflowProvider(process.env.WORKFLOW_AGENT_PROVIDER) ?? ('opencode' as Provider)
 const WORKFLOW_AGENT_MODEL = process.env.WORKFLOW_AGENT_MODEL ?? 'github-copilot/gpt-5-mini'
 const WORKFLOW_AGENT_MAX_ROUNDS = parsePositiveInteger(process.env.WORKFLOW_AGENT_MAX_ROUNDS)
-const CODING_AGENT_PROVIDER_ID = 'opencode'
+const CODING_AGENT_PROVIDER_ID = DEFAULT_OPENCODE_PROVIDER
 const FALLBACK_OPENCODE_MODEL_IDS = [
   'github-copilot/gpt-5-mini',
   'github-copilot/gpt-4o',
@@ -156,7 +161,6 @@ type TlsConfig = {
   cert?: Buffer | string
   key?: Buffer | string
 }
-
 type TlsMaterials = {
   cert: Buffer
   key: Buffer
@@ -170,7 +174,7 @@ const readTlsFile = async (filePath: string, label: 'certificate' | 'key'): Prom
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     throw new Error(
-      `Unable to read TLS ${label} at ${filePath}: ${reason}. Run \"npm run certs:generate\" or set UI_TLS_${
+      `Unable to read TLS ${label} at ${filePath}: ${reason}. Run "npm run certs:generate" or set UI_TLS_${
         label === 'certificate' ? 'CERT' : 'KEY'
       }_PATH.`
     )
@@ -1485,8 +1489,18 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     try {
       const workspaceParam = req.query.workspacePath
       const workspacePath = typeof workspaceParam === 'string' ? workspaceParam : undefined
-      const sessions = await opencodeStorage.listSessions({ workspacePath })
-      res.json({ sessions })
+      const [sessions, runs] = await Promise.all([
+        opencodeStorage.listSessions({ workspacePath }),
+        opencodeRunner.listRuns()
+      ])
+      const runIndex = new Map(runs.map((run) => [run.sessionId, run]))
+      const payload = sessions.map((session) => {
+        const run = runIndex.get(session.id)
+        const providerId = run?.providerId ?? session.providerId ?? null
+        const modelId = run?.model ?? session.modelId ?? null
+        return { ...session, providerId, modelId }
+      })
+      res.json({ sessions: payload })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to list opencode sessions'
       res.status(500).json({ error: message })
@@ -1505,7 +1519,17 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         res.status(404).json({ error: 'Unknown session' })
         return
       }
-      res.json(detail)
+      const run = await opencodeRunner.getRun(sessionId)
+      const providerId = run?.providerId ?? detail.session.providerId ?? null
+      const modelId = run?.model ?? detail.session.modelId ?? null
+      res.json({
+        ...detail,
+        session: {
+          ...detail.session,
+          providerId,
+          modelId
+        }
+      })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load opencode session'
       res.status(500).json({ error: message })
@@ -1515,7 +1539,11 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   const listOpencodeRunsHandler: RequestHandler = async (_req, res) => {
     try {
       const runs = await opencodeRunner.listRuns()
-      res.json({ runs })
+      const payload = runs.map((run) => ({
+        ...run,
+        providerId: run.providerId ?? CODING_AGENT_PROVIDER_ID
+      }))
+      res.json({ runs: payload })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to list opencode runs'
       res.status(500).json({ error: message })
@@ -1523,7 +1551,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   }
 
   const startOpencodeSessionHandler: RequestHandler = async (req, res) => {
-    const { workspacePath, prompt, title, model } = req.body ?? {}
+    const { workspacePath, prompt, title, model, providerId: rawProviderId } = req.body ?? {}
     if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
       res.status(400).json({ error: 'workspacePath is required' })
       return
@@ -1533,6 +1561,11 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       return
     }
     const normalizedWorkspace = workspacePath.trim()
+    const providerId = typeof rawProviderId === 'string' && rawProviderId.trim().length ? rawProviderId.trim() : CODING_AGENT_PROVIDER_ID
+    if (providerId !== CODING_AGENT_PROVIDER_ID) {
+      res.status(400).json({ error: `Unsupported provider: ${providerId}` })
+      return
+    }
     try {
       await ensureWorkspaceDirectory(normalizedWorkspace)
     } catch (error) {
@@ -1546,7 +1579,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         workspacePath: normalizedWorkspace,
         prompt: prompt.trim(),
         title: typeof title === 'string' ? title : undefined,
-        model: resolvedModel
+        model: resolvedModel,
+        providerId
       })
       res.status(202).json({ run })
     } catch (error) {
@@ -2872,6 +2906,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
     const body = req.body ?? {}
     const text = typeof body.text === 'string' ? body.text.trim() : ''
+    const requestedModelId = typeof body.modelId === 'string' && body.modelId.trim().length ? body.modelId.trim() : null
     const role = typeof body.role === 'string' && body.role.trim().length ? body.role.trim() : 'user'
     if (!text.length) {
       res.status(400).json({ error: 'text is required' })
@@ -2883,6 +2918,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         res.status(404).json({ error: 'Unknown session' })
         return
       }
+      const run = await opencodeRunner.getRun(sessionId)
       if (role !== 'user') {
         console.warn(`[opencode] Unsupported role "${role}" for session ${sessionId}; sending as user message.`)
       }
@@ -2892,17 +2928,36 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         res.status(400).json({ error: 'Session workspace is unavailable' })
         return
       }
-      const resolvedModel =
-        existing.messages
-          .slice()
-          .reverse()
-          .filter((message) => !!message.modelId && !!message.providerId)
-          .map((message) => `${message.providerId!.trim()}/${message.modelId!.trim()}`)
-          .find((candidate) => candidate.length) ?? DEFAULT_OPENCODE_MODEL
-      const cliArgs = ['run', text, '-m', resolvedModel, '--format', 'json', '--session', sessionId]
+      const providerFromMessages = existing.messages
+        .slice()
+        .reverse()
+        .map((message) => (typeof message.providerId === 'string' ? message.providerId.trim() : ''))
+        .find((candidate) => candidate.length)
+      const resolvedProviderId = [existing.session.providerId, run?.providerId, providerFromMessages]
+        .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
+        .find((candidate) => candidate.length)
+        ?.trim() ?? CODING_AGENT_PROVIDER_ID
+      const modelFromMessages = existing.messages
+        .slice()
+        .reverse()
+        .map((message) => (typeof message.modelId === 'string' ? message.modelId.trim() : ''))
+        .find((candidate) => candidate.length)
+      const resolvedModelId = [requestedModelId, existing.session.modelId, run?.model, modelFromMessages]
+        .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
+        .find((candidate) => candidate.length)
+        ?.trim() ?? DEFAULT_OPENCODE_MODEL
+      const cliArgs = ['run', '--session', sessionId, '--format', 'json', '--model', resolvedModelId, '--', text]
       await opencodeCommandRunner(cliArgs, { cwd: existing.session.workspacePath })
       const updated = await opencodeStorage.getSession(sessionId)
-      res.status(201).json(updated ?? existing)
+      const detail = updated ?? existing
+      res.status(201).json({
+        ...detail,
+        session: {
+          ...detail.session,
+          providerId: resolvedProviderId,
+          modelId: resolvedModelId
+        }
+      })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to post opencode message'
       res.status(500).json({ error: message })

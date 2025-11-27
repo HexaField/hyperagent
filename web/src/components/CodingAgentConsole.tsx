@@ -275,6 +275,11 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       return await fetchOpencodeSessionDetail(sessionId)
     }
   )
+  const initialDraftProviderId = defaultProviderId()
+  const initialDraftModelId = providerConfigFor(initialDraftProviderId).defaultModelId
+  const [draftProviderId, setDraftProviderId] = createSignal<CodingAgentProviderId>(initialDraftProviderId)
+  const [draftModelId, setDraftModelId] = createSignal<string>(initialDraftModelId)
+  const draftProviderConfig = createMemo(() => providerConfigFor(normalizeProviderId(draftProviderId())))
 
   createEffect(() => {
     const handle = setInterval(() => {
@@ -291,6 +296,17 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       void refetchSessionDetail()
     }, REFRESH_INTERVAL_MS)
     onCleanup(() => clearInterval(handle))
+  })
+
+  createEffect(() => {
+    providers()
+    const current = draftProviderId()
+    const normalized = normalizeProviderId(current)
+    if (current !== normalized) {
+      setDraftProviderId(normalized)
+      return
+    }
+    setDraftModelId((prev) => normalizeModelId(normalized, prev))
   })
 
   const [replyText, setReplyText] = createSignal('')
@@ -367,6 +383,12 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     })
   }
 
+  const resetDraftConfiguration = (providerId?: CodingAgentProviderId) => {
+    const normalized = providerId ? normalizeProviderId(providerId) : defaultProviderId()
+    setDraftProviderId(normalized)
+    setDraftModelId(providerConfigFor(normalized).defaultModelId)
+  }
+
   function startDraftSession() {
     const workspacePath = workspaceForFetch().trim()
     if (!workspacePath) {
@@ -374,6 +396,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       return
     }
     setError(null)
+    resetDraftConfiguration()
     setDraftingSession(true)
     setDraftingWorkspace(workspacePath)
     setPendingSessionId(null)
@@ -404,16 +427,18 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         if (!workspacePath) {
           throw new Error('Workspace path is required')
         }
-        const providerId = defaultProviderId()
-        const modelId = providerConfigFor(providerId).defaultModelId
+        const providerId = normalizeProviderId(draftProviderId())
+        const modelId = normalizeModelId(providerId, draftModelId())
         const run = await startOpencodeRun({
           workspacePath,
           prompt: text,
-          model: modelId
+          model: modelId,
+          providerId
         })
         setSessionOverrides((prev) => ({
           ...prev,
           [run.sessionId]: {
+            ...(prev[run.sessionId] ?? {}),
             providerId,
             modelId: normalizeModelId(providerId, run.model ?? modelId)
           }
@@ -435,7 +460,8 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       const sessionId = selectedSessionId()
       if (!sessionId) return
       const mod = await import('../lib/opencode')
-      await mod.postOpencodeMessage(sessionId, { text })
+      const modelId = resolveSessionModel(sessionId)
+      await mod.postOpencodeMessage(sessionId, { text, modelId })
       setReplyText('')
       const ta = replyEl()
       if (ta) ta.style.height = 'auto'
@@ -665,20 +691,46 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const resolveSessionProvider = (sessionId: string | null | undefined): CodingAgentProviderId => {
     const fallbackProviderId = defaultProviderId()
     if (!sessionId) return fallbackProviderId
+    const detail = sessionDetail()
+    const detailProvider =
+      detail?.session.id === sessionId && typeof detail.session.providerId === 'string'
+        ? detail.session.providerId
+        : null
     const overrides = sessionOverrides()
-    const override = overrides?.[sessionId]
-    if (override?.providerId) return normalizeProviderId(override.providerId)
-    return fallbackProviderId
+    const session = sessionRows().find((row) => row.id === sessionId)
+    const candidates = [session?.providerId, session?.run?.providerId, detailProvider, overrides?.[sessionId]?.providerId]
+    const resolved =
+      candidates
+        .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
+        .find((candidate) => candidate.length)
+    return resolved ? normalizeProviderId(resolved) : fallbackProviderId
   }
 
   const resolveSessionModel = (sessionId: string | null | undefined): string => {
     const providerId = resolveSessionProvider(sessionId)
     if (!sessionId) return normalizeModelId(providerId, null)
     const overrides = sessionOverrides()
-    const override = overrides?.[sessionId]
-    if (override?.modelId) return normalizeModelId(providerId, override.modelId)
+    const overrideModel = overrides?.[sessionId]?.modelId
+    if (overrideModel) return normalizeModelId(providerId, overrideModel)
     const session = sessionRows().find((row) => row.id === sessionId)
-    return normalizeModelId(providerId, session?.run?.model)
+    const detail = sessionDetail()
+    const detailSession = detail?.session.id === sessionId ? detail.session : null
+    const detailModel =
+      detailSession && typeof detailSession.modelId === 'string' ? detailSession.modelId : null
+    const detailMessageModel =
+      detailSession && Array.isArray(detail?.messages)
+        ? detail.messages
+            .slice()
+            .reverse()
+            .map((message) => (typeof message.modelId === 'string' ? message.modelId.trim() : ''))
+            .find((candidate) => candidate.length) ?? null
+        : null
+    const candidates = [session?.run?.model, session?.modelId, detailModel, detailMessageModel]
+    const resolved =
+      candidates
+        .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
+        .find((candidate) => candidate.length)
+    return normalizeModelId(providerId, resolved)
   }
 
   const resolveSessionProviderLabel = (sessionId: string | null | undefined): string => {
@@ -702,7 +754,13 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     if (!targetId) return
     const providerId = normalizeProviderId(sessionSettingsProvider())
     const modelId = normalizeModelId(providerId, sessionSettingsModel())
-    setSessionOverrides((prev) => ({ ...prev, [targetId]: { providerId, modelId } }))
+    setSessionOverrides((prev) => ({
+      ...prev,
+      [targetId]: {
+        ...(prev[targetId] ?? {}),
+        modelId
+      }
+    }))
     closeSessionSettings()
   }
 
@@ -913,7 +971,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       noTranscriptBlock
     )
 
-    const replyFormClass = isMobileVariant ? 'flex items-end gap-2 shrink-0 pt-3' : 'mt-3 flex items-end gap-2'
+    const replyFormClass = 'flex items-end gap-2'
 
     const replyForm = (
       <form
@@ -965,11 +1023,67 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       </form>
     )
 
+    const providerFieldId = isMobileVariant ? 'draft-provider-mobile' : 'draft-provider-desktop'
+    const modelFieldId = isMobileVariant ? 'draft-model-mobile' : 'draft-model-desktop'
+
+    const draftSessionConfig = (
+      <Show when={draftingSession()}>
+        <div class="space-y-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-4">
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div class="space-y-2">
+              <label class="text-sm font-semibold text-[var(--text)]" for={providerFieldId}>
+                Provider
+              </label>
+              <select
+                id={providerFieldId}
+                class="w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+                value={draftProviderConfig().id}
+                onInput={(event) => {
+                  const nextProvider = normalizeProviderId(event.currentTarget.value)
+                  setDraftProviderId(nextProvider)
+                  setDraftModelId(providerConfigFor(nextProvider).defaultModelId)
+                }}
+                disabled={replying()}
+              >
+                <For each={providers()}>
+                  {(provider) => (
+                    <option value={provider.id}>{provider.label}</option>
+                  )}
+                </For>
+              </select>
+            </div>
+            <div class="space-y-2">
+              <label class="text-sm font-semibold text-[var(--text)]" for={modelFieldId}>
+                Model
+              </label>
+              <select
+                id={modelFieldId}
+                class="w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+                value={draftModelId()}
+                onInput={(event) => setDraftModelId(event.currentTarget.value)}
+                disabled={replying()}
+              >
+                <For each={draftProviderConfig().models}>
+                  {(option) => (
+                    <option value={option.id}>{option.label}</option>
+                  )}
+                </For>
+              </select>
+            </div>
+          </div>
+          <p class="text-xs text-[var(--text-muted)]">Provider is locked once the session starts.</p>
+        </div>
+      </Show>
+    )
+
     if (isMobileVariant) {
       return (
         <section class={sectionClass}>
           <div class="flex-1 min-h-0">{transcriptBlock}</div>
-          <div class="shrink-0 pt-3">{replyForm}</div>
+          <div class="shrink-0 space-y-3 pt-3">
+            {draftSessionConfig}
+            {replyForm}
+          </div>
         </section>
       )
     }
@@ -977,8 +1091,9 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     return (
       <section class={sectionClass}>
         {infoBlock}
+        {draftSessionConfig}
         {transcriptBlock}
-        {replyForm}
+        <div class="mt-3">{replyForm}</div>
       </section>
     )
   }
@@ -1104,26 +1219,12 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
               <p class="text-xs text-[var(--text-muted)]">ID: {target.id}</p>
             </div>
             <div class="space-y-4">
-              <div class="space-y-2">
-                <label class="text-sm font-semibold text-[var(--text)]" for="session-settings-provider">
-                  Provider
-                </label>
-                <select
-                  id="session-settings-provider"
-                  class="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2 text-sm"
-                  value={sessionSettingsProvider()}
-                  onInput={(event) => {
-                    const nextProvider = normalizeProviderId(event.currentTarget.value)
-                    setSessionSettingsProvider(nextProvider)
-                    setSessionSettingsModel((current) => normalizeModelId(nextProvider, current))
-                  }}
-                >
-                  <For each={providers()}>
-                    {(provider) => (
-                      <option value={provider.id}>{provider.label}</option>
-                    )}
-                  </For>
-                </select>
+              <div class="space-y-1">
+                <p class="text-sm font-semibold text-[var(--text)]">Provider</p>
+                <div class="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2 text-sm">
+                  <span>{providerLabel(sessionSettingsProvider())}</span>
+                  <span class="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">Locked</span>
+                </div>
               </div>
               <div class="space-y-2">
                 <label class="text-sm font-semibold text-[var(--text)]" for="session-settings-model">
