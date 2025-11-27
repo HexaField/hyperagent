@@ -4,6 +4,7 @@ import { For, Show, createResource, createSignal, onCleanup, onMount, type JSX }
 import type { CanvasWidgetConfig } from './components/layout/CanvasWorkspace'
 import SingleWidgetView from './components/layout/SingleWidgetView'
 import RepositoryNavigator from './components/navigation/RepositoryNavigator'
+import ThemeToggle from './components/ThemeToggle'
 import { WIDGET_TEMPLATES, type WidgetAddEventDetail } from './constants/widgetTemplates'
 import { CanvasNavigatorContext, useCanvasNavigator } from './contexts/CanvasNavigatorContext'
 import { WorkspaceSelectionProvider } from './contexts/WorkspaceSelectionContext'
@@ -165,14 +166,17 @@ function CanvasChrome() {
         </Show>
       </div>
       <div class="pointer-events-auto flex flex-col items-end gap-3">
-        <button
-          type="button"
-          class="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-card)]/90 px-4 py-2 text-sm font-semibold text-[var(--text)] shadow-[0_18px_30px_rgba(15,23,42,0.12)]"
-          onClick={() => setWidgetMenuOpen((value) => !value)}
-        >
-          Widgets
-          <span class="text-lg">☰</span>
-        </button>
+        <div class="flex items-center gap-3">
+          <ThemeToggle />
+          <button
+            type="button"
+            class="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-card)]/90 px-4 py-2 text-sm font-semibold text-[var(--text)] shadow-[0_18px_30px_rgba(15,23,42,0.12)]"
+            onClick={() => setWidgetMenuOpen((value) => !value)}
+          >
+            Widgets
+            <span class="text-lg">☰</span>
+          </button>
+        </div>
         <Show when={widgetMenuOpen()}>
           <ChromePanel
             title="Widget library"

@@ -1,5 +1,6 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
+import { fetchCodingAgentProviders, type CodingAgentProvider } from '../lib/codingAgent'
 import {
   fetchOpencodeRuns,
   fetchOpencodeSessionDetail,
@@ -11,7 +12,7 @@ import {
   type OpencodeSessionDetail as CodingAgentSessionDetail,
   type OpencodeSessionSummary as CodingAgentSessionSummary
 } from '../lib/opencode'
-import { fetchCodingAgentProviders, type CodingAgentProvider } from '../lib/codingAgent'
+import ThemeToggle from './ThemeToggle'
 
 const REFRESH_INTERVAL_MS = 4000
 const STORAGE_PREFIXES = ['coding-agent-console:v1', 'opencode-console:v1'] as const
@@ -177,7 +178,8 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   })
   const providerMap = createMemo(() => new Map(providers().map((provider) => [provider.id, provider])))
   const defaultProvider = createMemo<CodingAgentProvider>(() => providers()[0] ?? DEFAULT_PROVIDER)
-  const defaultProviderId = (): CodingAgentProviderId => (defaultProvider()?.id ?? DEFAULT_PROVIDER.id) as CodingAgentProviderId
+  const defaultProviderId = (): CodingAgentProviderId =>
+    (defaultProvider()?.id ?? DEFAULT_PROVIDER.id) as CodingAgentProviderId
 
   const normalizeProviderId = (value: string | null | undefined): CodingAgentProviderId => {
     if (value && providerMap().has(value as CodingAgentProviderId)) {
@@ -202,7 +204,9 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const modelLabel = (providerId: string | null | undefined, modelId: string | null | undefined): string => {
     const config = providerConfigFor(providerId)
     const normalizedModel = normalizeModelId(config.id, modelId)
-    return config.models.find((option: CodingAgentModelOption) => option.id === normalizedModel)?.label ?? normalizedModel
+    return (
+      config.models.find((option: CodingAgentModelOption) => option.id === normalizedModel)?.label ?? normalizedModel
+    )
   }
 
   const parseSessionOverrides = (raw: string | null): Record<string, SessionOverride> | null => {
@@ -698,11 +702,15 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         : null
     const overrides = sessionOverrides()
     const session = sessionRows().find((row) => row.id === sessionId)
-    const candidates = [session?.providerId, session?.run?.providerId, detailProvider, overrides?.[sessionId]?.providerId]
-    const resolved =
-      candidates
-        .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
-        .find((candidate) => candidate.length)
+    const candidates = [
+      session?.providerId,
+      session?.run?.providerId,
+      detailProvider,
+      overrides?.[sessionId]?.providerId
+    ]
+    const resolved = candidates
+      .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
+      .find((candidate) => candidate.length)
     return resolved ? normalizeProviderId(resolved) : fallbackProviderId
   }
 
@@ -715,21 +723,19 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     const session = sessionRows().find((row) => row.id === sessionId)
     const detail = sessionDetail()
     const detailSession = detail?.session.id === sessionId ? detail.session : null
-    const detailModel =
-      detailSession && typeof detailSession.modelId === 'string' ? detailSession.modelId : null
+    const detailModel = detailSession && typeof detailSession.modelId === 'string' ? detailSession.modelId : null
     const detailMessageModel =
       detailSession && Array.isArray(detail?.messages)
-        ? detail.messages
+        ? (detail.messages
             .slice()
             .reverse()
             .map((message) => (typeof message.modelId === 'string' ? message.modelId.trim() : ''))
-            .find((candidate) => candidate.length) ?? null
+            .find((candidate) => candidate.length) ?? null)
         : null
     const candidates = [session?.run?.model, session?.modelId, detailModel, detailMessageModel]
-    const resolved =
-      candidates
-        .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
-        .find((candidate) => candidate.length)
+    const resolved = candidates
+      .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
+      .find((candidate) => candidate.length)
     return normalizeModelId(providerId, resolved)
   }
 
@@ -820,9 +826,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                       <p class="mt-1 text-xs text-[var(--text-muted)]">
                         Provider: {resolveSessionProviderLabel(session.id)}
                       </p>
-                      <p class="mt-1 text-xs text-[var(--text-muted)]">
-                        Model: {resolveSessionModelLabel(session.id)}
-                      </p>
+                      <p class="mt-1 text-xs text-[var(--text-muted)]">Model: {resolveSessionModelLabel(session.id)}</p>
                     </button>
                     <button
                       type="button"
@@ -851,9 +855,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         ? 'flex h-full min-h-0 flex-col'
         : 'flex flex-col gap-4 rounded-2xl border border-[var(--border)] p-5')
     const hasMessages = () => messages().length > 0
-    const transcriptContainerClass = isMobileVariant
-      ? 'relative flex h-full min-h-0 flex-col'
-      : 'relative'
+    const transcriptContainerClass = isMobileVariant ? 'relative flex h-full min-h-0 flex-col' : 'relative'
     const transcriptScrollerClass = isMobileVariant
       ? 'flex-1 min-h-0 space-y-3 overflow-y-auto'
       : 'max-h-[520px] space-y-3 overflow-y-auto pr-1'
@@ -957,7 +959,9 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     )
 
     const noTranscriptBlock = isMobileVariant ? (
-      <div class="flex h-full min-h-0 items-center justify-center text-sm text-[var(--text-muted)]">No transcript yet.</div>
+      <div class="flex h-full min-h-0 items-center justify-center text-sm text-[var(--text-muted)]">
+        No transcript yet.
+      </div>
     ) : (
       <p class="text-sm text-[var(--text-muted)]">No transcript yet.</p>
     )
@@ -1012,13 +1016,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           onClick={() => void submitReply()}
           disabled={replying() || (!draftingSession() && !selectedSessionId())}
         >
-          {replying()
-            ? draftingSession()
-              ? 'Starting…'
-              : 'Sending…'
-            : draftingSession()
-              ? 'Start session'
-              : 'Reply'}
+          {replying() ? (draftingSession() ? 'Starting…' : 'Sending…') : draftingSession() ? 'Start session' : 'Reply'}
         </button>
       </form>
     )
@@ -1045,11 +1043,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                 }}
                 disabled={replying()}
               >
-                <For each={providers()}>
-                  {(provider) => (
-                    <option value={provider.id}>{provider.label}</option>
-                  )}
-                </For>
+                <For each={providers()}>{(provider) => <option value={provider.id}>{provider.label}</option>}</For>
               </select>
             </div>
             <div class="space-y-2">
@@ -1064,9 +1058,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                 disabled={replying()}
               >
                 <For each={draftProviderConfig().models}>
-                  {(option) => (
-                    <option value={option.id}>{option.label}</option>
-                  )}
+                  {(option) => <option value={option.id}>{option.label}</option>}
                 </For>
               </select>
             </div>
@@ -1151,7 +1143,11 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           </button>
           <div class="flex flex-1 items-center gap-2">
             <div class="flex-1 truncate text-sm font-semibold text-[var(--text)]">
-              <Show when={selectedDetail()} keyed fallback={<span class="text-[var(--text-muted)]">No session selected</span>}>
+              <Show
+                when={selectedDetail()}
+                keyed
+                fallback={<span class="text-[var(--text-muted)]">No session selected</span>}
+              >
                 {(detail) => <span>{detail.session.title || detail.session.id}</span>}
               </Show>
             </div>
@@ -1192,9 +1188,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                 Close
               </button>
             </div>
-            <div class="flex-1 overflow-auto px-4 py-4">
-              {SessionsPanel({ variant: 'drawer', class: 'h-full' })}
-            </div>
+            <div class="flex-1 overflow-auto px-4 py-4">{SessionsPanel({ variant: 'drawer', class: 'h-full' })}</div>
           </div>
         </div>
       </Show>
@@ -1213,10 +1207,15 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
             onClick={closeSessionSettings}
           />
           <div class="relative w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-5 shadow-2xl">
-            <div class="mb-4">
-              <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">Session settings</p>
-              <h3 class="text-lg font-semibold text-[var(--text)]">{target.title || target.id}</h3>
-              <p class="text-xs text-[var(--text-muted)]">ID: {target.id}</p>
+            <div class="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">Session settings</p>
+                <h3 class="text-lg font-semibold text-[var(--text)]">{target.title || target.id}</h3>
+                <p class="text-xs text-[var(--text-muted)]">ID: {target.id}</p>
+              </div>
+              <div class="flex-shrink-0">
+                <ThemeToggle />
+              </div>
             </div>
             <div class="space-y-4">
               <div class="space-y-1">
@@ -1237,9 +1236,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                   onInput={(event) => setSessionSettingsModel(event.currentTarget.value)}
                 >
                   <For each={providerConfigFor(sessionSettingsProvider()).models}>
-                    {(option) => (
-                      <option value={option.id}>{option.label}</option>
-                    )}
+                    {(option) => <option value={option.id}>{option.label}</option>}
                   </For>
                 </select>
               </div>
@@ -1275,12 +1272,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   )
 
   const rootClass = () =>
-    [
-      props.class ?? '',
-      isMobile()
-        ? 'flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden'
-        : 'flex h-full flex-col'
-    ]
+    [props.class ?? '', isMobile() ? 'flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden' : 'flex h-full flex-col']
       .filter(Boolean)
       .join(' ')
 
@@ -1299,9 +1291,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           </Show>
         </header>
       </Show>
-      <div class="flex-1 min-h-0">
-        {isMobile() ? MobileLayout : DesktopLayout}
-      </div>
+      <div class="flex-1 min-h-0">{isMobile() ? MobileLayout : DesktopLayout}</div>
       {SessionSettingsModal()}
     </div>
   )
