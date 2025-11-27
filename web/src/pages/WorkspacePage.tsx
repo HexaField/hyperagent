@@ -16,7 +16,7 @@ import {
 } from 'solid-js'
 import DiffViewer from '../components/DiffViewer'
 import CanvasWorkspace, { type CanvasWidgetConfig } from '../components/layout/CanvasWorkspace'
-import OpencodeConsole from '../components/OpencodeConsole'
+import CodingAgentConsole from '../components/CodingAgentConsole'
 import WorkflowDetailView from '../components/WorkflowDetailView'
 import WorkflowLaunchModal from '../components/WorkflowLaunchModal'
 import { WIDGET_TEMPLATES, type WidgetAddEventDetail, type WidgetTemplateId } from '../constants/widgetTemplates'
@@ -386,8 +386,8 @@ function createWidgetConfig(options: CreateWidgetConfigOptions): CanvasWidgetCon
     case 'workspace-sessions':
       return {
         id: instanceId,
-        title: 'Opencode sessions',
-        description: 'Background activity feed',
+        title: 'Coding Agent sessions',
+        description: 'Background Coding Agent activity feed',
         icon: '🕘',
         initialPosition: offsetPosition({ x: 460, y: 520 }, offsetIndex),
         initialSize: { width: 720, height: 520 },
@@ -430,7 +430,7 @@ function WorkspaceEmptyState(props: { onOpenNavigator: () => void }) {
       <h1 class="text-3xl font-semibold">Create your first workspace</h1>
       <p class="max-w-lg text-[var(--text-muted)]">
         Use the canvas navigator drawer to register a repository. Once a workspace exists, it becomes the center of
-        every workflow, terminal session, and opencode transcript.
+        every workflow, terminal session, and Coding Agent transcript.
       </p>
       <button
         class="rounded-2xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white"
@@ -1664,7 +1664,7 @@ function SessionsWidget(props: { workspacePath: string }) {
       setFilter(props.workspacePath)
     }
   })
-  return <OpencodeConsole workspaceFilter={filter()} onWorkspaceFilterChange={setFilter} hideHeader />
+  return <CodingAgentConsole workspaceFilter={filter()} onWorkspaceFilterChange={setFilter} hideHeader />
 }
 
 function formatTimestamp(value: string | null | undefined): string {

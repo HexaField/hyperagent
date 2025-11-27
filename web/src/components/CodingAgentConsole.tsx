@@ -869,6 +869,14 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
               </div>
             )}
           </Show>
+          <Show when={selectedSessionId()} keyed>
+            {(sessionId) => (
+              <div class="mt-1 flex flex-wrap gap-4 text-xs text-[var(--text-muted)]">
+                <span>Provider: {resolveSessionProviderLabel(sessionId)}</span>
+                <span>Model: {resolveSessionModelLabel(sessionId)}</span>
+              </div>
+            )}
+          </Show>
         </div>
         <Show when={!isMobileVariant && selectedSessionId() && !draftingSession()}>
           <button

@@ -38,7 +38,7 @@ export const WIDGET_TEMPLATES: WidgetTemplate[] = [
   },
   {
     id: 'workspace-sessions',
-    label: 'Opencode sessions',
-    description: 'Background activity feed'
+    label: 'Coding Agent sessions',
+    description: 'Background Coding Agent activity feed'
   }
 ]
