@@ -1137,7 +1137,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   )
 
   const rootClass = () =>
-    [props.class ?? '', isMobile() ? 'flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden' : 'flex h-full flex-col']
+    [props.class ?? '', isMobile() ? 'flex h-[calc(100dvh-47px)] flex-col overflow-hidden' : 'flex h-full flex-col']
       .filter(Boolean)
       .join(' ')
 
