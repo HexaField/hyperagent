@@ -921,14 +921,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     for (const part of parts) {
       if (!part) continue
 
-      if (part.type === 'text') {
-        if (typeof part.text === 'string' && part.text.trim()) {
-          elements.push(<p class="mb-1 last:mb-0 break-words">{part.text.trim()}</p>)
-        }
-        continue
-      }
-
-      if (part.type === 'step-finish') {
+      if (part.type === 'text' || part.type === 'step-finish') {
         if (typeof part.text === 'string' && part.text.trim()) {
           elements.push(<p class="mb-1 last:mb-0 break-words">{part.text.trim()}</p>)
         }
@@ -936,16 +929,86 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       }
 
       if (part.type === 'tool') {
-        const toolName = part.tool ?? part.toolName ?? part.name ?? null
+        const toolName = String(part.tool ?? part.toolName ?? part.name ?? '')
         const text = typeof part.text === 'string' && part.text.trim() ? part.text.trim() : null
         const output =
           typeof (part.state?.output ?? part.output) === 'string' ? (part.state?.output ?? part.output) : null
 
-        if (output || text) {
-          elements.push(<ToolRenderer part={part} />)
+        // Diagnostic / file tag parser
+        const tryParseFileTags = (candidate: string | null) => {
+          if (!candidate) return null
+          try {
+            const parsed = JSON.parse(candidate)
+            if (!parsed || typeof parsed !== 'object') return null
+            if (parsed.type === 'file' && typeof parsed.path === 'string') return { type: 'file', value: parsed }
+            if (
+              parsed.type === 'file-diagnostic' &&
+              typeof parsed.path === 'string' &&
+              Array.isArray(parsed.diagnostics)
+            )
+              return { type: 'file-diagnostic', value: parsed }
+            if (parsed.type === 'project-diagnostic' && Array.isArray(parsed.diagnostics))
+              return { type: 'project-diagnostic', value: parsed }
+            if (Array.isArray(parsed) && parsed.every((it) => it && typeof it === 'object')) {
+              if (parsed.every((it) => typeof it.path === 'string' && Array.isArray(it.diagnostics))) {
+                return { type: 'file-diagnostic-array', value: parsed }
+              }
+            }
+            return null
+          } catch {
+            return null
+          }
+        }
+
+        const renderFile = (fileObj: any) => (
+          <div class="mb-2 rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3 text-sm">
+            <div class="font-semibold">File: {fileObj.path}</div>
+            {fileObj.preview ? <pre class="mt-2 whitespace-pre-wrap">{String(fileObj.preview)}</pre> : null}
+          </div>
+        )
+
+        const renderDiagnostics = (diagObj: any) => {
+          const diags: any[] = Array.isArray(diagObj.diagnostics) ? diagObj.diagnostics : []
+          return (
+            <div class="mb-2 rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3 text-sm">
+              <div class="font-semibold">Diagnostics for {diagObj.path ?? 'project'}</div>
+              <ul class="mt-2 list-disc pl-4">
+                {diags.map((d) => (
+                  <li>
+                    <div class="font-semibold">{d.severity ?? d.level ?? 'info'}</div>
+                    <div class="text-xs text-[var(--text-muted)]">{d.message ?? d.msg ?? ''}</div>
+                    {d.range ? <div class="text-xs text-[var(--text-muted)]">{JSON.stringify(d.range)}</div> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
+        }
+
+        // Try parsing file/diagnostic tags used by read/edit/write tools
+        const parsedTags = tryParseFileTags(output ?? text)
+        if (parsedTags) {
+          switch (parsedTags.type) {
+            case 'file':
+              elements.push(renderFile(parsedTags.value))
+              break
+            case 'file-diagnostic':
+              elements.push(renderDiagnostics(parsedTags.value))
+              break
+            case 'project-diagnostic':
+              elements.push(renderDiagnostics(parsedTags.value))
+              break
+            case 'file-diagnostic-array':
+              for (const item of parsedTags.value) elements.push(renderDiagnostics(item))
+              break
+          }
           continue
         }
 
+        // Fallback to ToolRenderer if we didn't recognize file/diagnostic tags
+        if (output || text) {
+          elements.push(<ToolRenderer part={part} />)
+        }
         continue
       }
 

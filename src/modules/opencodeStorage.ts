@@ -221,45 +221,9 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
         const parsed = JSON.parse(raw) as MessageJson
         if (!parsed.id || parsed.sessionID !== sessionId || !parsed.role) continue
         const parts = await readParts(parsed.id)
-        // Build a fallback flat text for older clients, but keep the structured parts
-        const fallbackLines: string[] = []
-        for (const part of parts) {
-          const timeParts: string[] = []
-          if (part.start) timeParts.push(`start: ${part.start}`)
-          if (part.end) timeParts.push(`end: ${part.end}`)
-          const meta = timeParts.length ? ` (${timeParts.join(', ')})` : ''
-
-          if (part.type === 'text' && typeof part.text === 'string') {
-            fallbackLines.push(part.text.trim())
-            continue
-          }
-          if (part.type === 'tool') {
-            const desc = typeof part.text === 'string' && part.text.trim().length ? part.text.trim() : 'Executing tool'
-            fallbackLines.push(`🔧 Tool: ${desc}${meta}`)
-            continue
-          }
-          if (part.type === 'step-start') {
-            const desc = typeof part.text === 'string' && part.text.trim().length ? part.text.trim() : 'Starting step'
-            fallbackLines.push(`▶️ Step: ${desc}${meta}`)
-            continue
-          }
-          if (part.type === 'step-finish') {
-            const desc = typeof part.text === 'string' && part.text.trim().length ? part.text.trim() : 'Step completed'
-            fallbackLines.push(`✅ Step: ${desc}${meta}`)
-            continue
-          }
-          if (part.type === 'file-diff' || part.type === 'diff') {
-            fallbackLines.push(`🧾 Diff: ${typeof part.text === 'string' ? part.text : ''}`)
-            continue
-          }
-          if (typeof part.text === 'string' && part.text.trim().length) {
-            fallbackLines.push(part.text.trim())
-            continue
-          }
-        }
-        const text = fallbackLines.filter(Boolean).join('\n')
-        // Only include the message if it has at least some meaningful structured parts or text
-        if (!text && parts.length === 0) continue
+        // Prefer structured `parts` over any flat fallback text; do not construct a fallback summary.
+        // Only include messages that contain structured parts.
+        if (!parts || parts.length === 0) continue
         messages.push({
           id: parsed.id,
           role: parsed.role,
@@ -267,7 +231,7 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
           completedAt: coerceIsoOrNull(parsed.time?.completed),
           modelId: parsed.modelID ?? parsed.model?.modelID ?? null,
           providerId: parsed.providerID ?? parsed.model?.providerID ?? null,
-          text,
+          text: '',
           parts
         })
       } catch (error: any) {

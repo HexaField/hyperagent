@@ -19,7 +19,7 @@ function renderJson(s: string) {
   }
 }
 
-export default function ToolRenderer(props: { part: any }): JSX.Element {
+export default function ToolRenderer(props: { part: any; showHeader?: boolean }): JSX.Element {
   const part = props.part
   const toolName: string = (part.tool ?? part.toolName ?? part.name ?? '').toString()
   const text: string | null = typeof part.text === 'string' ? part.text : null
@@ -119,12 +119,14 @@ export default function ToolRenderer(props: { part: any }): JSX.Element {
     )
   }
 
+  const showHeader = props.showHeader === undefined ? true : !!props.showHeader
+
   if (output) {
     const lowered = toolName.toLowerCase()
     if (lowered.includes('npm') || (text && /npm/i.test(text))) {
       return (
         <div>
-          <div class="font-medium mb-1">{toolName || 'npm'}</div>
+          {showHeader ? <div class="font-medium mb-1">{toolName || 'npm'}</div> : null}
           {renderNpm(output)}
         </div>
       )
@@ -133,7 +135,7 @@ export default function ToolRenderer(props: { part: any }): JSX.Element {
     if (lowered.includes('git') || (text && /git/i.test(text))) {
       return (
         <div>
-          <div class="font-medium mb-1">{toolName || 'git'}</div>
+          {showHeader ? <div class="font-medium mb-1">{toolName || 'git'}</div> : null}
           {renderGit(output)}
         </div>
       )
@@ -147,7 +149,7 @@ export default function ToolRenderer(props: { part: any }): JSX.Element {
     ) {
       return (
         <div>
-          <div class="font-medium mb-1">{toolName || 'shell'}</div>
+          {showHeader ? <div class="font-medium mb-1">{toolName || 'shell'}</div> : null}
           {renderShell(output)}
         </div>
       )
@@ -156,7 +158,7 @@ export default function ToolRenderer(props: { part: any }): JSX.Element {
     if (part.type === 'file-diff' || part.type === 'diff' || /diff --git/.test(output)) {
       return (
         <div>
-          <div class="font-medium mb-1">Diff</div>
+          {showHeader ? <div class="font-medium mb-1">Diff</div> : null}
           <DiffViewer diffText={output} />
         </div>
       )
@@ -164,7 +166,7 @@ export default function ToolRenderer(props: { part: any }): JSX.Element {
 
     return (
       <div>
-        <div class="font-medium mb-1">{toolName || 'Tool'}</div>
+        {showHeader ? <div class="font-medium mb-1">{toolName || 'Tool'}</div> : null}
         {renderDefault(output)}
       </div>
     )
@@ -173,7 +175,7 @@ export default function ToolRenderer(props: { part: any }): JSX.Element {
   if (text) {
     return (
       <div>
-        <div class="font-medium mb-1">{toolName || 'Tool'}</div>
+        {showHeader ? <div class="font-medium mb-1">{toolName || 'Tool'}</div> : null}
         <p class="mb-1 last:mb-0 break-words">{text}</p>
       </div>
     )
@@ -181,7 +183,7 @@ export default function ToolRenderer(props: { part: any }): JSX.Element {
 
   return (
     <div>
-      <div class="font-medium mb-1">{toolName || 'Tool'}</div>
+      {showHeader ? <div class="font-medium mb-1">{toolName || 'Tool'}</div> : null}
       <p class="text-xs text-[var(--text-muted)]">No output captured.</p>
     </div>
   )

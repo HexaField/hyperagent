@@ -1,8 +1,11 @@
 import type { JSX } from 'solid-js'
-import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js'
+import { For, createEffect, createSignal, onCleanup } from 'solid-js'
 import type { CodingAgentMessage } from '../lib/codingAgent'
+import { extractDiffText, extractToolCalls } from '../lib/messageParts'
 import ToolRenderer from '../lib/ToolRenderer'
+import DiffViewer from './DiffViewer'
 import TodoList from './TodoList'
+import ToolCallList from './ToolCallList'
 
 export type MessageScrollerProps = {
   messages: CodingAgentMessage[]
@@ -15,7 +18,6 @@ export type MessageScrollerProps = {
 export default function MessageScroller(props: MessageScrollerProps) {
   const [container, setContainer] = createSignal<HTMLElement | null>(null)
   const [autoScroll, setAutoScroll] = createSignal(true)
-  let lastCount = 0
   let lastMessageKey: string | null = null
 
   // store per-session scroll positions to restore after remount
@@ -55,7 +57,6 @@ export default function MessageScroller(props: MessageScrollerProps) {
 
   // monitor manual scroll requests
   createEffect(() => {
-    const trigger = props.scrollToBottomTrigger ?? 0
     const el = container()
     if (!el) return
     // Clear any persisted scroll position for this session when user requests auto-scroll
@@ -118,7 +119,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
     if (!el) return
     let mo: MutationObserver | null = null
     try {
-      mo = new MutationObserver((records) => {
+      mo = new MutationObserver(() => {
         if (autoScroll()) scrollToBottom(el, true)
       })
       mo.observe(el, { childList: true, subtree: true, characterData: true })
@@ -154,24 +155,33 @@ export default function MessageScroller(props: MessageScrollerProps) {
     } catch {}
   })
 
-  function renderMetadata(meta: Record<string, unknown>) {
-    const entries = Object.entries(meta).filter(([k]) => !['text', 'type', 'start', 'end', 'id'].includes(k))
-    if (entries.length === 0) return null
+  function DetailsWithToggle(props: { summaryText: string; duration?: string; children?: any }) {
+    const [open, setOpen] = createSignal(false)
     return (
-      <div class="mt-1 rounded-md bg-[var(--bg-muted)] p-2 text-xs text-[var(--text-muted)]">
-        {entries.map(([k, v]) => (
-          <div>
-            <span class="font-semibold">{k}:</span>{' '}
-            {typeof v === 'object' && v !== null ? (
-              <pre class="whitespace-pre-wrap rounded bg-[var(--bg-card)] p-2 text-xs">
-                {JSON.stringify(v, null, 2)}
-              </pre>
-            ) : (
-              <span>{String(v)}</span>
-            )}
+      <details
+        class="mb-2 rounded-md border border-[var(--border)] bg-[var(--bg-card)]"
+        open={false}
+        onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+      >
+        <summary class="px-3 py-2 cursor-pointer flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <div class="font-medium">{props.summaryText}</div>
           </div>
-        ))}
-      </div>
+          <div class="flex items-center gap-2">
+            <div class="text-xs text-[var(--text-muted)]">{props.duration}</div>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              class={`ml-2 transition-transform duration-150 ${open() ? 'rotate-90' : ''}`}
+            >
+              <path fill="currentColor" d="M9 6l6 6-6 6" />
+            </svg>
+          </div>
+        </summary>
+        <div class="p-3">{props.children}</div>
+      </details>
     )
   }
 
@@ -229,6 +239,61 @@ export default function MessageScroller(props: MessageScrollerProps) {
           }
         }
 
+        // Diagnostic / file tag parsers
+        const tryParseFileTags = (candidate: string | null) => {
+          if (!candidate) return null
+          try {
+            const parsed = JSON.parse(candidate)
+            if (!parsed || typeof parsed !== 'object') return null
+            // single file object
+            if (parsed.type === 'file' && typeof parsed.path === 'string') return { type: 'file', value: parsed }
+            if (
+              parsed.type === 'file-diagnostic' &&
+              typeof parsed.path === 'string' &&
+              Array.isArray(parsed.diagnostics)
+            )
+              return { type: 'file-diagnostic', value: parsed }
+            if (parsed.type === 'project-diagnostic' && Array.isArray(parsed.diagnostics))
+              return { type: 'project-diagnostic', value: parsed }
+            // array of diagnostics (common for read/edit/write tools)
+            if (Array.isArray(parsed) && parsed.every((it) => it && typeof it === 'object')) {
+              // if items have 'path' and 'diagnostics'
+              if (parsed.every((it) => typeof it.path === 'string' && Array.isArray(it.diagnostics))) {
+                return { type: 'file-diagnostic-array', value: parsed }
+              }
+            }
+            return null
+          } catch {
+            return null
+          }
+        }
+
+        // Small renderers for file/diagnostic tags
+        const renderFile = (fileObj: any) => (
+          <div class="mb-2 rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3 text-sm">
+            <div class="font-semibold">File: {fileObj.path}</div>
+            {fileObj.preview ? <pre class="mt-2 whitespace-pre-wrap">{String(fileObj.preview)}</pre> : null}
+          </div>
+        )
+
+        const renderDiagnostics = (diagObj: any) => {
+          const diags: any[] = Array.isArray(diagObj.diagnostics) ? diagObj.diagnostics : []
+          return (
+            <div class="mb-2 rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3 text-sm">
+              <div class="font-semibold">Diagnostics for {diagObj.path ?? 'project'}</div>
+              <ul class="mt-2 list-disc pl-4">
+                {diags.map((d) => (
+                  <li>
+                    <div class="font-semibold">{d.severity ?? d.level ?? 'info'}</div>
+                    <div class="text-xs text-[var(--text-muted)]">{d.message ?? d.msg ?? ''}</div>
+                    {d.range ? <div class="text-xs text-[var(--text-muted)]">{JSON.stringify(d.range)}</div> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
+        }
+
         // Prefer parsing when name suggests todo
         if (nameIndicatesTodo) {
           const candidate = output ?? text
@@ -246,14 +311,94 @@ export default function MessageScroller(props: MessageScrollerProps) {
           continue
         }
 
-        if (output || text) {
-          elements.push(<ToolRenderer part={part} />)
+        // Try parsing file/diagnostic tags used by read/edit/write tools
+        const parsedTags = tryParseFileTags(output ?? text)
+        if (parsedTags) {
+          switch (parsedTags.type) {
+            case 'file':
+              elements.push(renderFile(parsedTags.value))
+              break
+            case 'file-diagnostic':
+              elements.push(renderDiagnostics(parsedTags.value))
+              break
+            case 'project-diagnostic':
+              elements.push(renderDiagnostics(parsedTags.value))
+              break
+            case 'file-diagnostic-array':
+              for (const item of parsedTags.value) elements.push(renderDiagnostics(item))
+              break
+          }
+          continue
         }
+
+        // Render tool output inside a collapsed details block by default
+        const durationLabel = (() => {
+          const start = part.start ? String(part.start) : null
+          const end = part.end ? String(part.end) : null
+          if (start && end) {
+            const d = Math.max(0, Date.parse(end) - Date.parse(start))
+            return `${d} ms`
+          }
+          return ''
+        })()
+
+        const summaryText = toolName || (text ?? 'Tool')
+        elements.push(
+          <DetailsWithToggle summaryText={summaryText} duration={durationLabel}>
+            {/* Try to render todos or file/diagnostic tags first */}
+            {nameIndicatesTodo
+              ? (() => {
+                  const candidate = output ?? text
+                  const parsed = tryParseTodos(candidate)
+                  if (parsed) return <TodoList todos={parsed} />
+                  return null
+                })()
+              : null}
+
+            {(() => {
+              const parsedAny = tryParseTodos(output ?? text)
+              if (parsedAny) return <TodoList todos={parsedAny} />
+              return null
+            })()}
+
+            {(() => {
+              const parsedTags = tryParseFileTags(output ?? text)
+              if (!parsedTags) return null
+              switch (parsedTags.type) {
+                case 'file':
+                  return renderFile(parsedTags.value)
+                case 'file-diagnostic':
+                  return renderDiagnostics(parsedTags.value)
+                case 'project-diagnostic':
+                  return renderDiagnostics(parsedTags.value)
+                case 'file-diagnostic-array':
+                  return parsedTags.value.map((item: any) => renderDiagnostics(item))
+              }
+              return null
+            })()}
+
+            {(output || text) && !(nameIndicatesTodo && tryParseTodos(output ?? text)) ? (
+              <ToolRenderer part={part} showHeader={false} />
+            ) : null}
+          </DetailsWithToggle>
+        )
+
+        // If there are multiple tool parts in the message, show a summarized list
+        const toolCalls = extractToolCalls(parts)
+        if (toolCalls.length > 1) {
+          elements.push(<ToolCallList calls={toolCalls as any} />)
+        }
+
         continue
       }
 
       if (part.type === 'file-diff' || part.type === 'diff') {
-        elements.push(<p class="mb-1 last:mb-0 break-words">[diff]</p>)
+        const diffText = extractDiffText(part)
+        elements.push(
+          <div class="mt-2 mb-2">
+            <DiffViewer diffText={diffText ?? undefined} />
+          </div>
+        )
         continue
       }
     }
@@ -271,9 +416,6 @@ export default function MessageScroller(props: MessageScrollerProps) {
               <span>{new Date(message.createdAt).toLocaleString()}</span>
             </header>
             <div class="whitespace-pre-wrap text-[var(--text)] break-words text-sm">{renderMessageParts(message)}</div>
-            <Show when={(message as any).meta} keyed>
-              {(meta) => renderMetadata(meta as Record<string, unknown>)}
-            </Show>
           </article>
         )}
       </For>

@@ -60,6 +60,7 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
   const logsDir = options.logsDir ?? path.join(metadataDir, 'logs')
   const spawnFn = options.spawnFn ?? spawnProcess
   let reconciled = false
+  const runCache: Map<string, RunFile> = new Map()
 
   const ensureReady = async () => {
     if (!reconciled) {
@@ -127,6 +128,8 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
           void (async () => {
             try {
               await writeRun(record)
+              // cache the run immediately so listRuns can observe it
+              runCache.set(ensuredId, record)
               child.unref()
               succeed(record)
             } catch (error) {
@@ -157,6 +160,17 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
             signal: signal ?? null,
             updatedAt: new Date().toISOString()
           })
+          // update cache copy
+          const cached = runCache.get(sessionId)
+          if (cached) {
+            runCache.set(sessionId, {
+              ...cached,
+              status,
+              exitCode: code ?? null,
+              signal: signal ?? null,
+              updatedAt: new Date().toISOString()
+            })
+          }
           if (!settled) {
             settled = true
             const persisted = await readRun(sessionId)
@@ -181,6 +195,7 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
           }
           return
         }
+
         fail(new Error('Opencode run exited before emitting a session id'))
       })
     })
@@ -188,7 +203,13 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
 
   const listRuns = async (): Promise<OpencodeRunRecord[]> => {
     await ensureReady()
-    return await readAllRuns()
+    // prefer cached runs first, then read files to include persisted ones
+    const fileRuns = await readAllRuns()
+    const cached = Array.from(runCache.values())
+    const merged = new Map<string, RunFile>()
+    for (const r of fileRuns) merged.set(r.sessionId, r)
+    for (const r of cached) merged.set(r.sessionId, r)
+    return Array.from(merged.values()).sort((a, b) => b.startedAt.localeCompare(a.startedAt))
   }
 
   const getRun = async (sessionId: string): Promise<OpencodeRunRecord | null> => {
@@ -306,6 +327,7 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
     const filePath = runFilePath(record.sessionId)
     const payload = JSON.stringify(record, null, 2)
     await fs.writeFile(filePath, payload, 'utf-8')
+    runCache.set(record.sessionId, record)
   }
 
   async function updateRun(sessionId: string, patch: Partial<RunFile>): Promise<void> {
@@ -317,6 +339,7 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
       updatedAt: patch.updatedAt ?? new Date().toISOString()
     }
     await writeRun(updated)
+    runCache.set(sessionId, updated)
   }
 
   async function readAllRuns(): Promise<RunFile[]> {
