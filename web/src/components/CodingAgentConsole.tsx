@@ -454,8 +454,10 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       const ta = replyEl()
       if (ta) ta.style.height = 'auto'
       await Promise.all([refetchSessionDetail(), refetchSessions()])
-      // Let the MessageScroller pick up the new messages and auto-scroll if appropriate.
-      setScrollTrigger((v) => v + 1)
+      // Let the MessageScroller pick up the new messages and auto-scroll only if autoscroll is enabled.
+      if (autoScroll()) {
+        setScrollTrigger((v) => v + 1)
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to post message'
       setError(message)
@@ -919,8 +921,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           }}
           onFocus={() => {
             if (SCROLL_DEBUG) console.debug('[OpencodeConsole] reply textarea focus')
-            // Give layout a moment then request scroller to scroll
-            setTimeout(() => setScrollTrigger((v) => v + 1), 120)
+            // Intentionally do not request a scroll when focusing or typing.
           }}
           onBlur={() => {
             if (SCROLL_DEBUG) console.debug('[OpencodeConsole] reply textarea blur')

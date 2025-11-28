@@ -65,9 +65,9 @@ export default function MessageScroller(props: MessageScrollerProps) {
       const sid = props.sessionId
       if (sid) SCROLL_POSITIONS.delete(sid)
     } catch {}
-    // Mark internal autoScroll true so subsequent mutations keep us pinned
-    setAutoScroll(true)
-    props.onAutoScrollChange?.(true)
+    // Do not change the user's autoScroll preference here.
+    // We only clear any persisted scroll position and perform the requested scroll.
+    // The parent (OpencodeConsole) is responsible for flipping its own autoScroll state when the user clicks resume.
     // First attempt a smooth scroll then force an instant settle
     scrollToBottom(el, true)
   })
