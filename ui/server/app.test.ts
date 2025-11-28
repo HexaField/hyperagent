@@ -390,9 +390,9 @@ async function createIntegrationHarness(options?: {
     workflowRunnerGateway: testRunnerGateway.gateway,
     tls: tlsMaterials,
     publicOrigin: options?.publicOrigin,
-    opencodeStorage: options?.opencodeStorage,
-    opencodeRunner: options?.opencodeRunner,
-    opencodeCommandRunner: options?.opencodeCommandRunner,
+    codingAgentStorage: options?.opencodeStorage,
+    codingAgentRunner: options?.opencodeRunner,
+    codingAgentCommandRunner: options?.opencodeCommandRunner,
     webSockets
   })
 
@@ -1496,15 +1496,13 @@ describe('opencode session endpoints', () => {
       expect(payload.session.id).toBe(summary.id)
       expect(cliRunner).toHaveBeenCalledTimes(1)
       const [args, commandOptions] = cliRunner.mock.calls[0] as unknown as [string[], { cwd?: string }]
-      expect(args.slice(0, 2)).toEqual(['run', '--session'])
+      expect(args.slice(0, 2)).toEqual(['run', 'Continue the plan'])
+      expect(args).toContain('--session')
       expect(args).toContain(summary.id)
       expect(args).toContain('--format')
       expect(args).toContain('json')
       expect(args).toContain('--model')
       expect(args).toContain('github-copilot/gpt-5-large')
-      const messageIndex = args.indexOf('--')
-      expect(messageIndex).toBeGreaterThan(-1)
-      expect(args[messageIndex + 1]).toBe('Continue the plan')
       expect(commandOptions).toEqual({ cwd: workspacePath })
       expect(
         (storageStub.getSession as Mock).mock.calls.filter(([id]) => id === summary.id).length

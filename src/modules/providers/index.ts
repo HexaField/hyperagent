@@ -41,13 +41,23 @@ export function listProviders(): ProviderAdapter[] {
 
 // Default provider adapter for the existing opencode CLI-style provider.
 // Keeps behaviour identical to the previous code path.
+const normalizePromptArg = (text: string): string => {
+  if (!text) return ''
+  return text.startsWith('-') ? ` ${text}` : text
+}
+
 registerProvider({
   id: 'opencode',
   label: 'Opencode CLI',
   validateModel: () => true,
-  buildInvocation: ({ sessionId, modelId, text }) => ({
-    cliArgs: ['run', '--session', sessionId, '--format', 'json', '--model', modelId, '--', text]
-  })
+  buildInvocation: ({ sessionId, modelId, text }) => {
+    const cliArgs = ['run', normalizePromptArg(text), '--format', 'json', '--model', modelId]
+    const trimmedSession = sessionId.trim()
+    if (trimmedSession.length) {
+      cliArgs.push('--session', trimmedSession)
+    }
+    return { cliArgs }
+  }
 })
 
 export default { registerProvider, getProviderAdapter, listProviders }
