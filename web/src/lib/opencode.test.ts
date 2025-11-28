@@ -7,7 +7,7 @@ import {
   killOpencodeSession,
   postOpencodeMessage,
   startOpencodeRun
-} from './opencode'
+} from './codingAgent'
 
 vi.mock('./http', () => ({
   fetchJson: vi.fn()
@@ -23,23 +23,23 @@ describe('opencode client helpers', () => {
   it('fetches sessions with optional workspace filter', async () => {
     fetchJsonMock.mockResolvedValue({ sessions: [] })
     await fetchOpencodeSessions({ workspacePath: '/repo' })
-    expect(fetchJsonMock).toHaveBeenCalledWith('/api/opencode/sessions?workspacePath=%2Frepo')
+    expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions?workspacePath=%2Frepo')
   })
 
   it('fetches session details and runs', async () => {
     fetchJsonMock.mockResolvedValue({ session: {}, messages: [] })
     await fetchOpencodeSessionDetail('ses_test')
-    expect(fetchJsonMock).toHaveBeenCalledWith('/api/opencode/sessions/ses_test')
+    expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions/ses_test')
 
     fetchJsonMock.mockResolvedValue({ runs: [] })
     await fetchOpencodeRuns()
-    expect(fetchJsonMock).toHaveBeenCalledWith('/api/opencode/runs')
+    expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/runs')
   })
 
   it('starts and kills sessions', async () => {
     fetchJsonMock.mockResolvedValue({ run: { sessionId: 'ses_test' } })
     await startOpencodeRun({ workspacePath: '/repo', prompt: 'Hello' })
-    expect(fetchJsonMock).toHaveBeenCalledWith('/api/opencode/sessions', {
+    expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ workspacePath: '/repo', prompt: 'Hello' })
@@ -47,14 +47,14 @@ describe('opencode client helpers', () => {
 
     fetchJsonMock.mockResolvedValue({ success: true })
     await killOpencodeSession('ses_test')
-    expect(fetchJsonMock).toHaveBeenCalledWith('/api/opencode/sessions/ses_test/kill', { method: 'POST' })
+    expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions/ses_test/kill', { method: 'POST' })
   })
 
   it('posts messages to sessions', async () => {
     const detail = { session: { id: 'ses_test' }, messages: [] }
     fetchJsonMock.mockResolvedValue(detail)
     await postOpencodeMessage('ses_test', { text: 'Hello' })
-    expect(fetchJsonMock).toHaveBeenCalledWith('/api/opencode/sessions/ses_test/messages', {
+    expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions/ses_test/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ role: 'user', text: 'Hello' })

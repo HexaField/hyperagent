@@ -1485,7 +1485,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 
-  const listOpencodeSessionsHandler: RequestHandler = async (req, res) => {
+  const listCodingAgentSessionsHandler: RequestHandler = async (req, res) => {
     try {
       const workspaceParam = req.query.workspacePath
       const workspacePath = typeof workspaceParam === 'string' ? workspaceParam : undefined
@@ -1502,12 +1502,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       })
       res.json({ sessions: payload })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to list opencode sessions'
+      const message = error instanceof Error ? error.message : 'Failed to list coding agent sessions'
       res.status(500).json({ error: message })
     }
   }
 
-  const getOpencodeSessionHandler: RequestHandler = async (req, res) => {
+  const getCodingAgentSessionHandler: RequestHandler = async (req, res) => {
     const sessionId = req.params.sessionId
     if (!sessionId) {
       res.status(400).json({ error: 'sessionId is required' })
@@ -1531,12 +1531,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         }
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load opencode session'
+      const message = error instanceof Error ? error.message : 'Failed to load coding agent session'
       res.status(500).json({ error: message })
     }
   }
 
-  const listOpencodeRunsHandler: RequestHandler = async (_req, res) => {
+  const listCodingAgentRunsHandler: RequestHandler = async (_req, res) => {
     try {
       const runs = await opencodeRunner.listRuns()
       const payload = runs.map((run) => ({
@@ -1545,12 +1545,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       }))
       res.json({ runs: payload })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to list opencode runs'
+      const message = error instanceof Error ? error.message : 'Failed to list coding agent runs'
       res.status(500).json({ error: message })
     }
   }
 
-  const startOpencodeSessionHandler: RequestHandler = async (req, res) => {
+  const startCodingAgentSessionHandler: RequestHandler = async (req, res) => {
     const { workspacePath, prompt, title, model, providerId: rawProviderId } = req.body ?? {}
     if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
       res.status(400).json({ error: 'workspacePath is required' })
@@ -1584,12 +1584,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       })
       res.status(202).json({ run })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to start opencode session'
+      const message = error instanceof Error ? error.message : 'Failed to start coding agent session'
       res.status(500).json({ error: message })
     }
   }
 
-  const killOpencodeSessionHandler: RequestHandler = async (req, res) => {
+  const killCodingAgentSessionHandler: RequestHandler = async (req, res) => {
     const sessionId = req.params.sessionId
     if (!sessionId) {
       res.status(400).json({ error: 'sessionId is required' })
@@ -1599,7 +1599,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       const success = await opencodeRunner.killRun(sessionId)
       res.json({ success })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to terminate opencode session'
+      const message = error instanceof Error ? error.message : 'Failed to terminate coding agent session'
       res.status(500).json({ error: message })
     }
   }
@@ -2895,10 +2895,10 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   app.post('/api/terminal/sessions', createTerminalSessionHandler)
   app.delete('/api/terminal/sessions/:sessionId', deleteTerminalSessionHandler)
   app.get('/api/coding-agent/providers', listCodingAgentProvidersHandler)
-  app.get('/api/opencode/sessions', listOpencodeSessionsHandler)
-  app.get('/api/opencode/sessions/:sessionId', getOpencodeSessionHandler)
+  app.get('/api/coding-agent/sessions', listCodingAgentSessionsHandler)
+  app.get('/api/coding-agent/sessions/:sessionId', getCodingAgentSessionHandler)
 
-  const postOpencodeMessageHandler: RequestHandler = async (req, res) => {
+  const postCodingAgentMessageHandler: RequestHandler = async (req, res) => {
     const sessionId = req.params.sessionId
     if (!sessionId) {
       res.status(400).json({ error: 'sessionId is required' })
@@ -2964,10 +2964,10 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 
-  app.get('/api/opencode/runs', listOpencodeRunsHandler)
-  app.post('/api/opencode/sessions', startOpencodeSessionHandler)
-  app.post('/api/opencode/sessions/:sessionId/kill', killOpencodeSessionHandler)
-  app.post('/api/opencode/sessions/:sessionId/messages', postOpencodeMessageHandler)
+  app.get('/api/coding-agent/runs', listCodingAgentRunsHandler)
+  app.post('/api/coding-agent/sessions', startCodingAgentSessionHandler)
+  app.post('/api/coding-agent/sessions/:sessionId/kill', killCodingAgentSessionHandler)
+  app.post('/api/coding-agent/sessions/:sessionId/messages', postCodingAgentMessageHandler)
   app.post('/api/agent/run', agentRunHandler)
 
   const sendTerminalPayload = (socket: WebSocketType, payload: Record<string, unknown>) => {

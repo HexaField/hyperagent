@@ -1,6 +1,6 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js'
-import type { OpencodeMessage as CodingAgentMessage } from '../lib/opencode'
+import type { OpencodeMessage as CodingAgentMessage } from '../lib/codingAgent'
 import ToolRenderer from '../lib/ToolRenderer'
 
 export type MessageScrollerProps = {

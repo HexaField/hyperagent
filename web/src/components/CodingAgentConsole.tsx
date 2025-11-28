@@ -5,12 +5,13 @@ import {
   fetchOpencodeSessionDetail,
   fetchOpencodeSessions,
   killOpencodeSession,
+  postOpencodeMessage,
   startOpencodeRun,
   type OpencodeMessage as CodingAgentMessage,
   type OpencodeRunRecord as CodingAgentRunRecord,
   type OpencodeSessionDetail as CodingAgentSessionDetail,
   type OpencodeSessionSummary as CodingAgentSessionSummary
-} from '../lib/opencode'
+} from '../lib/codingAgent'
 import ToolRenderer from '../lib/ToolRenderer'
 import SingleWidgetHeader from './layout/SingleWidgetHeader'
 import MessageScroller from './MessageScroller'
@@ -435,8 +436,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
 
       const sessionId = selectedSessionId()
       if (!sessionId) return
-      const mod = await import('../lib/opencode')
-      await mod.postOpencodeMessage(sessionId, { text })
+      await postOpencodeMessage(sessionId, { text })
       setReplyText('')
       const ta = replyEl()
       if (ta) ta.style.height = 'auto'

@@ -1352,7 +1352,7 @@ describe('opencode session endpoints', () => {
       opencodeStorage: createOpencodeStorage({ rootDir: fixtureRoot }),
       opencodeRunner: runnerStub
     })
-    const resA = await fetch(`${harnessA.baseUrl}/api/opencode/sessions`)
+    const resA = await fetch(`${harnessA.baseUrl}/api/coding-agent/sessions`)
     expect(resA.status).toBe(200)
     const payloadA = (await resA.json()) as { sessions: OpencodeSessionSummary[] }
     expect(payloadA.sessions.length).toBeGreaterThanOrEqual(2)
@@ -1362,7 +1362,7 @@ describe('opencode session endpoints', () => {
       opencodeStorage: createOpencodeStorage({ rootDir: fixtureRoot }),
       opencodeRunner: runnerStub
     })
-    const resB = await fetch(`${harnessB.baseUrl}/api/opencode/sessions`)
+    const resB = await fetch(`${harnessB.baseUrl}/api/coding-agent/sessions`)
     expect(resB.status).toBe(200)
     const payloadB = (await resB.json()) as { sessions: OpencodeSessionSummary[] }
     expect(payloadB.sessions.length).toBe(payloadA.sessions.length)
@@ -1418,7 +1418,7 @@ describe('opencode session endpoints', () => {
     const harness = await createIntegrationHarness({ opencodeStorage: storageStub, opencodeRunner: runnerStub })
 
     try {
-      const startRes = await fetch(`${harness.baseUrl}/api/opencode/sessions`, {
+      const startRes = await fetch(`${harness.baseUrl}/api/coding-agent/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspacePath: summary.workspacePath, prompt: 'Ship it' })
@@ -1428,7 +1428,7 @@ describe('opencode session endpoints', () => {
         expect.objectContaining({ workspacePath: summary.workspacePath, prompt: 'Ship it' })
       )
 
-      const detailRes = await fetch(`${harness.baseUrl}/api/opencode/sessions/${summary.id}`)
+      const detailRes = await fetch(`${harness.baseUrl}/api/coding-agent/sessions/${summary.id}`)
       expect(detailRes.status).toBe(200)
       const detailPayload = (await detailRes.json()) as OpencodeSessionDetail
       expect(detailPayload.session.id).toBe(summary.id)
@@ -1438,7 +1438,7 @@ describe('opencode session endpoints', () => {
       const runsPayload = (await runsRes.json()) as { runs: unknown[] }
       expect(Array.isArray(runsPayload.runs)).toBe(true)
 
-      const killRes = await fetch(`${harness.baseUrl}/api/opencode/sessions/${summary.id}/kill`, { method: 'POST' })
+      const killRes = await fetch(`${harness.baseUrl}/api/coding-agent/sessions/${summary.id}/kill`, { method: 'POST' })
       expect(killRes.status).toBe(200)
       expect(runnerStub.killRun).toHaveBeenCalledWith(summary.id)
     } finally {
@@ -1486,7 +1486,7 @@ describe('opencode session endpoints', () => {
     })
 
     try {
-      const response = await fetch(`${harness.baseUrl}/api/opencode/sessions/${summary.id}/messages`, {
+      const response = await fetch(`${harness.baseUrl}/api/coding-agent/sessions/${summary.id}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ role: 'user', text: 'Continue the plan' })
