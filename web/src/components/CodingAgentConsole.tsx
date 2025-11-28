@@ -1,7 +1,5 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
-import { WIDGET_TEMPLATES } from '../constants/widgetTemplates'
-import { fetchCodingAgentProviders, type CodingAgentProvider } from '../lib/codingAgent'
 import {
   fetchOpencodeRuns,
   fetchOpencodeSessionDetail,
@@ -13,8 +11,9 @@ import {
   type OpencodeSessionDetail as CodingAgentSessionDetail,
   type OpencodeSessionSummary as CodingAgentSessionSummary
 } from '../lib/opencode'
+import ToolRenderer from '../lib/ToolRenderer'
 import SingleWidgetHeader from './layout/SingleWidgetHeader'
-import ThemeToggle from './ThemeToggle'
+import MessageScroller from './MessageScroller'
 
 const REFRESH_INTERVAL_MS = 4000
 const STORAGE_PREFIXES = ['coding-agent-console:v1', 'opencode-console:v1'] as const
@@ -26,7 +25,7 @@ const STATE_EVENT_ALIASES = [STATE_EVENT, 'opencode-console:state'] as const
 const SEARCH_PARAM_SESSION = 'codingAgentSession'
 const LEGACY_SEARCH_PARAM_SESSION = 'opencodeSession'
 const DEFAULT_WORKSPACE_KEY = '__default__'
-const FALLBACK_CODING_AGENT_PROVIDERS: CodingAgentProvider[] = [
+const CODING_AGENT_PROVIDERS = [
   {
     id: 'opencode',
     label: 'Coding Agent (Opencode CLI)',
@@ -37,14 +36,17 @@ const FALLBACK_CODING_AGENT_PROVIDERS: CodingAgentProvider[] = [
       { id: 'openai/gpt-4o-mini', label: 'OpenAI · GPT-4o Mini' }
     ]
   }
-]
-type CodingAgentProviderId = CodingAgentProvider['id']
-type CodingAgentModelOption = CodingAgentProvider['models'][number]
+] as const
+type CodingAgentProviderConfig = (typeof CODING_AGENT_PROVIDERS)[number]
+type CodingAgentProviderId = CodingAgentProviderConfig['id']
 type SessionOverride = {
   providerId?: CodingAgentProviderId
   modelId?: string
 }
-const DEFAULT_PROVIDER = FALLBACK_CODING_AGENT_PROVIDERS[0]
+const PROVIDER_CONFIG_MAP = new Map<CodingAgentProviderId, CodingAgentProviderConfig>(
+  CODING_AGENT_PROVIDERS.map((config) => [config.id, config])
+)
+const DEFAULT_PROVIDER = CODING_AGENT_PROVIDERS[0]
 const DEFAULT_MODEL_ID = DEFAULT_PROVIDER.defaultModelId
 type PersistedState = {
   selectedSessionId?: string | null
@@ -71,6 +73,34 @@ function sessionOverridesKeyFor(workspaceKey: string, prefix: string = STORAGE_P
 
 function legacyModelOverridesKeyFor(workspaceKey: string, prefix: string = STORAGE_PREFIX): string {
   return `${storageKeyFor(workspaceKey, prefix)}${LEGACY_MODEL_OVERRIDES_SUFFIX}`
+}
+
+function normalizeProviderId(value: string | null | undefined): CodingAgentProviderId {
+  if (!value) return DEFAULT_PROVIDER.id
+  return PROVIDER_CONFIG_MAP.has(value as CodingAgentProviderId)
+    ? (value as CodingAgentProviderId)
+    : DEFAULT_PROVIDER.id
+}
+
+function providerConfigFor(providerId: string | null | undefined): CodingAgentProviderConfig {
+  const normalized = normalizeProviderId(providerId)
+  return PROVIDER_CONFIG_MAP.get(normalized) ?? DEFAULT_PROVIDER
+}
+
+function normalizeModelId(providerId: string | null | undefined, value: string | null | undefined): string {
+  const config = providerConfigFor(providerId)
+  if (!value) return config.defaultModelId
+  return config.models.some((option) => option.id === value) ? value : config.defaultModelId
+}
+
+function providerLabel(providerId: string | null | undefined): string {
+  return providerConfigFor(providerId).label
+}
+
+function modelLabel(providerId: string | null | undefined, modelId: string | null | undefined): string {
+  const config = providerConfigFor(providerId)
+  const normalizedModel = normalizeModelId(config.id, modelId)
+  return config.models.find((option) => option.id === normalizedModel)?.label ?? normalizedModel
 }
 
 function readStoredState(workspaceKey: string): PersistedState {
@@ -143,6 +173,64 @@ function updateSearchParam(name: string, value: string | null | undefined) {
   } catch {}
 }
 
+function readSessionOverrides(workspaceKey: string): Record<string, SessionOverride> {
+  if (typeof window === 'undefined') return {}
+  for (const prefix of STORAGE_PREFIXES) {
+    const parsed = parseSessionOverrides(window.localStorage.getItem(sessionOverridesKeyFor(workspaceKey, prefix)))
+    if (parsed) return parsed
+  }
+  for (const prefix of STORAGE_PREFIXES) {
+    const parsed = parseLegacyModelOverrides(
+      window.localStorage.getItem(legacyModelOverridesKeyFor(workspaceKey, prefix))
+    )
+    if (parsed) return parsed
+  }
+  return {}
+}
+
+function parseSessionOverrides(raw: string | null): Record<string, SessionOverride> | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    const next: Record<string, SessionOverride> = {}
+    for (const [sessionId, value] of Object.entries(parsed)) {
+      if (!sessionId || typeof value !== 'object' || value === null) continue
+      const entry = value as Partial<SessionOverride> & { providerId?: string; modelId?: string }
+      const providerId = entry.providerId ? normalizeProviderId(entry.providerId) : undefined
+      const modelId = entry.modelId ? String(entry.modelId) : undefined
+      if (providerId || modelId) {
+        next[sessionId] = {
+          ...(providerId ? { providerId } : {}),
+          ...(modelId ? { modelId: normalizeModelId(providerId ?? DEFAULT_PROVIDER.id, modelId) } : {})
+        }
+      }
+    }
+    return next
+  } catch {
+    return null
+  }
+}
+
+function parseLegacyModelOverrides(raw: string | null): Record<string, SessionOverride> | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    const next: Record<string, SessionOverride> = {}
+    for (const [sessionId, modelId] of Object.entries(parsed)) {
+      if (!sessionId || typeof modelId !== 'string') continue
+      next[sessionId] = {
+        providerId: DEFAULT_PROVIDER.id,
+        modelId: normalizeModelId(DEFAULT_PROVIDER.id, modelId)
+      }
+    }
+    return next
+  } catch {
+    return null
+  }
+}
+
 function persistSessionOverrides(workspaceKey: string, overrides: Record<string, SessionOverride>) {
   if (typeof window === 'undefined') return
   try {
@@ -173,101 +261,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   }
   const workspaceKey = createMemo(() => normalizeWorkspaceKey(workspaceForFetch()))
 
-  const [providerResource] = createResource<CodingAgentProvider[]>(fetchCodingAgentProviders)
-  const providers = createMemo<CodingAgentProvider[]>(() => {
-    const fetched = providerResource() ?? []
-    return fetched.length ? fetched : FALLBACK_CODING_AGENT_PROVIDERS
-  })
-  const providerMap = createMemo(() => new Map(providers().map((provider) => [provider.id, provider])))
-  const defaultProvider = createMemo<CodingAgentProvider>(() => providers()[0] ?? DEFAULT_PROVIDER)
-  const defaultProviderId = (): CodingAgentProviderId =>
-    (defaultProvider()?.id ?? DEFAULT_PROVIDER.id) as CodingAgentProviderId
-
-  const normalizeProviderId = (value: string | null | undefined): CodingAgentProviderId => {
-    if (value && providerMap().has(value as CodingAgentProviderId)) {
-      return value as CodingAgentProviderId
-    }
-    return defaultProviderId()
-  }
-
-  const providerConfigFor = (providerId: string | null | undefined): CodingAgentProvider => {
-    const normalized = normalizeProviderId(providerId)
-    return providerMap().get(normalized) ?? defaultProvider() ?? DEFAULT_PROVIDER
-  }
-
-  const normalizeModelId = (providerId: string | null | undefined, value: string | null | undefined): string => {
-    const config = providerConfigFor(providerId)
-    if (!value) return config.defaultModelId
-    return config.models.some((option: CodingAgentModelOption) => option.id === value) ? value : config.defaultModelId
-  }
-
-  const providerLabel = (providerId: string | null | undefined): string => providerConfigFor(providerId).label
-
-  const modelLabel = (providerId: string | null | undefined, modelId: string | null | undefined): string => {
-    const config = providerConfigFor(providerId)
-    const normalizedModel = normalizeModelId(config.id, modelId)
-    return (
-      config.models.find((option: CodingAgentModelOption) => option.id === normalizedModel)?.label ?? normalizedModel
-    )
-  }
-
-  const parseSessionOverrides = (raw: string | null): Record<string, SessionOverride> | null => {
-    if (!raw) return null
-    try {
-      const parsed = JSON.parse(raw)
-      if (!parsed || typeof parsed !== 'object') return null
-      const next: Record<string, SessionOverride> = {}
-      for (const [sessionId, value] of Object.entries(parsed)) {
-        if (!sessionId || typeof value !== 'object' || value === null) continue
-        const entry = value as Partial<SessionOverride> & { providerId?: string; modelId?: string }
-        const providerId = entry.providerId ? normalizeProviderId(entry.providerId) : undefined
-        const hasModel = typeof entry.modelId === 'string' && entry.modelId.trim().length > 0
-        if (!providerId && !hasModel) continue
-        const resolvedProviderId = providerId ?? defaultProviderId()
-        next[sessionId] = {
-          ...(providerId ? { providerId } : {}),
-          ...(hasModel ? { modelId: normalizeModelId(resolvedProviderId, entry.modelId!) } : {})
-        }
-      }
-      return next
-    } catch {
-      return null
-    }
-  }
-
-  const parseLegacyModelOverrides = (raw: string | null): Record<string, SessionOverride> | null => {
-    if (!raw) return null
-    try {
-      const parsed = JSON.parse(raw)
-      if (!parsed || typeof parsed !== 'object') return null
-      const fallbackProviderId = defaultProviderId()
-      const next: Record<string, SessionOverride> = {}
-      for (const [sessionId, modelId] of Object.entries(parsed)) {
-        if (!sessionId || typeof modelId !== 'string') continue
-        next[sessionId] = {
-          providerId: fallbackProviderId,
-          modelId: normalizeModelId(fallbackProviderId, modelId)
-        }
-      }
-      return next
-    } catch {
-      return null
-    }
-  }
-
-  const readSessionOverrides = (key: string): Record<string, SessionOverride> => {
-    if (typeof window === 'undefined') return {}
-    for (const prefix of STORAGE_PREFIXES) {
-      const parsed = parseSessionOverrides(window.localStorage.getItem(sessionOverridesKeyFor(key, prefix)))
-      if (parsed) return parsed
-    }
-    for (const prefix of STORAGE_PREFIXES) {
-      const parsed = parseLegacyModelOverrides(window.localStorage.getItem(legacyModelOverridesKeyFor(key, prefix)))
-      if (parsed) return parsed
-    }
-    return {}
-  }
-
   const [sessions, { refetch: refetchSessions }] = createResource(workspaceForFetch, async (value) => {
     const trimmed = value?.trim()
     return await fetchOpencodeSessions(trimmed ? { workspacePath: trimmed } : undefined)
@@ -281,11 +274,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       return await fetchOpencodeSessionDetail(sessionId)
     }
   )
-  const initialDraftProviderId = defaultProviderId()
-  const initialDraftModelId = providerConfigFor(initialDraftProviderId).defaultModelId
-  const [draftProviderId, setDraftProviderId] = createSignal<CodingAgentProviderId>(initialDraftProviderId)
-  const [draftModelId, setDraftModelId] = createSignal<string>(initialDraftModelId)
-  const draftProviderConfig = createMemo(() => providerConfigFor(normalizeProviderId(draftProviderId())))
 
   createEffect(() => {
     const handle = setInterval(() => {
@@ -304,17 +292,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     onCleanup(() => clearInterval(handle))
   })
 
-  createEffect(() => {
-    providers()
-    const current = draftProviderId()
-    const normalized = normalizeProviderId(current)
-    if (current !== normalized) {
-      setDraftProviderId(normalized)
-      return
-    }
-    setDraftModelId((prev) => normalizeModelId(normalized, prev))
-  })
-
   const [replyText, setReplyText] = createSignal('')
   const [error, setError] = createSignal<string | null>(null)
   const [replying, setReplying] = createSignal(false)
@@ -331,7 +308,8 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [sessionOverrides, setSessionOverrides] = createSignal<Record<string, SessionOverride>>({})
   const [killingSessionId, setKillingSessionId] = createSignal<string | null>(null)
   let drawerHideTimeout: number | null = null
-  let lastScrollDistanceFromBottom = 0
+
+  let lastMessageCount = 0
 
   const closeSessionSettings = () => setSessionSettingsId(null)
 
@@ -366,9 +344,22 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     }, 260)
   }
 
-  const [messagesEl, setMessagesEl] = createSignal<HTMLElement | null>(null)
   const [replyEl, setReplyEl] = createSignal<HTMLTextAreaElement | null>(null)
   const [autoScroll, setAutoScroll] = createSignal(true)
+  const [scrollTrigger, setScrollTrigger] = createSignal(0)
+  const SCROLL_DEBUG = false
+
+  if (SCROLL_DEBUG) {
+    createEffect(() => {
+      console.debug('[OpencodeConsole] selectedSessionId', selectedSessionId())
+    })
+    createEffect(() => {
+      console.debug('[OpencodeConsole] messages.length', messages().length)
+    })
+    createEffect(() => {
+      console.debug('[OpencodeConsole] sessionDetail', sessionDetail())
+    })
+  }
 
   function resizeReply() {
     const ta = replyEl()
@@ -390,12 +381,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     })
   }
 
-  const resetDraftConfiguration = (providerId?: CodingAgentProviderId) => {
-    const normalized = providerId ? normalizeProviderId(providerId) : defaultProviderId()
-    setDraftProviderId(normalized)
-    setDraftModelId(providerConfigFor(normalized).defaultModelId)
-  }
-
   function startDraftSession() {
     const workspacePath = workspaceForFetch().trim()
     if (!workspacePath) {
@@ -403,7 +388,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       return
     }
     setError(null)
-    resetDraftConfiguration()
     setDraftingSession(true)
     setDraftingWorkspace(workspacePath)
     setPendingSessionId(null)
@@ -434,18 +418,16 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         if (!workspacePath) {
           throw new Error('Workspace path is required')
         }
-        const providerId = normalizeProviderId(draftProviderId())
-        const modelId = normalizeModelId(providerId, draftModelId())
+        const providerId = DEFAULT_PROVIDER.id
+        const modelId = DEFAULT_MODEL_ID
         const run = await startOpencodeRun({
           workspacePath,
           prompt: text,
-          model: modelId,
-          providerId
+          model: modelId
         })
         setSessionOverrides((prev) => ({
           ...prev,
           [run.sessionId]: {
-            ...(prev[run.sessionId] ?? {}),
             providerId,
             modelId: normalizeModelId(providerId, run.model ?? modelId)
           }
@@ -467,18 +449,13 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       const sessionId = selectedSessionId()
       if (!sessionId) return
       const mod = await import('../lib/opencode')
-      const modelId = resolveSessionModel(sessionId)
-      await mod.postOpencodeMessage(sessionId, { text, modelId })
+      await mod.postOpencodeMessage(sessionId, { text })
       setReplyText('')
       const ta = replyEl()
       if (ta) ta.style.height = 'auto'
       await Promise.all([refetchSessionDetail(), refetchSessions()])
-      const el = messagesEl()
-      if (el) {
-        try {
-          el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-        } catch {}
-      }
+      // Let the MessageScroller pick up the new messages and auto-scroll if appropriate.
+      setScrollTrigger((v) => v + 1)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to post message'
       setError(message)
@@ -524,7 +501,9 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     const entries = sessions()
     const pending = pendingSessionId()
     if (!entries || entries.length === 0) {
-      setSelectedSessionId(null)
+      // Do not clear `selectedSessionId` on transient empty results from polling.
+      // Clearing the selection causes the session detail to be nulled and the
+      // conversation scroller to remount, which resets scroll position.
       if (pending) setPendingSessionId(null)
       return
     }
@@ -594,6 +573,16 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       } catch {}
     }
 
+    let focusHandler: ((e: FocusEvent) => void) | null = null
+    if (SCROLL_DEBUG) {
+      focusHandler = (e: FocusEvent) => {
+        try {
+          console.debug('[OpencodeConsole] focusin', { target: e.target, active: document.activeElement })
+        } catch {}
+      }
+      window.addEventListener('focusin', focusHandler as EventListener, true)
+    }
+
     onCleanup(() => {
       if (typeof mq.removeEventListener === 'function') mq.removeEventListener('change', handler)
       else mq.removeListener(handler)
@@ -605,6 +594,11 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       try {
         window.removeEventListener('keydown', keydownHandler)
       } catch {}
+      if (focusHandler) {
+        try {
+          window.removeEventListener('focusin', focusHandler as EventListener, true)
+        } catch {}
+      }
     })
   })
 
@@ -621,9 +615,9 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
 
   let lastSessionOverridesWorkspace: string | null = null
   createEffect(() => {
-    providers()
     const key = workspaceKey()
     if (!key || typeof window === 'undefined') return
+    if (lastSessionOverridesWorkspace === key) return
     lastSessionOverridesWorkspace = key
     setSessionOverrides(readSessionOverrides(key))
   })
@@ -641,36 +635,9 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   })
   const messages = createMemo<CodingAgentMessage[]>(() => selectedDetail()?.messages ?? [])
 
-  createEffect(() => {
-    messages()
-    const el = messagesEl()
-    if (!el) return
-    const shouldAutoScroll = autoScroll()
-    requestAnimationFrame(() => {
-      try {
-        if (shouldAutoScroll) {
-          el.scrollTop = el.scrollHeight
-          lastScrollDistanceFromBottom = 0
-        } else {
-          const desiredTop = Math.max(0, el.scrollHeight - el.clientHeight - lastScrollDistanceFromBottom)
-          el.scrollTop = desiredTop
-        }
-      } catch {}
-    })
-  })
+  // Message scrolling is handled by <MessageScroller />
 
-  createEffect(() => {
-    const el = messagesEl()
-    if (!el) return
-    const handler = () => {
-      const distance = Math.max(0, el.scrollHeight - el.clientHeight - el.scrollTop)
-      const atBottom = distance <= 4
-      setAutoScroll(atBottom)
-      lastScrollDistanceFromBottom = distance
-    }
-    el.addEventListener('scroll', handler)
-    onCleanup(() => el.removeEventListener('scroll', handler))
-  })
+  // MessageScroller handles scroll, mutations and debug logging when enabled
 
   const sessionRows = createMemo<SessionRow[]>(() => {
     const currentSessions = sessions() ?? []
@@ -704,50 +671,21 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   })
 
   const resolveSessionProvider = (sessionId: string | null | undefined): CodingAgentProviderId => {
-    const fallbackProviderId = defaultProviderId()
-    if (!sessionId) return fallbackProviderId
-    const detail = sessionDetail()
-    const detailProvider =
-      detail?.session.id === sessionId && typeof detail.session.providerId === 'string'
-        ? detail.session.providerId
-        : null
+    if (!sessionId) return DEFAULT_PROVIDER.id
     const overrides = sessionOverrides()
-    const session = sessionRows().find((row) => row.id === sessionId)
-    const candidates = [
-      session?.providerId,
-      session?.run?.providerId,
-      detailProvider,
-      overrides?.[sessionId]?.providerId
-    ]
-    const resolved = candidates
-      .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
-      .find((candidate) => candidate.length)
-    return resolved ? normalizeProviderId(resolved) : fallbackProviderId
+    const override = overrides?.[sessionId]
+    if (override?.providerId) return normalizeProviderId(override.providerId)
+    return DEFAULT_PROVIDER.id
   }
 
   const resolveSessionModel = (sessionId: string | null | undefined): string => {
     const providerId = resolveSessionProvider(sessionId)
     if (!sessionId) return normalizeModelId(providerId, null)
     const overrides = sessionOverrides()
-    const overrideModel = overrides?.[sessionId]?.modelId
-    if (overrideModel) return normalizeModelId(providerId, overrideModel)
+    const override = overrides?.[sessionId]
+    if (override?.modelId) return normalizeModelId(providerId, override.modelId)
     const session = sessionRows().find((row) => row.id === sessionId)
-    const detail = sessionDetail()
-    const detailSession = detail?.session.id === sessionId ? detail.session : null
-    const detailModel = detailSession && typeof detailSession.modelId === 'string' ? detailSession.modelId : null
-    const detailMessageModel =
-      detailSession && Array.isArray(detail?.messages)
-        ? (detail.messages
-            .slice()
-            .reverse()
-            .map((message) => (typeof message.modelId === 'string' ? message.modelId.trim() : ''))
-            .find((candidate) => candidate.length) ?? null)
-        : null
-    const candidates = [session?.run?.model, session?.modelId, detailModel, detailMessageModel]
-    const resolved = candidates
-      .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
-      .find((candidate) => candidate.length)
-    return normalizeModelId(providerId, resolved)
+    return normalizeModelId(providerId, session?.run?.model)
   }
 
   const resolveSessionProviderLabel = (sessionId: string | null | undefined): string => {
@@ -771,13 +709,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     if (!targetId) return
     const providerId = normalizeProviderId(sessionSettingsProvider())
     const modelId = normalizeModelId(providerId, sessionSettingsModel())
-    setSessionOverrides((prev) => ({
-      ...prev,
-      [targetId]: {
-        ...(prev[targetId] ?? {}),
-        modelId
-      }
-    }))
+    setSessionOverrides((prev) => ({ ...prev, [targetId]: { providerId, modelId } }))
     closeSessionSettings()
   }
 
@@ -878,12 +810,8 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         class={`absolute flex h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg ${positionClass}`}
         classList={{ hidden: autoScroll() }}
         onClick={() => {
-          const el = messagesEl()
-          if (el) {
-            try {
-              el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-            } catch {}
-          }
+          // request MessageScroller to scroll to bottom
+          setScrollTrigger((v) => v + 1)
           setAutoScroll(true)
         }}
         title="Scroll to bottom"
@@ -893,21 +821,14 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     )
 
     const transcriptList = (
-      <div ref={(el) => setMessagesEl(el ?? null)} class={transcriptScrollerClass}>
-        <For each={messages()}>
-          {(message) => (
-            <article class={articleClass}>
-              <header class="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
-                <span class="uppercase tracking-wide">{message.role}</span>
-                <span>{new Date(message.createdAt).toLocaleString()}</span>
-              </header>
-              <div class="whitespace-pre-wrap text-[var(--text)] break-words text-sm">
-                {renderMessageParts(message)}
-              </div>
-            </article>
-          )}
-        </For>
-      </div>
+      <MessageScroller
+        messages={messages()}
+        class={transcriptScrollerClass}
+        onAutoScrollChange={setAutoScroll}
+        scrollToBottomTrigger={scrollTrigger()}
+        debug={SCROLL_DEBUG}
+        sessionId={selectedSessionId()}
+      />
     )
 
     const infoBlock = (
@@ -947,14 +868,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
               </div>
             )}
           </Show>
-          <Show when={selectedSessionId()} keyed>
-            {(sessionId) => (
-              <div class="mt-1 flex flex-wrap gap-4 text-xs text-[var(--text-muted)]">
-                <span>Provider: {resolveSessionProviderLabel(sessionId)}</span>
-                <span>Model: {resolveSessionModelLabel(sessionId)}</span>
-              </div>
-            )}
-          </Show>
         </div>
         <Show when={!isMobileVariant && selectedSessionId() && !draftingSession()}>
           <button
@@ -969,24 +882,23 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       </div>
     )
 
-    const noTranscriptBlock = isMobileVariant ? (
+    const noTranscriptBlock = (
       <div class="flex h-full min-h-0 items-center justify-center text-sm text-[var(--text-muted)]">
         No transcript yet.
       </div>
-    ) : (
-      <p class="text-sm text-[var(--text-muted)]">No transcript yet.</p>
     )
 
-    const transcriptBlock = hasMessages() ? (
+    // Always render the MessageScroller to keep its DOM stable across polling/refetches.
+    // Show a lightweight placeholder when there are no messages.
+    const transcriptBlock = (
       <div class={transcriptContainerClass}>
         {transcriptList}
+        <Show when={messages().length === 0}>{noTranscriptBlock}</Show>
         {scrollToBottomButton('right-3 bottom-3')}
       </div>
-    ) : (
-      noTranscriptBlock
     )
 
-    const replyFormClass = 'flex items-end gap-2'
+    const replyFormClass = isMobileVariant ? 'flex items-end gap-2 shrink-0 pt-3' : 'mt-3 flex items-end gap-2'
 
     const replyForm = (
       <form
@@ -1006,12 +918,12 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
             resizeReply()
           }}
           onFocus={() => {
-            const el = messagesEl()
-            if (el) {
-              try {
-                setTimeout(() => el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }), 120)
-              } catch {}
-            }
+            if (SCROLL_DEBUG) console.debug('[OpencodeConsole] reply textarea focus')
+            // Give layout a moment then request scroller to scroll
+            setTimeout(() => setScrollTrigger((v) => v + 1), 120)
+          }}
+          onBlur={() => {
+            if (SCROLL_DEBUG) console.debug('[OpencodeConsole] reply textarea blur')
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -1032,61 +944,11 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       </form>
     )
 
-    const providerFieldId = isMobileVariant ? 'draft-provider-mobile' : 'draft-provider-desktop'
-    const modelFieldId = isMobileVariant ? 'draft-model-mobile' : 'draft-model-desktop'
-
-    const draftSessionConfig = (
-      <Show when={draftingSession()}>
-        <div class="space-y-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-4">
-          <div class="grid gap-3 sm:grid-cols-2">
-            <div class="space-y-2">
-              <label class="text-sm font-semibold text-[var(--text)]" for={providerFieldId}>
-                Provider
-              </label>
-              <select
-                id={providerFieldId}
-                class="w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-                value={draftProviderConfig().id}
-                onInput={(event) => {
-                  const nextProvider = normalizeProviderId(event.currentTarget.value)
-                  setDraftProviderId(nextProvider)
-                  setDraftModelId(providerConfigFor(nextProvider).defaultModelId)
-                }}
-                disabled={replying()}
-              >
-                <For each={providers()}>{(provider) => <option value={provider.id}>{provider.label}</option>}</For>
-              </select>
-            </div>
-            <div class="space-y-2">
-              <label class="text-sm font-semibold text-[var(--text)]" for={modelFieldId}>
-                Model
-              </label>
-              <select
-                id={modelFieldId}
-                class="w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-                value={draftModelId()}
-                onInput={(event) => setDraftModelId(event.currentTarget.value)}
-                disabled={replying()}
-              >
-                <For each={draftProviderConfig().models}>
-                  {(option) => <option value={option.id}>{option.label}</option>}
-                </For>
-              </select>
-            </div>
-          </div>
-          <p class="text-xs text-[var(--text-muted)]">Provider is locked once the session starts.</p>
-        </div>
-      </Show>
-    )
-
     if (isMobileVariant) {
       return (
         <section class={sectionClass}>
           <div class="flex-1 min-h-0">{transcriptBlock}</div>
-          <div class="shrink-0 space-y-3 pt-3">
-            {draftSessionConfig}
-            {replyForm}
-          </div>
+          <div class="shrink-0 pt-3">{replyForm}</div>
         </section>
       )
     }
@@ -1094,9 +956,8 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     return (
       <section class={sectionClass}>
         {infoBlock}
-        {draftSessionConfig}
         {transcriptBlock}
-        <div class="mt-3">{replyForm}</div>
+        {replyForm}
       </section>
     )
   }
@@ -1154,21 +1015,8 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         const output =
           typeof (part.state?.output ?? part.output) === 'string' ? (part.state?.output ?? part.output) : null
 
-        if (output) {
-          const preview = output.length > 2000 ? output.slice(0, 2000) + '\n\n…(truncated)' : output
-          elements.push(
-            <div>
-              <div class="font-medium">Tool{toolName ? ` (${toolName})` : ''}</div>
-              <pre class="rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-2 text-xs overflow-auto">
-                {preview}
-              </pre>
-            </div>
-          )
-          continue
-        }
-
-        if (text) {
-          elements.push(<p class="mb-1 last:mb-0 break-words">{text}</p>)
+        if (output || text) {
+          elements.push(<ToolRenderer part={part} />)
           continue
         }
 
@@ -1228,44 +1076,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                   >
                     ☰
                   </button>
-                  <Show when={widgetMenuOpen()}>
-                    <>
-                      <button
-                        type="button"
-                        class="fixed inset-0"
-                        aria-label="Close widget menu"
-                        onClick={() => setWidgetMenuOpen(false)}
-                      />
-                      <div class="fixed left-0 right-0 top-14 z-50 max-w-none border-t border-b border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-lg">
-                        <For each={WIDGET_TEMPLATES}>
-                          {(template) => (
-                            <button
-                              type="button"
-                              class="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-[var(--bg-muted)]"
-                              onClick={() => {
-                                try {
-                                  if (isMobile()) {
-                                    window.dispatchEvent(
-                                      new CustomEvent('workspace:open-single-widget', {
-                                        detail: { templateId: template.id }
-                                      })
-                                    )
-                                  } else {
-                                    window.dispatchEvent(
-                                      new CustomEvent('workspace:add-widget', { detail: { templateId: template.id } })
-                                    )
-                                  }
-                                } catch {}
-                                setWidgetMenuOpen(false)
-                              }}
-                            >
-                              {template.label}
-                            </button>
-                          )}
-                        </For>
-                      </div>
-                    </>
-                  </Show>
                 </div>
                 <h2 class="text-base font-semibold">Sessions</h2>
               </div>
@@ -1280,43 +1090,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
             <div class="flex-1 overflow-auto px-4 py-4">{SessionsPanel({ variant: 'drawer', class: 'h-full' })}</div>
           </div>
         </div>
-      </Show>
-
-      <Show when={widgetMenuOpen()}>
-        <>
-          <button
-            type="button"
-            class="fixed inset-0 z-50"
-            aria-label="Close widget menu"
-            onClick={() => setWidgetMenuOpen(false)}
-          />
-          <div class="fixed left-0 right-0 top-14 z-50 max-w-none border-t border-b border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-lg">
-            <For each={WIDGET_TEMPLATES}>
-              {(template) => (
-                <button
-                  type="button"
-                  class="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-[var(--bg-muted)]"
-                  onClick={() => {
-                    try {
-                      if (isMobile()) {
-                        window.dispatchEvent(
-                          new CustomEvent('workspace:open-single-widget', { detail: { templateId: template.id } })
-                        )
-                      } else {
-                        window.dispatchEvent(
-                          new CustomEvent('workspace:add-widget', { detail: { templateId: template.id } })
-                        )
-                      }
-                    } catch {}
-                    setWidgetMenuOpen(false)
-                  }}
-                >
-                  {template.label}
-                </button>
-              )}
-            </For>
-          </div>
-        </>
       </Show>
     </div>
   )
@@ -1333,23 +1106,30 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
             onClick={closeSessionSettings}
           />
           <div class="relative w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-5 shadow-2xl">
-            <div class="mb-4 flex items-start justify-between gap-3">
-              <div>
-                <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">Session settings</p>
-                <h3 class="text-lg font-semibold text-[var(--text)]">{target.title || target.id}</h3>
-                <p class="text-xs text-[var(--text-muted)]">ID: {target.id}</p>
-              </div>
-              <div class="flex-shrink-0">
-                <ThemeToggle />
-              </div>
+            <div class="mb-4">
+              <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">Session settings</p>
+              <h3 class="text-lg font-semibold text-[var(--text)]">{target.title || target.id}</h3>
+              <p class="text-xs text-[var(--text-muted)]">ID: {target.id}</p>
             </div>
             <div class="space-y-4">
-              <div class="space-y-1">
-                <p class="text-sm font-semibold text-[var(--text)]">Provider</p>
-                <div class="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2 text-sm">
-                  <span>{providerLabel(sessionSettingsProvider())}</span>
-                  <span class="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">Locked</span>
-                </div>
+              <div class="space-y-2">
+                <label class="text-sm font-semibold text-[var(--text)]" for="session-settings-provider">
+                  Provider
+                </label>
+                <select
+                  id="session-settings-provider"
+                  class="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2 text-sm"
+                  value={sessionSettingsProvider()}
+                  onInput={(event) => {
+                    const nextProvider = normalizeProviderId(event.currentTarget.value)
+                    setSessionSettingsProvider(nextProvider)
+                    setSessionSettingsModel((current) => normalizeModelId(nextProvider, current))
+                  }}
+                >
+                  <For each={CODING_AGENT_PROVIDERS}>
+                    {(provider) => <option value={provider.id}>{provider.label}</option>}
+                  </For>
+                </select>
               </div>
               <div class="space-y-2">
                 <label class="text-sm font-semibold text-[var(--text)]" for="session-settings-model">
