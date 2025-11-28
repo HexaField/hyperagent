@@ -47,8 +47,8 @@ export const createProjectsRepository = (options: {
   }
 
   const getByRepositoryPath = (repoPath: string): ProjectRecord | null => {
-    const normalized = path.resolve(repoPath)
-    return computeRecords().find((project) => path.resolve(project.repositoryPath) === normalized) ?? null
+    const normalized = canonicalizePath(repoPath)
+    return computeRecords().find((project) => canonicalizePath(project.repositoryPath) === normalized) ?? null
   }
 
   return {
@@ -59,7 +59,7 @@ export const createProjectsRepository = (options: {
 }
 
 export const deriveProjectId = (repositoryPath: string): string => {
-  const normalized = path.resolve(repositoryPath)
+  const normalized = canonicalizePath(repositoryPath)
   const hash = crypto.createHash('sha1').update(normalized).digest('hex')
   return `${PROJECT_ID_PREFIX}-${hash}`
 }
@@ -74,7 +74,7 @@ const hasHyperagentFolder = (repositoryPath: string): boolean => {
 }
 
 const buildProjectRecord = (registration: RadicleRegistrationRecord): ProjectRecord | null => {
-  const repoPath = path.resolve(registration.repositoryPath)
+  const repoPath = canonicalizePath(registration.repositoryPath)
   let stats: fs.Stats
   try {
     stats = fs.statSync(repoPath)
@@ -95,5 +95,26 @@ const buildProjectRecord = (registration: RadicleRegistrationRecord): ProjectRec
     repositoryProvider: 'radicle',
     defaultBranch: registration.defaultBranch ?? 'main',
     createdAt: registration.registeredAt
+  }
+}
+
+const canonicalizePath = (repositoryPath: string): string => {
+  const resolved = path.resolve(repositoryPath)
+  const real = resolveRealpath(resolved)
+  return real ?? resolved
+}
+
+const resolveRealpath = (target: string): string | null => {
+  try {
+    if (typeof fs.realpathSync.native === 'function') {
+      return fs.realpathSync.native(target)
+    }
+  } catch {
+    // ignore native errors and fall back
+  }
+  try {
+    return fs.realpathSync(target)
+  } catch {
+    return null
   }
 }

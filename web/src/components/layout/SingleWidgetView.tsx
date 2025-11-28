@@ -134,7 +134,6 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
     if (!id || !list.some((w) => w.id === id)) setSelectedId(list[0].id)
   })
 
-
   // helper to open a single widget directly (used when selecting from widget menu)
   const openSingleWidgetByTemplate = (templateId: string) => {
     try {

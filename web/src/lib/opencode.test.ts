@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { fetchJson } from './http'
 import {
   fetchOpencodeRuns,
   fetchOpencodeSessionDetail,
@@ -8,6 +7,7 @@ import {
   postOpencodeMessage,
   startOpencodeRun
 } from './codingAgent'
+import { fetchJson } from './http'
 
 vi.mock('./http', () => ({
   fetchJson: vi.fn()

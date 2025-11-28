@@ -1,4 +1,4 @@
-import type { OpencodeMessage, OpencodeSessionDetail } from '../opencodeStorage'
+import type { ConversationMessage, SessionDetail } from './types'
 
 export type ProviderAdapter = {
   id: string
@@ -18,8 +18,8 @@ export type ProviderAdapter = {
     modelId: string
     text: string
     workspacePath?: string
-    messages?: OpencodeMessage[]
-    session?: OpencodeSessionDetail | null
+    messages?: ConversationMessage[]
+    session?: SessionDetail | null
   }) => { cliArgs?: string[]; payload?: unknown }
 }
 

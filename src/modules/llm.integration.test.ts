@@ -16,7 +16,10 @@ const providers: Array<{ provider: Provider; cmd: string; model: string }> = [
   { provider: 'goose', cmd: 'goose', model: 'github_copilot/gpt-5-mini' }
 ]
 
-describe('LLM CLI integrations', () => {
+const runCliTests = process.env.RUN_LLM_CLI_TESTS === 'true'
+const describeCli = runCliTests ? describe : describe.skip
+
+describeCli('LLM CLI integrations', () => {
   for (const p of providers) {
     it(`provider ${p.provider}`, async () => {
       const exists = commandExists(p.cmd)

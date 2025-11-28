@@ -6,9 +6,10 @@ export default defineConfig({
   test: {
     watch: false,
     passWithNoTests: true,
-    exclude: ['node_modules/**', 'dist/**', 'external/**', '**/.{tmp,temp}/**', '**/.tmp/**'],
+    exclude: ['node_modules/**', 'dist/**', 'external/**', '**/.{tmp,temp}/**', '**/.tmp/**', '**/.tests/**'],
     environment: 'node',
-    environmentMatchGlobs: [['web/**', 'jsdom']]
+    environmentMatchGlobs: [['web/**', 'jsdom']],
+    setupFiles: ['./vitest.setup.ts']
   },
   server: {
     deps: {

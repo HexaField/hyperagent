@@ -1,8 +1,8 @@
-import { spawnSync } from 'child_process'
 import crypto from 'crypto'
 import os from 'os'
 import type { PersistenceContext, PersistenceModule, Timestamp } from './database'
 import { callLLM, type LLMResponse, type LLMStreamCallback, type Provider } from './llm'
+import { createProviderSession } from './provider/session'
 
 type WorkerStatus = 'working' | 'done' | 'blocked'
 type VerifierVerdict = 'instruct' | 'approve' | 'fail'
@@ -114,8 +114,9 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
   const sessionDir = options.sessionDir ?? os.tmpdir() // Use OS temp dir if none provided
   const streamCallback = options.onStream
 
-  spawnSync('opencode', ['session', 'create', workerSessionId], { cwd: sessionDir })
-  spawnSync('opencode', ['session', 'create', verifierSessionId], { cwd: sessionDir })
+  // Create provider sessions (delegates to configured provider implementation)
+  createProviderSession(workerSessionId, sessionDir)
+  createProviderSession(verifierSessionId, sessionDir)
 
   const rounds: ConversationRound[] = []
 

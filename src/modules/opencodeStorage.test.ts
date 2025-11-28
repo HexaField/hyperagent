@@ -2,7 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createOpencodeStorage, resolveDefaultOpencodeRoot } from './opencodeStorage'
+import { createOpencodeStorage, resolveDefaultOpencodeRoot } from './provider'
 
 const fixtureRoot = path.join(process.cwd(), 'tests/fixtures/opencode-storage')
 

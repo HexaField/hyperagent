@@ -1,6 +1,7 @@
 import { Route, Router } from '@solidjs/router'
 import { cleanup, fireEvent, render, screen, waitFor } from '@solidjs/testing-library'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { WorkspaceSelectionProvider } from '../../../contexts/WorkspaceSelectionContext'
 import { fetchJson } from '../../../lib/http'
 import RepositoryNavigator from '../RepositoryNavigator'
 
@@ -71,7 +72,7 @@ function setupApiMocks(params?: { projects?: ProjectPayload[]; radicle?: Radicle
 function renderNavigator() {
   window.history.replaceState({}, '', '/')
   return render(() => (
-    <Router root={(props) => <>{props.children}</>}>
+    <Router root={(props) => <WorkspaceSelectionProvider>{props.children}</WorkspaceSelectionProvider>}>
       <Route path="/" component={RepositoryNavigator} />
     </Router>
   ))

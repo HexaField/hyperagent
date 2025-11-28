@@ -18,13 +18,13 @@ import type { WebSocketServer as WebSocketServerType, RawData as WsRawData } fro
 import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../../src/modules/agent'
 import type { CodeServerController, CodeServerHandle, CodeServerOptions } from '../../src/modules/codeServer'
 import type { TerminalSessionRecord } from '../../src/modules/database'
-import type { OpencodeRunner } from '../../src/modules/opencodeRunner'
 import {
   createOpencodeStorage,
   type OpencodeSessionDetail,
   type OpencodeSessionSummary,
   type OpencodeStorage
 } from '../../src/modules/opencodeStorage'
+import type { OpencodeRunner } from '../../src/modules/provider'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import type { LiveTerminalSession, TerminalModule } from '../../src/modules/terminal'
 import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from '../../src/modules/workflowRunnerGateway'
@@ -1433,7 +1433,7 @@ describe('opencode session endpoints', () => {
       const detailPayload = (await detailRes.json()) as OpencodeSessionDetail
       expect(detailPayload.session.id).toBe(summary.id)
 
-      const runsRes = await fetch(`${harness.baseUrl}/api/opencode/runs`)
+      const runsRes = await fetch(`${harness.baseUrl}/api/coding-agent/runs`)
       expect(runsRes.status).toBe(200)
       const runsPayload = (await runsRes.json()) as { runs: unknown[] }
       expect(Array.isArray(runsPayload.runs)).toBe(true)
@@ -1506,7 +1506,9 @@ describe('opencode session endpoints', () => {
       expect(messageIndex).toBeGreaterThan(-1)
       expect(args[messageIndex + 1]).toBe('Continue the plan')
       expect(commandOptions).toEqual({ cwd: workspacePath })
-      expect((storageStub.getSession as Mock).mock.calls.filter(([id]) => id === summary.id).length).toBeGreaterThanOrEqual(2)
+      expect(
+        (storageStub.getSession as Mock).mock.calls.filter(([id]) => id === summary.id).length
+      ).toBeGreaterThanOrEqual(2)
     } finally {
       await harness.close()
       await fs.rm(workspaceRoot, { recursive: true, force: true })
@@ -1521,6 +1523,7 @@ function createFakeOpencodeRunnerStub(): OpencodeRunner {
     workspacePath: '/workspace/repo-alpha',
     prompt: 'Ship it',
     title: 'Alpha Session',
+    providerId: null,
     model: null,
     logFile: '/tmp/log',
     startedAt: new Date(0).toISOString(),

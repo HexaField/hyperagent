@@ -4,6 +4,8 @@ import fs from 'fs'
 import ollama from 'ollama'
 import os from 'os'
 import path from 'path'
+import { runProviderInvocation, runProviderInvocationStream } from './providerRunner'
+import { getProviderAdapter } from './providers'
 
 const modelSettings = {
   'llama3.2': {
@@ -46,6 +48,7 @@ export type CallLLMOptions = {
   sessionId?: string
   sessionDir?: string
   onStream?: LLMStreamCallback
+  signal?: AbortSignal
 }
 
 // Simple in-memory session stores. For ollama we keep a rolling chat history per session.
@@ -355,7 +358,8 @@ async function callOpencodeCLI(
   model: string,
   sessionId?: string,
   sessionDir?: string,
-  onChunk?: (chunk: string) => void
+  onChunk?: (chunk: string) => void,
+  signal?: AbortSignal
 ): Promise<string> {
   // We assume `opencode` CLI is installed. We'll pass the combined prompt as a positional argument.
   const combined = `${systemPrompt}\n${userQuery}`
@@ -394,12 +398,62 @@ async function callOpencodeCLI(
   }
   console.log(args)
   let emitted = false
-  const res = await runCLI('opencode', args, '', sessionDir, {
-    onStdout: (chunk) => {
-      emitted = true
-      if (chunk) onChunk?.(chunk)
+  // If an adapter exists for 'opencode', prefer to use it so provider logic
+  // can be centralized. Otherwise fall back to running the opencode CLI directly.
+  const adapter = getProviderAdapter('opencode')
+  let res = ''
+  if (adapter && adapter.buildInvocation) {
+    const invocation = adapter.buildInvocation({
+      sessionId: sessionId ?? '',
+      modelId: modelToUse,
+      text: combined,
+      workspacePath: sessionDir
+    })
+    const opencodeRunnerWrapper = async (args: string[], options?: any) => {
+      const out = await runCLI('opencode', args, '', sessionDir, {
+        onStdout: (chunk) => {
+          emitted = true
+          if (chunk) onChunk?.(chunk)
+        }
+      })
+      return { stdout: out, stderr: '' }
     }
-  })
+    if (onChunk) {
+      // stream chunks using the provider stream generator
+      let accumulated = ''
+      try {
+        for await (const chunk of runProviderInvocationStream(invocation, {
+          cwd: sessionDir,
+          opencodeCommandRunner: opencodeRunnerWrapper,
+          signal
+        })) {
+          accumulated += chunk
+          if (chunk) onChunk?.(chunk)
+        }
+      } catch (e) {
+        // If streaming fails, fall back to non-streaming invocation
+        const result = await runProviderInvocation(invocation, {
+          cwd: sessionDir,
+          opencodeCommandRunner: opencodeRunnerWrapper
+        })
+        accumulated = (result && result.stdout) || (result && result.responseText) || accumulated
+      }
+      res = accumulated
+    } else {
+      const result = await runProviderInvocation(invocation, {
+        cwd: sessionDir,
+        opencodeCommandRunner: opencodeRunnerWrapper
+      })
+      res = (result && result.stdout) || (result && result.responseText) || ''
+    }
+  } else {
+    res = await runCLI('opencode', args, '', sessionDir, {
+      onStdout: (chunk) => {
+        emitted = true
+        if (chunk) onChunk?.(chunk)
+      }
+    })
+  }
   console.log('Opencode CLI output:', res.split('\n').map(extractOrCreateJSON))
 
   const finalRes = res
@@ -580,6 +634,7 @@ export async function callLLM(
   let sessionId: string | undefined = undefined
   let sessionDir: string | undefined = undefined
   let onStream: LLMStreamCallback | undefined = undefined
+  let signal: AbortSignal | undefined = undefined
   if (typeof optionsOrRetries === 'number') {
     retries = optionsOrRetries
   } else if (typeof optionsOrRetries === 'object' && optionsOrRetries) {
@@ -587,6 +642,7 @@ export async function callLLM(
     if (typeof optionsOrRetries.sessionId === 'string') sessionId = optionsOrRetries.sessionId
     if (typeof optionsOrRetries.sessionDir === 'string') sessionDir = optionsOrRetries.sessionDir
     if (typeof optionsOrRetries.onStream === 'function') onStream = optionsOrRetries.onStream
+    if (optionsOrRetries.signal) signal = optionsOrRetries.signal
   }
   // Ensure session meta exists when sessionId provided
   if (sessionId) {
@@ -617,10 +673,61 @@ export async function callLLM(
       : undefined
     try {
       let raw = ''
-      if (provider === 'ollama') {
+      // Prefer provider adapters where available. If an adapter exists for the
+      // requested provider, use it via the provider runner. Otherwise fall back
+      // to provider-specific CLI helpers.
+      const adapter = getProviderAdapter(provider)
+      if (adapter && adapter.buildInvocation) {
+        const combined = `${systemPrompt}\n${userQuery}`
+        const invocation = adapter.buildInvocation({
+          sessionId: sessionId ?? '',
+          modelId: String(model),
+          text: combined,
+          workspacePath: sessionDir
+        })
+        const runnerWrapper = async (args: string[], options?: any) => {
+          // default wrapper uses runCLI to execute a command and return stdout
+          const out = await runCLI('opencode', args, '', sessionDir, {
+            onStdout: (chunk) => {
+              if (chunk) emitChunk?.(chunk)
+            }
+          })
+          return { stdout: out, stderr: '' }
+        }
+        if (emitChunk) {
+          let acc = ''
+          try {
+            for await (const chunk of runProviderInvocationStream(invocation, {
+              cwd: sessionDir,
+              opencodeCommandRunner: runnerWrapper,
+              signal
+            })) {
+              acc += chunk
+              if (chunk) emitChunk(chunk)
+            }
+          } catch (e) {
+            const invocationResult = await runProviderInvocation(invocation, {
+              cwd: sessionDir,
+              opencodeCommandRunner: runnerWrapper
+            })
+            acc =
+              (invocationResult && invocationResult.stdout) ||
+              (invocationResult && invocationResult.responseText) ||
+              acc
+          }
+          raw = acc
+        } else {
+          const invocationResult = await runProviderInvocation(invocation, {
+            cwd: sessionDir,
+            opencodeCommandRunner: runnerWrapper
+          })
+          raw =
+            (invocationResult && invocationResult.stdout) || (invocationResult && invocationResult.responseText) || ''
+        }
+      } else if (provider === 'ollama') {
         raw = await callOllama(systemPrompt, userQuery, model, sessionId, sessionDir, emitChunk)
       } else if (provider === 'opencode') {
-        raw = await callOpencodeCLI(systemPrompt, userQuery, String(model), sessionId, sessionDir, emitChunk)
+        raw = await callOpencodeCLI(systemPrompt, userQuery, String(model), sessionId, sessionDir, emitChunk, signal)
       } else if (provider === 'goose') {
         raw = await callGooseCLI(systemPrompt, userQuery, String(model), sessionId, sessionDir, emitChunk)
       } else if (provider === 'ollama-cli') {

@@ -1,4 +1,25 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+const { getProviderAdapterMock } = vi.hoisted(() => ({
+  getProviderAdapterMock: vi.fn(() => null)
+}))
+vi.mock('./providers', () => ({
+  getProviderAdapter: getProviderAdapterMock
+}))
+
+const { runProviderInvocationMock, runProviderInvocationStreamMock } = vi.hoisted(() => ({
+  runProviderInvocationMock: vi.fn(async () => ({ stdout: '{"answer":"fallback","status":"ok"}' })),
+  runProviderInvocationStreamMock: vi.fn(() =>
+    (async function* () {
+      return
+    })()
+  )
+}))
+
+vi.mock('./providerRunner', () => ({
+  runProviderInvocation: runProviderInvocationMock,
+  runProviderInvocationStream: runProviderInvocationStreamMock
+}))
 
 // Mock the ollama module used in llm.ts; capture messages for session history validation
 const ollamaMessagesPerCall: any[] = []
@@ -35,6 +56,25 @@ vi.mock('./llm', async () => {
 })
 
 import * as llm from './llm'
+
+const resetProviderMocks = () => {
+  getProviderAdapterMock.mockReset()
+  getProviderAdapterMock.mockImplementation(() => null)
+  runProviderInvocationMock.mockReset()
+  runProviderInvocationMock.mockResolvedValue({ stdout: '{"answer":"fallback","status":"ok"}' })
+  runProviderInvocationStreamMock.mockReset()
+  runProviderInvocationStreamMock.mockImplementation(() =>
+    (async function* () {
+      return
+    })()
+  )
+}
+
+resetProviderMocks()
+
+afterEach(() => {
+  resetProviderMocks()
+})
 
 describe('callLLM', () => {
   it('returns JSON code-fence from ollama provider', async () => {
@@ -77,5 +117,30 @@ describe('callLLM', () => {
     expect(ollamaMessagesPerCall[1][1].role).toBe('user')
     expect(ollamaMessagesPerCall[1][2].role).toBe('assistant')
     expect(ollamaMessagesPerCall[1][ollamaMessagesPerCall[1].length - 1].role).toBe('user')
+  })
+
+  it('streams provider adapter output and propagates AbortSignal', async () => {
+    const adapterInvocation = { cliArgs: ['run', '--json'] }
+    const adapter = { buildInvocation: vi.fn(() => adapterInvocation) }
+    getProviderAdapterMock.mockImplementation((provider) => (provider === 'opencode' ? adapter : null))
+    runProviderInvocationStreamMock.mockImplementation(() =>
+      (async function* () {
+        yield '{"answer":"adapter-stream","status":"ok"}'
+      })()
+    )
+    const controller = new AbortController()
+    const streamed: llm.LLMStreamEvent[] = []
+    const res = await llm.callLLM('system', 'user', 'opencode', 'github-copilot/mock', {
+      onStream: (event) => streamed.push(event),
+      signal: controller.signal
+    })
+    expect(streamed.length).toBeGreaterThan(0)
+    expect(streamed[0]?.chunk).toContain('adapter-stream')
+    expect(runProviderInvocationStreamMock).toHaveBeenCalledWith(
+      adapterInvocation,
+      expect.objectContaining({ signal: controller.signal })
+    )
+    expect(res.success).toBe(true)
+    expect(res.data).toContain('adapter-stream')
   })
 })

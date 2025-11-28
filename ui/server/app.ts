@@ -3,20 +3,6 @@ type WebSocketBindings = {
   WebSocketServer: typeof WebSocketServerType
 }
 
-type OpencodeCommandOptions = {
-  cwd?: string
-}
-
-export type OpencodeCommandResult = {
-  stdout: string
-  stderr: string
-}
-
-export type OpencodeCommandRunner = (
-  args: string[],
-  options?: OpencodeCommandOptions
-) => Promise<OpencodeCommandResult | void>
-
 const loadWebSocketModule = async (): Promise<WebSocketBindings> => {
   const nodeRequire = eval('require') as NodeJS.Require
   const tryImport = async (specifier: string) => {
@@ -94,15 +80,21 @@ import {
 } from '../../src/modules/database'
 import { listBranchCommits, listGitBranches } from '../../src/modules/git'
 import type { Provider } from '../../src/modules/llm'
+import type {
+  CodingAgentCommandOptions,
+  CodingAgentCommandResult,
+  CodingAgentCommandRunner
+} from '../../src/modules/opencodeCommandRunner'
 import {
-  createOpencodeRunner,
-  DEFAULT_OPENCODE_MODEL,
-  DEFAULT_OPENCODE_PROVIDER,
-  type OpencodeRunner
-} from '../../src/modules/opencodeRunner'
-import { getProviderAdapter } from '../../src/modules/providers'
+  createCodingAgentRunner,
+  createCodingAgentStorage,
+  DEFAULT_CODING_AGENT_MODEL,
+  DEFAULT_CODING_AGENT_PROVIDER,
+  type CodingAgentRunner,
+  type CodingAgentStorage
+} from '../../src/modules/provider'
 import { runProviderInvocation } from '../../src/modules/providerRunner'
-import { createOpencodeStorage, type OpencodeStorage } from '../../src/modules/opencodeStorage'
+import { getProviderAdapter, listProviders } from '../../src/modules/providers'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import { createDiffModule } from '../../src/modules/review/diff'
 import { createReviewEngineModule } from '../../src/modules/review/engine'
@@ -130,13 +122,9 @@ const WORKFLOW_AGENT_PROVIDER =
   normalizeWorkflowProvider(process.env.WORKFLOW_AGENT_PROVIDER) ?? ('opencode' as Provider)
 const WORKFLOW_AGENT_MODEL = process.env.WORKFLOW_AGENT_MODEL ?? 'github-copilot/gpt-5-mini'
 const WORKFLOW_AGENT_MAX_ROUNDS = parsePositiveInteger(process.env.WORKFLOW_AGENT_MAX_ROUNDS)
-const CODING_AGENT_PROVIDER_ID = DEFAULT_OPENCODE_PROVIDER
-const FALLBACK_OPENCODE_MODEL_IDS = [
-  'github-copilot/gpt-5-mini',
-  'github-copilot/gpt-4o',
-  'openai/gpt-4o-mini'
-]
-const KNOWN_OPENCODE_MODEL_LABELS: Record<string, string> = {
+const CODING_AGENT_PROVIDER_ID = DEFAULT_CODING_AGENT_PROVIDER
+const FALLBACK_CODING_AGENT_MODEL_IDS = ['github-copilot/gpt-5-mini', 'github-copilot/gpt-4o', 'openai/gpt-4o-mini']
+const KNOWN_CODING_AGENT_MODEL_LABELS: Record<string, string> = {
   'github-copilot/gpt-5-mini': 'GitHub Copilot · GPT-5 Mini',
   'github-copilot/gpt-4o': 'GitHub Copilot · GPT-4o',
   'openai/gpt-4o-mini': 'OpenAI · GPT-4o Mini'
@@ -390,9 +378,9 @@ export type CreateServerOptions = {
   tls?: TlsConfig
   publicOrigin?: string
   corsOrigin?: string
-  opencodeStorage?: OpencodeStorage
-  opencodeRunner?: OpencodeRunner
-  opencodeCommandRunner?: OpencodeCommandRunner
+  codingAgentStorage?: CodingAgentStorage
+  codingAgentRunner?: CodingAgentRunner
+  codingAgentCommandRunner?: CodingAgentCommandRunner
   webSockets?: WebSocketBindings
 }
 
@@ -478,11 +466,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       repository: persistence.terminalSessions
     })
 
-  const opencodeStorage = options.opencodeStorage ?? createOpencodeStorage()
-  const opencodeRunner = options.opencodeRunner ?? createOpencodeRunner()
-  const opencodeCommandRunner =
-    options.opencodeCommandRunner ??
-    (async (args: string[], commandOptions?: OpencodeCommandOptions) => await runOpencodeCli(args, commandOptions))
+  const codingAgentStorage = options.codingAgentStorage ?? createCodingAgentStorage()
+  const codingAgentRunner = options.codingAgentRunner ?? createCodingAgentRunner()
+  const codingAgentCommandRunner =
+    options.codingAgentCommandRunner ??
+    (async (args: string[], commandOptions?: CodingAgentCommandOptions) =>
+      await runCodingAgentCli(args, commandOptions))
 
   const gitAuthor = detectGitAuthorFromCli()
   const commitAuthor = {
@@ -825,10 +814,10 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     return trimmed.length ? trimmed : '/'
   }
 
-  async function runOpencodeCli(
+  async function runCodingAgentCli(
     args: string[],
-    commandOptions?: OpencodeCommandOptions
-  ): Promise<OpencodeCommandResult> {
+    commandOptions?: CodingAgentCommandOptions
+  ): Promise<CodingAgentCommandResult> {
     return await new Promise((resolve, reject) => {
       const child = spawn('opencode', args, {
         cwd: commandOptions?.cwd,
@@ -1402,7 +1391,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
 
   const formatCodingAgentModelLabel = (modelId: string): string => {
     if (!modelId) return 'Unknown model'
-    const known = KNOWN_OPENCODE_MODEL_LABELS[modelId]
+    const known = KNOWN_CODING_AGENT_MODEL_LABELS[modelId]
     if (known) return known
     const [providerSegment, nameSegment] = modelId.split('/', 2)
     if (!nameSegment) {
@@ -1411,14 +1400,17 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     return `${titleizeModelSegment(providerSegment)} · ${titleizeModelSegment(nameSegment)}`
   }
 
-  const parseOpencodeModelList = (raw: string | null | undefined): string[] => {
+  const parseCodingAgentModelList = (raw: string | null | undefined): string[] => {
     if (!raw) return []
     const trimmed = raw.trim()
     if (!trimmed.length) return []
     try {
       const parsed = JSON.parse(trimmed)
       if (Array.isArray(parsed)) {
-        return parsed.filter((entry): entry is string => typeof entry === 'string').map((entry) => entry.trim()).filter(Boolean)
+        return parsed
+          .filter((entry): entry is string => typeof entry === 'string')
+          .map((entry) => entry.trim())
+          .filter(Boolean)
       }
       if (Array.isArray((parsed as any).models)) {
         return ((parsed as any).models as unknown[])
@@ -1429,10 +1421,13 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     } catch {
       // fall back to newline parsing
     }
-    return trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    return trimmed
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
   }
 
-  const ensureOpencodeModelList = (models: string[]): string[] => {
+  const ensureCodingAgentModelList = (models: string[]): string[] => {
     const seen = new Set<string>()
     const append = (value: string) => {
       const normalized = value.trim()
@@ -1441,30 +1436,30 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
     models.filter((value) => typeof value === 'string').forEach(append)
     if (!seen.size) {
-      FALLBACK_OPENCODE_MODEL_IDS.forEach(append)
+      FALLBACK_CODING_AGENT_MODEL_IDS.forEach(append)
     }
-    if (!seen.has(DEFAULT_OPENCODE_MODEL)) {
-      append(DEFAULT_OPENCODE_MODEL)
+    if (!seen.has(DEFAULT_CODING_AGENT_MODEL)) {
+      append(DEFAULT_CODING_AGENT_MODEL)
     }
     const ordered = Array.from(seen)
-    const prioritized = ordered.filter((id) => id !== DEFAULT_OPENCODE_MODEL)
-    return [DEFAULT_OPENCODE_MODEL, ...prioritized]
+    const prioritized = ordered.filter((id) => id !== DEFAULT_CODING_AGENT_MODEL)
+    return [DEFAULT_CODING_AGENT_MODEL, ...prioritized]
   }
 
-  const listOpencodeModelIds = async (): Promise<string[]> => {
+  const listCodingAgentModelIds = async (): Promise<string[]> => {
     try {
-      const result = await opencodeCommandRunner(['models'])
+      const result = await codingAgentCommandRunner(['models'])
       const stdout = result?.stdout ?? ''
-      return ensureOpencodeModelList(parseOpencodeModelList(stdout))
+      return ensureCodingAgentModelList(parseCodingAgentModelList(stdout))
     } catch (error) {
       console.warn('Failed to list coding agent models via opencode CLI, falling back to defaults.', error)
-      return ensureOpencodeModelList([])
+      return ensureCodingAgentModelList([])
     }
   }
 
-  const describeOpencodeProvider = async (): Promise<CodingAgentProviderDescription> => {
-    const modelIds = await listOpencodeModelIds()
-    const defaultModelId = modelIds[0] ?? DEFAULT_OPENCODE_MODEL
+  const describeDefaultCodingAgentProvider = async (): Promise<CodingAgentProviderDescription> => {
+    const modelIds = await listCodingAgentModelIds()
+    const defaultModelId = modelIds[0] ?? DEFAULT_CODING_AGENT_MODEL
     return {
       id: CODING_AGENT_PROVIDER_ID,
       label: 'Coding Agent (Opencode CLI)',
@@ -1474,7 +1469,16 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   }
 
   const listCodingAgentProviders = async (): Promise<CodingAgentProviderDescription[]> => {
-    return [await describeOpencodeProvider()]
+    const adapters = listProviders()
+    const descriptions: CodingAgentProviderDescription[] = []
+    for (const adapter of adapters) {
+      if (adapter.id === CODING_AGENT_PROVIDER_ID) {
+        descriptions.push(await describeDefaultCodingAgentProvider())
+        continue
+      }
+      descriptions.push({ id: adapter.id, label: adapter.label, defaultModelId: '', models: [] })
+    }
+    return descriptions
   }
 
   const listCodingAgentProvidersHandler: RequestHandler = async (_req, res) => {
@@ -1492,8 +1496,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       const workspaceParam = req.query.workspacePath
       const workspacePath = typeof workspaceParam === 'string' ? workspaceParam : undefined
       const [sessions, runs] = await Promise.all([
-        opencodeStorage.listSessions({ workspacePath }),
-        opencodeRunner.listRuns()
+        codingAgentStorage.listSessions({ workspacePath }),
+        codingAgentRunner.listRuns()
       ])
       const runIndex = new Map(runs.map((run) => [run.sessionId, run]))
       const payload = sessions.map((session) => {
@@ -1516,12 +1520,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       return
     }
     try {
-      const detail = await opencodeStorage.getSession(sessionId)
+      const detail = await codingAgentStorage.getSession(sessionId)
       if (!detail) {
         res.status(404).json({ error: 'Unknown session' })
         return
       }
-      const run = await opencodeRunner.getRun(sessionId)
+      const run = await codingAgentRunner.getRun(sessionId)
       const providerId = run?.providerId ?? detail.session.providerId ?? null
       const modelId = run?.model ?? detail.session.modelId ?? null
       res.json({
@@ -1540,7 +1544,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
 
   const listCodingAgentRunsHandler: RequestHandler = async (_req, res) => {
     try {
-      const runs = await opencodeRunner.listRuns()
+      const runs = await codingAgentRunner.listRuns()
       const payload = runs.map((run) => ({
         ...run,
         providerId: run.providerId ?? CODING_AGENT_PROVIDER_ID
@@ -1563,7 +1567,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       return
     }
     const normalizedWorkspace = workspacePath.trim()
-    const providerId = typeof rawProviderId === 'string' && rawProviderId.trim().length ? rawProviderId.trim() : CODING_AGENT_PROVIDER_ID
+    const providerId =
+      typeof rawProviderId === 'string' && rawProviderId.trim().length ? rawProviderId.trim() : CODING_AGENT_PROVIDER_ID
     const adapter = getProviderAdapter(providerId)
     if (!adapter) {
       res.status(400).json({ error: `Unsupported provider: ${providerId}` })
@@ -1577,7 +1582,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       return
     }
     try {
-      const resolvedModel = typeof model === 'string' && model.trim().length ? model.trim() : DEFAULT_OPENCODE_MODEL
+      const resolvedModel = typeof model === 'string' && model.trim().length ? model.trim() : DEFAULT_CODING_AGENT_MODEL
       if (adapter.validateModel) {
         const ok = await Promise.resolve(adapter.validateModel(resolvedModel))
         if (!ok) {
@@ -1585,7 +1590,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
           return
         }
       }
-      const run = await opencodeRunner.startRun({
+      const run = await codingAgentRunner.startRun({
         workspacePath: normalizedWorkspace,
         prompt: prompt.trim(),
         title: typeof title === 'string' ? title : undefined,
@@ -1606,7 +1611,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       return
     }
     try {
-      const success = await opencodeRunner.killRun(sessionId)
+      const success = await codingAgentRunner.killRun(sessionId)
       res.json({ success })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to terminate coding agent session'
@@ -2923,14 +2928,14 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       return
     }
     try {
-      const existing = await opencodeStorage.getSession(sessionId)
+      const existing = await codingAgentStorage.getSession(sessionId)
       if (!existing) {
         res.status(404).json({ error: 'Unknown session' })
         return
       }
-      const run = await opencodeRunner.getRun(sessionId)
+      const run = await codingAgentRunner.getRun(sessionId)
       if (role !== 'user') {
-        console.warn(`[opencode] Unsupported role "${role}" for session ${sessionId}; sending as user message.`)
+        console.warn(`[coding-agent] Unsupported role "${role}" for session ${sessionId}; sending as user message.`)
       }
       try {
         await ensureWorkspaceDirectory(existing.session.workspacePath)
@@ -2943,19 +2948,21 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         .reverse()
         .map((message) => (typeof message.providerId === 'string' ? message.providerId.trim() : ''))
         .find((candidate) => candidate.length)
-      const resolvedProviderId = [existing.session.providerId, run?.providerId, providerFromMessages]
-        .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
-        .find((candidate) => candidate.length)
-        ?.trim() ?? CODING_AGENT_PROVIDER_ID
+      const resolvedProviderId =
+        [existing.session.providerId, run?.providerId, providerFromMessages]
+          .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
+          .find((candidate) => candidate.length)
+          ?.trim() ?? CODING_AGENT_PROVIDER_ID
       const modelFromMessages = existing.messages
         .slice()
         .reverse()
         .map((message) => (typeof message.modelId === 'string' ? message.modelId.trim() : ''))
         .find((candidate) => candidate.length)
-      const resolvedModelId = [requestedModelId, existing.session.modelId, run?.model, modelFromMessages]
-        .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
-        .find((candidate) => candidate.length)
-        ?.trim() ?? DEFAULT_OPENCODE_MODEL
+      const resolvedModelId =
+        [requestedModelId, existing.session.modelId, run?.model, modelFromMessages]
+          .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
+          .find((candidate) => candidate.length)
+          ?.trim() ?? DEFAULT_CODING_AGENT_MODEL
       const adapter = getProviderAdapter(resolvedProviderId)
       if (!adapter) {
         res.status(400).json({ error: `Unsupported provider: ${resolvedProviderId}` })
@@ -2976,13 +2983,16 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         return
       }
       try {
-        await runProviderInvocation(invocation, { cwd: existing.session.workspacePath, opencodeCommandRunner })
+        await runProviderInvocation(invocation, {
+          cwd: existing.session.workspacePath,
+          opencodeCommandRunner: codingAgentCommandRunner
+        })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Provider invocation failed'
         res.status(500).json({ error: message })
         return
       }
-      const updated = await opencodeStorage.getSession(sessionId)
+      const updated = await codingAgentStorage.getSession(sessionId)
       const detail = updated ?? existing
       res.status(201).json({
         ...detail,
@@ -2993,7 +3003,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         }
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to post opencode message'
+      const message = error instanceof Error ? error.message : 'Failed to post coding agent message'
       res.status(500).json({ error: message })
     }
   }

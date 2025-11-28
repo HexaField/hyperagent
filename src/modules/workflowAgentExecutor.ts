@@ -21,7 +21,7 @@ export function createAgentWorkflowExecutor(options: AgentWorkflowExecutorOption
 
   return async function executeWithAgent(args: AgentExecutorArgs): Promise<AgentExecutorResult> {
     const sessionDir = resolveSessionDir(args)
-    await ensureOpencodeConfig(sessionDir)
+    await ensureProviderConfig(sessionDir)
     const userInstructions = buildInstructions(args)
     const loopResult = await runLoop({
       userInstructions,
@@ -115,6 +115,15 @@ async function ensureOpencodeConfig(sessionDir: string): Promise<void> {
   } catch (error) {
     console.warn('Failed to write opencode.json for workflow agent session', error)
   }
+}
+
+/**
+ * Provider-agnostic config bootstrap. Currently delegates to opencode-specific
+ * config creation for backward compatibility.
+ */
+export async function ensureProviderConfig(sessionDir: string, providerId?: string): Promise<void> {
+  // For now we only support the opencode provider's config file.
+  await ensureOpencodeConfig(sessionDir)
 }
 
 async function detectLogsPath(sessionDir: string): Promise<string | undefined> {
