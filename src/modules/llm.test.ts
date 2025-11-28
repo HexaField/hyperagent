@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ProviderAdapter } from './providers'
 
 const { getProviderAdapterMock } = vi.hoisted(() => ({
-  getProviderAdapterMock: vi.fn(() => null)
+  getProviderAdapterMock: vi.fn<[providerId: string], ProviderAdapter | null>(() => null)
 }))
 vi.mock('./providers', () => ({
   getProviderAdapter: getProviderAdapterMock
@@ -9,8 +10,11 @@ vi.mock('./providers', () => ({
 
 const { runProviderInvocationMock, runProviderInvocationStreamMock } = vi.hoisted(() => ({
   runProviderInvocationMock: vi.fn(async () => ({ stdout: '{"answer":"fallback","status":"ok"}' })),
-  runProviderInvocationStreamMock: vi.fn(() =>
-    (async function* () {
+  runProviderInvocationStreamMock: vi.fn<
+    [invocation: any, opts?: any],
+    AsyncGenerator<string, void, unknown>
+  >(() =>
+    (async function* (): AsyncGenerator<string, void, unknown> {
       return
     })()
   )
@@ -64,7 +68,7 @@ const resetProviderMocks = () => {
   runProviderInvocationMock.mockResolvedValue({ stdout: '{"answer":"fallback","status":"ok"}' })
   runProviderInvocationStreamMock.mockReset()
   runProviderInvocationStreamMock.mockImplementation(() =>
-    (async function* () {
+    (async function* (): AsyncGenerator<string, void, unknown> {
       return
     })()
   )
@@ -121,10 +125,10 @@ describe('callLLM', () => {
 
   it('streams provider adapter output and propagates AbortSignal', async () => {
     const adapterInvocation = { cliArgs: ['run', '--json'] }
-    const adapter = { buildInvocation: vi.fn(() => adapterInvocation) }
-    getProviderAdapterMock.mockImplementation((provider) => (provider === 'opencode' ? adapter : null))
+    const adapter: ProviderAdapter = { buildInvocation: vi.fn(() => adapterInvocation), id: 'unit', label: 'Unit' }
+    getProviderAdapterMock.mockImplementation((providerId) => (providerId === 'opencode' ? adapter : null))
     runProviderInvocationStreamMock.mockImplementation(() =>
-      (async function* () {
+      (async function* (): AsyncGenerator<string, void, unknown> {
         yield '{"answer":"adapter-stream","status":"ok"}'
       })()
     )
