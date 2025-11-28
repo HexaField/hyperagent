@@ -9,17 +9,12 @@ import { createServer as createHttpsServer, type Server as HttpsServer } from 'n
 import { createServer as createNetServer, type AddressInfo, type Socket } from 'node:net'
 import os from 'os'
 import path from 'path'
-import type WebSocketType from 'ws'
-import type { RawData, WebSocketServer as WebSocketServerType } from 'ws'
 import { installProcessErrorHandlers, logFullError, wrapAsync } from './errors'
 import {
   CODE_SERVER_HOST,
-  CODING_AGENT_PROVIDER_ID,
   DEFAULT_PORT,
-  FALLBACK_CODING_AGENT_MODEL_IDS,
   GRAPH_BRANCH_LIMIT,
   GRAPH_COMMITS_PER_BRANCH,
-  KNOWN_CODING_AGENT_MODEL_LABELS,
   WORKFLOW_AGENT_MAX_ROUNDS,
   WORKFLOW_AGENT_MODEL,
   WORKFLOW_AGENT_PROVIDER,
@@ -36,12 +31,7 @@ import {
   type CodeServerController,
   type CodeServerOptions
 } from '../../../src/modules/codeServer'
-import {
-  createPersistence,
-  type Persistence,
-  type ProjectRecord,
-  type RadicleRegistrationRecord
-} from '../../../src/modules/database'
+import { createPersistence, type Persistence, type ProjectRecord } from '../../../src/modules/database'
 import { listBranchCommits, listGitBranches } from '../../../src/modules/git'
 import type { Provider } from '../../../src/modules/llm'
 import type {
@@ -52,12 +42,9 @@ import type {
 import {
   createCodingAgentRunner,
   createCodingAgentStorage,
-  DEFAULT_CODING_AGENT_MODEL,
   type CodingAgentRunner,
   type CodingAgentStorage
 } from '../../../src/modules/provider'
-import { runProviderInvocation } from '../../../src/modules/providerRunner'
-import { getProviderAdapter, listProviders } from '../../../src/modules/providers'
 import { createRadicleModule, type RadicleModule } from '../../../src/modules/radicle'
 import { createDiffModule } from '../../../src/modules/review/diff'
 import { createReviewEngineModule } from '../../../src/modules/review/engine'
@@ -65,17 +52,17 @@ import { createPullRequestModule } from '../../../src/modules/review/pullRequest
 import { createDockerReviewRunnerGateway } from '../../../src/modules/review/runnerGateway'
 import { createReviewSchedulerModule } from '../../../src/modules/review/scheduler'
 import type { ReviewRunTrigger } from '../../../src/modules/review/types'
-import { createTerminalModule, type LiveTerminalSession, type TerminalModule } from '../../../src/modules/terminal'
+import { createTerminalModule, type TerminalModule } from '../../../src/modules/terminal'
 import { createAgentWorkflowExecutor } from '../../../src/modules/workflowAgentExecutor'
 import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
-import {
-  createWorkflowRuntime,
-  type PlannerRun,
-  type PlannerTask,
-  type WorkflowDetail,
-  type WorkflowRuntime
-} from '../../../src/modules/workflows'
+import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
+import { FILE_STASH_PREFIX, parseGitStashList, type GitFileChange, type GitFileStashEntry } from '../lib/git'
+import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
+import { createWorkspaceSessionsRouter } from '../modules/workspaceSessions/routes'
+import { createWorkspaceSummaryRouter } from '../modules/workspaceSummary/routes'
+import { createWorkspaceTerminalModule } from '../modules/workspaceTerminal/module'
+import { createWorkspaceWorkflowsRouter } from '../modules/workspaceWorkflows/routes'
 
 
 
@@ -98,41 +85,6 @@ type RunLoop = typeof runVerifierWorkerLoop
 
 type ControllerFactory = (options: CodeServerOptions) => CodeServerController
 
-type GraphCommitNode = {
-  id: string
-  commitHash: string
-  branch: string
-  message: string
-  label: string
-  workflowId: string | null
-  stepId: string | null
-  timestamp: string
-  authorName: string | null
-  authorEmail: string | null
-  source: 'hyperagent' | 'git'
-}
-
-type GraphEdge = {
-  from: string
-  to: string
-}
-
-export type GitFileChange = {
-  path: string
-  displayPath: string
-  stagedStatus: string
-  worktreeStatus: string
-  renameFrom?: string | null
-  renameTo?: string | null
-  isUntracked: boolean
-}
-
-export type GitFileStashEntry = {
-  name: string
-  filePath: string
-  message: string
-}
-
 type GitMetadata = {
   repositoryPath: string
   branch: string | null
@@ -153,8 +105,6 @@ type GitMetadata = {
   stashes?: GitFileStashEntry[]
   branches?: string[]
 }
-
-export const FILE_STASH_PREFIX = 'hyperagent:file:'
 
 export const parseGitStatusOutput = (output: string | null): GitFileChange[] => {
   if (!output) return []
@@ -192,25 +142,6 @@ export const parseGitStatusOutput = (output: string | null): GitFileChange[] => 
       isUntracked
     })
   })
-  return entries
-}
-
-export const parseGitStashList = (output: string | null): GitFileStashEntry[] => {
-  if (!output) return []
-  const entries: GitFileStashEntry[] = []
-  output
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .forEach((line) => {
-      const [namePart, messagePart] = line.split('::')
-      const name = namePart ?? ''
-      const message = messagePart ?? ''
-      if (!message.startsWith(FILE_STASH_PREFIX)) return
-      const filePath = message.slice(FILE_STASH_PREFIX.length).trim()
-      if (!filePath) return
-      entries.push({ name, filePath, message })
-    })
   return entries
 }
 
@@ -408,6 +339,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     pullRequestCommits: persistence.pullRequestCommits,
     pullRequestEvents: persistence.pullRequestEvents
   })
+
   const diffModule = createDiffModule()
   const reviewEngine = createReviewEngineModule()
   const reviewScheduler = createReviewSchedulerModule({
@@ -508,7 +440,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       return resolved
     }
   }
-  const terminalWsServer: WebSocketServerType = new WebSocketServerCtor({ noServer: true })
   const DEFAULT_TERMINAL_USER_ID = process.env.TERMINAL_DEFAULT_USER_ID ?? 'anonymous'
   const USER_ID_HEADER_KEYS = ['x-user-id', 'x-user', 'x-hyperagent-user'] as const
 
@@ -552,69 +483,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     return value === workflowRunnerToken
   }
 
-  const MAX_WORKSPACE_ENTRIES = 75
-
-  const readWorkspacePathFromResult = (result: Record<string, unknown> | null | undefined): string | null => {
-    if (!result || typeof result !== 'object') return null
-    const workspace = (result as any).workspace
-    if (workspace && typeof workspace.workspacePath === 'string') {
-      return workspace.workspacePath
-    }
-    return null
-  }
-
-  const readLogsPathFromResult = (result: Record<string, unknown> | null | undefined): string | null => {
-    if (!result || typeof result !== 'object') return null
-    const provenance = (result as any).provenance
-    if (provenance && typeof provenance.logsPath === 'string') {
-      return provenance.logsPath
-    }
-    if (typeof (result as any).logsPath === 'string') {
-      return (result as any).logsPath
-    }
-    return null
-  }
-
-  const deriveLogsPathForStep = (
-    step: { id: string; result: Record<string, unknown> | null },
-    runs: Array<{ workflowStepId: string | null; logsPath: string | null }>
-  ): string | null => {
-    const direct = readLogsPathFromResult(step.result)
-    if (direct) return direct
-    const run = runs.find((entry) => entry.workflowStepId === step.id && typeof entry.logsPath === 'string')
-    return typeof run?.logsPath === 'string' ? (run as { logsPath: string }).logsPath : null
-  }
-
-  const safeParseJson = (raw: string): unknown | null => {
-    try {
-      return JSON.parse(raw)
-    } catch {
-      return null
-    }
-  }
-
-  const collectWorkspaceEntries = async (
-    workspacePath: string | null
-  ): Promise<Array<{ name: string; kind: 'file' | 'directory' }>> => {
-    if (!workspacePath) return []
-    try {
-      const dirents = await fs.readdir(workspacePath, { withFileTypes: true })
-      return dirents
-        .sort((a, b) => {
-          const aDir = a.isDirectory()
-          const bDir = b.isDirectory()
-          if (aDir !== bDir) {
-            return aDir ? -1 : 1
-          }
-          return a.name.localeCompare(b.name)
-        })
-        .slice(0, MAX_WORKSPACE_ENTRIES)
-        .map((entry) => ({ name: entry.name, kind: entry.isDirectory() ? 'directory' : 'file' }))
-    } catch {
-      return []
-    }
-  }
-
   function ensureEphemeralProject(sessionId: string, sessionDir: string): ProjectRecord {
     return {
       id: `session-${sessionId}`,
@@ -627,40 +495,11 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 
-  function normalizePlannerTasks(raw: unknown): PlannerTask[] {
-    if (!Array.isArray(raw)) return []
-    const tasks: PlannerTask[] = []
-    raw.forEach((candidate, index) => {
-      if (!isPlainObject(candidate)) return
-      const title = typeof candidate.title === 'string' ? candidate.title.trim() : ''
-      const instructions = typeof candidate.instructions === 'string' ? candidate.instructions.trim() : ''
-      if (!title || !instructions) return
-      const dependsOn = Array.isArray(candidate.dependsOn)
-        ? candidate.dependsOn.filter((dep) => typeof dep === 'string' && dep.length)
-        : []
-      const metadata = isPlainObject(candidate.metadata) ? candidate.metadata : undefined
-      tasks.push({
-        id: typeof candidate.id === 'string' && candidate.id.length ? candidate.id : `task-${index + 1}`,
-        title,
-        instructions,
-        agentType:
-          typeof candidate.agentType === 'string' && candidate.agentType.length ? candidate.agentType : 'coding',
-        dependsOn,
-        metadata
-      })
-    })
-    return tasks
-  }
-
   function normalizeReviewTrigger(value: unknown): ReviewRunTrigger {
     if (value === 'auto_on_open' || value === 'auto_on_update') {
       return value
     }
     return 'manual'
-  }
-
-  function isPlainObject(value: unknown): value is Record<string, unknown> {
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
   }
 
   function rewriteCodeServerPath(pathName: string, sessionId: string): string {
@@ -853,53 +692,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 
-  const collectGitMetadata = async (paths: string[]): Promise<Map<string, GitMetadata | null>> => {
-    const unique = [...new Set(paths.map((entry) => path.resolve(entry)))]
-    const results = await Promise.all(unique.map(async (entry) => ({ path: entry, git: await readGitMetadata(entry) })))
-    const map = new Map<string, GitMetadata | null>()
-    results.forEach((item) => {
-      map.set(item.path, item.git)
-    })
-    return map
-  }
-
-  const isGitRepository = async (dirPath: string): Promise<boolean> => {
-    try {
-      await fs.access(path.join(dirPath, '.git'))
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  const sortCommitsByTimestamp = (entries: GraphCommitNode[]): GraphCommitNode[] => {
-    return entries.sort((a, b) => {
-      const aTime = Date.parse(a.timestamp)
-      const bTime = Date.parse(b.timestamp)
-      if (!Number.isFinite(aTime) || !Number.isFinite(bTime)) {
-        return a.timestamp.localeCompare(b.timestamp)
-      }
-      return aTime - bTime
-    })
-  }
-
-  function extractCommitFromStep(
-    step: WorkflowDetail['steps'][number]
-  ): { commitHash: string; branch: string; message: string } | null {
-    if (!step.result) return null
-    const commitPayload = (step.result as Record<string, any>).commit as Record<string, any> | undefined
-    if (!commitPayload?.commitHash) {
-      return null
-    }
-    const branch =
-      typeof commitPayload.branch === 'string' && commitPayload.branch.length ? commitPayload.branch : 'unknown'
-    const message = typeof commitPayload.message === 'string' ? commitPayload.message : ''
-    return {
-      commitHash: String(commitPayload.commitHash),
-      branch,
-      message
-    }
-  }
 
   type CodeServerWorkspaceOptions = {
     sessionId: string
@@ -1003,12 +795,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   function extractSessionIdFromUrl(rawUrl: string | undefined): string | null {
     if (!rawUrl) return null
     const match = rawUrl.match(/^\/code-server\/([^/?#]+)/)
-    return match?.[1] ?? null
-  }
-
-  function extractTerminalSessionId(rawUrl: string | undefined): string | null {
-    if (!rawUrl) return null
-    const match = rawUrl.match(/^\/ws\/terminal\/([^/?#]+)/)
     return match?.[1] ?? null
   }
 
@@ -1153,537 +939,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     session.proxy(req, res, next)
   }
 
-  const radicleStatusHandler: RequestHandler = async (_req, res) => {
-    try {
-      const status = await radicleModule.getStatus()
-      res.json({ status })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to read Radicle status'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const radicleRepositoriesHandler: RequestHandler = async (_req, res) => {
-    try {
-      const projects = persistence.projects.list()
-      const radicleRegistrations = persistence.radicleRegistrations.list()
-      const projectMap = new Map(projects.map((project) => [path.resolve(project.repositoryPath), project]))
-      const registrationMap = new Map(radicleRegistrations.map((entry) => [path.resolve(entry.repositoryPath), entry]))
-      const uniquePaths = [...new Set([...projectMap.keys(), ...registrationMap.keys()])]
-      if (!uniquePaths.length) {
-        res.json({ repositories: [] })
-        return
-      }
-      const gitMetadata = await collectGitMetadata(uniquePaths)
-      const inspections = await Promise.all(
-        uniquePaths.map(async (repoPath) => {
-          try {
-            const info = await radicleModule.inspectRepository(repoPath)
-            if (info.registered) {
-              const existingRegistration = registrationMap.get(repoPath)
-              const stored = persistence.radicleRegistrations.upsert({
-                repositoryPath: repoPath,
-                name: existingRegistration?.name ?? projectMap.get(repoPath)?.name ?? path.basename(repoPath),
-                description: existingRegistration?.description ?? undefined,
-                visibility: existingRegistration?.visibility ?? undefined,
-                defaultBranch: info.defaultBranch ?? existingRegistration?.defaultBranch ?? undefined
-              })
-              registrationMap.set(repoPath, stored)
-            }
-            return { path: repoPath, info }
-          } catch (error) {
-            const message = error instanceof Error ? error.message : 'Radicle inspection failed'
-            return { path: repoPath, info: null, error: message }
-          }
-        })
-      )
-      const inspectionMap = new Map<
-        string,
-        { info: Awaited<ReturnType<typeof radicleModule.inspectRepository>> | null; error?: string }
-      >()
-      inspections.forEach((entry) => {
-        inspectionMap.set(entry.path, entry)
-      })
-      const payload = uniquePaths.map((repoPath) => {
-        const project =
-          projectMap.get(repoPath) ?? createSyntheticProjectRecord(repoPath, registrationMap.get(repoPath) ?? null)
-        const inspection = inspectionMap.get(repoPath)
-        return {
-          project,
-          radicle: inspection?.info ?? null,
-          git: gitMetadata.get(repoPath) ?? null,
-          error: inspection?.error ?? null
-        }
-      })
-      payload.sort((a, b) => a.project.name.localeCompare(b.project.name))
-      res.json({ repositories: payload })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to list Radicle repositories'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  type CodingAgentProviderModelDescription = {
-    id: string
-    label: string
-  }
-
-  type CodingAgentProviderDescription = {
-    id: string
-    label: string
-    defaultModelId: string
-    models: CodingAgentProviderModelDescription[]
-  }
-
-  const titleizeModelSegment = (segment: string): string => {
-    return segment
-      .split(/[-_]/)
-      .filter(Boolean)
-      .map((part) => {
-        const upper = part.toUpperCase()
-        if (upper === 'GPT') return 'GPT'
-        if (upper === 'LLM') return 'LLM'
-        return part.charAt(0).toUpperCase() + part.slice(1)
-      })
-      .join(' ')
-  }
-
-  const formatCodingAgentModelLabel = (modelId: string): string => {
-    if (!modelId) return 'Unknown model'
-    const known = KNOWN_CODING_AGENT_MODEL_LABELS[modelId]
-    if (known) return known
-    const [providerSegment, nameSegment] = modelId.split('/', 2)
-    if (!nameSegment) {
-      return titleizeModelSegment(providerSegment)
-    }
-    return `${titleizeModelSegment(providerSegment)} · ${titleizeModelSegment(nameSegment)}`
-  }
-
-  const parseCodingAgentModelList = (raw: string | null | undefined): string[] => {
-    if (!raw) return []
-    const trimmed = raw.trim()
-    if (!trimmed.length) return []
-    try {
-      const parsed = JSON.parse(trimmed)
-      if (Array.isArray(parsed)) {
-        return parsed
-          .filter((entry): entry is string => typeof entry === 'string')
-          .map((entry) => entry.trim())
-          .filter(Boolean)
-      }
-      if (Array.isArray((parsed as any).models)) {
-        return ((parsed as any).models as unknown[])
-          .filter((entry): entry is string => typeof entry === 'string')
-          .map((entry) => entry.trim())
-          .filter(Boolean)
-      }
-    } catch {
-      // fall back to newline parsing
-    }
-    return trimmed
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-  }
-
-  const ensureCodingAgentModelList = (models: string[]): string[] => {
-    const seen = new Set<string>()
-    const append = (value: string) => {
-      const normalized = value.trim()
-      if (!normalized.length || seen.has(normalized)) return
-      seen.add(normalized)
-    }
-    models.filter((value) => typeof value === 'string').forEach(append)
-    if (!seen.size) {
-      FALLBACK_CODING_AGENT_MODEL_IDS.forEach(append)
-    }
-    if (!seen.has(DEFAULT_CODING_AGENT_MODEL)) {
-      append(DEFAULT_CODING_AGENT_MODEL)
-    }
-    const ordered = Array.from(seen)
-    const prioritized = ordered.filter((id) => id !== DEFAULT_CODING_AGENT_MODEL)
-    return [DEFAULT_CODING_AGENT_MODEL, ...prioritized]
-  }
-
-  const listCodingAgentModelIds = async (): Promise<string[]> => {
-    try {
-      const result = await codingAgentCommandRunner(['models'])
-      const stdout = result?.stdout ?? ''
-      return ensureCodingAgentModelList(parseCodingAgentModelList(stdout))
-    } catch (error) {
-      console.warn('Failed to list coding agent models via coding agent CLI, falling back to defaults.', error)
-      return ensureCodingAgentModelList([])
-    }
-  }
-
-  const describeDefaultCodingAgentProvider = async (): Promise<CodingAgentProviderDescription> => {
-    const modelIds = await listCodingAgentModelIds()
-    const defaultModelId = modelIds[0] ?? DEFAULT_CODING_AGENT_MODEL
-    return {
-      id: CODING_AGENT_PROVIDER_ID,
-      label: 'Coding Agent CLI',
-      defaultModelId,
-      models: modelIds.map((id) => ({ id, label: formatCodingAgentModelLabel(id) }))
-    }
-  }
-
-  const listCodingAgentProviders = async (): Promise<CodingAgentProviderDescription[]> => {
-    const adapters = listProviders()
-    const descriptions: CodingAgentProviderDescription[] = []
-    for (const adapter of adapters) {
-      if (adapter.id === CODING_AGENT_PROVIDER_ID) {
-        descriptions.push(await describeDefaultCodingAgentProvider())
-        continue
-      }
-      descriptions.push({ id: adapter.id, label: adapter.label, defaultModelId: '', models: [] })
-    }
-    return descriptions
-  }
-
-  const listCodingAgentProvidersHandler: RequestHandler = async (_req, res) => {
-    try {
-      const providers = await listCodingAgentProviders()
-      res.json({ providers })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to list coding agent providers'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const listCodingAgentSessionsHandler: RequestHandler = async (req, res) => {
-    try {
-      const workspaceParam = req.query.workspacePath
-      const workspacePath = typeof workspaceParam === 'string' ? workspaceParam : undefined
-      const [sessions, runs] = await Promise.all([
-        codingAgentStorage.listSessions({ workspacePath }),
-        codingAgentRunner.listRuns()
-      ])
-      const runIndex = new Map(runs.map((run) => [run.sessionId, run]))
-      const payload = sessions.map((session) => {
-        const run = runIndex.get(session.id)
-        const providerId = run?.providerId ?? session.providerId ?? null
-        const modelId = run?.model ?? session.modelId ?? null
-        return { ...session, providerId, modelId }
-      })
-      res.json({ sessions: payload })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to list coding agent sessions'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const getCodingAgentSessionHandler: RequestHandler = async (req, res) => {
-    const sessionId = req.params.sessionId
-    if (!sessionId) {
-      res.status(400).json({ error: 'sessionId is required' })
-      return
-    }
-    try {
-      const detail = await codingAgentStorage.getSession(sessionId)
-      if (!detail) {
-        res.status(404).json({ error: 'Unknown session' })
-        return
-      }
-      const run = await codingAgentRunner.getRun(sessionId)
-      const providerId = run?.providerId ?? detail.session.providerId ?? null
-      const modelId = run?.model ?? detail.session.modelId ?? null
-      res.json({
-        ...detail,
-        session: {
-          ...detail.session,
-          providerId,
-          modelId
-        }
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load coding agent session'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const listCodingAgentRunsHandler: RequestHandler = async (_req, res) => {
-    try {
-      const runs = await codingAgentRunner.listRuns()
-      const payload = runs.map((run) => ({
-        ...run,
-        providerId: run.providerId ?? CODING_AGENT_PROVIDER_ID
-      }))
-      res.json({ runs: payload })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to list coding agent runs'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const startCodingAgentSessionHandler: RequestHandler = async (req, res) => {
-    const { workspacePath, prompt, title, model, providerId: rawProviderId } = req.body ?? {}
-    if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
-      res.status(400).json({ error: 'workspacePath is required' })
-      return
-    }
-    if (typeof prompt !== 'string' || !prompt.trim()) {
-      res.status(400).json({ error: 'prompt is required' })
-      return
-    }
-    const normalizedWorkspace = workspacePath.trim()
-    const providerId =
-      typeof rawProviderId === 'string' && rawProviderId.trim().length ? rawProviderId.trim() : CODING_AGENT_PROVIDER_ID
-    const adapter = getProviderAdapter(providerId)
-    if (!adapter) {
-      res.status(400).json({ error: `Unsupported provider: ${providerId}` })
-      return
-    }
-    try {
-      await ensureWorkspaceDirectory(normalizedWorkspace)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Workspace path is unavailable'
-      res.status(400).json({ error: message })
-      return
-    }
-    try {
-      const resolvedModel = typeof model === 'string' && model.trim().length ? model.trim() : DEFAULT_CODING_AGENT_MODEL
-      if (adapter.validateModel) {
-        const ok = await Promise.resolve(adapter.validateModel(resolvedModel))
-        if (!ok) {
-          res.status(400).json({ error: `Model not supported by provider: ${resolvedModel}` })
-          return
-        }
-      }
-      const run = await codingAgentRunner.startRun({
-        workspacePath: normalizedWorkspace,
-        prompt: prompt.trim(),
-        title: typeof title === 'string' ? title : undefined,
-        model: resolvedModel,
-        providerId
-      })
-      res.status(202).json({ run })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to start coding agent session'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const killCodingAgentSessionHandler: RequestHandler = async (req, res) => {
-    const sessionId = req.params.sessionId
-    if (!sessionId) {
-      res.status(400).json({ error: 'sessionId is required' })
-      return
-    }
-    try {
-      const success = await codingAgentRunner.killRun(sessionId)
-      res.json({ success })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to terminate coding agent session'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const repositoryGraphHandler: RequestHandler = async (req, res) => {
-    const projectId = req.params.projectId
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId is required' })
-      return
-    }
-    const project = persistence.projects.getById(projectId)
-    if (!project) {
-      res.status(404).json({ error: 'Unknown project' })
-      return
-    }
-
-    try {
-      const branchCandidates = [project.defaultBranch, ...(await listGitBranches(project.repositoryPath))]
-      const gitBranches = [...new Set(branchCandidates)].slice(0, GRAPH_BRANCH_LIMIT)
-      const branchCommits = await Promise.all(
-        gitBranches.map(async (branch) => {
-          const commits = await listBranchCommits({
-            repoPath: project.repositoryPath,
-            branch,
-            limit: GRAPH_COMMITS_PER_BRANCH
-          })
-          return {
-            branch,
-            commits: commits.map<GraphCommitNode>((commit) => ({
-              id: commit.hash,
-              commitHash: commit.hash,
-              branch,
-              message: commit.message,
-              label: commit.message || commit.hash,
-              workflowId: null,
-              stepId: null,
-              timestamp: commit.timestamp,
-              authorName: commit.authorName || null,
-              authorEmail: commit.authorEmail || null,
-              source: 'git'
-            }))
-          }
-        })
-      )
-
-      const branchMap = new Map<string, GraphCommitNode[]>()
-      branchCommits.forEach(({ branch, commits }) => {
-        branchMap.set(branch, sortCommitsByTimestamp(commits))
-      })
-      if (!branchMap.size) {
-        branchMap.set(project.defaultBranch, [])
-      }
-
-      const workflows = workflowRuntime.listWorkflows(projectId)
-      workflows.forEach((workflow) => {
-        const steps = persistence.workflowSteps.listByWorkflow(workflow.id)
-        steps.forEach((step) => {
-          const commit = extractCommitFromStep(step)
-          if (!commit) return
-          const branchName = commit.branch === 'unknown' ? project.defaultBranch : commit.branch
-          const label =
-            typeof step.data?.title === 'string' && step.data.title.length
-              ? (step.data.title as string)
-              : `Step ${step.sequence}`
-          const node: GraphCommitNode = {
-            id: commit.commitHash,
-            commitHash: commit.commitHash,
-            branch: branchName,
-            message: commit.message,
-            label,
-            workflowId: workflow.id,
-            stepId: step.id,
-            timestamp: step.updatedAt,
-            authorName: 'Hyperagent Workflow',
-            authorEmail: null,
-            source: 'hyperagent'
-          }
-          const list = branchMap.get(branchName) ?? []
-          const existingIndex = list.findIndex((entry) => entry.commitHash === node.commitHash)
-          if (existingIndex >= 0) {
-            const existing = list[existingIndex]
-            list[existingIndex] = {
-              ...existing,
-              label: node.label,
-              workflowId: node.workflowId,
-              stepId: node.stepId,
-              source: 'hyperagent',
-              timestamp: node.timestamp,
-              authorName: existing.authorName ?? node.authorName,
-              authorEmail: existing.authorEmail ?? node.authorEmail
-            }
-          } else {
-            list.push(node)
-          }
-          branchMap.set(branchName, sortCommitsByTimestamp(list).slice(-GRAPH_COMMITS_PER_BRANCH))
-        })
-      })
-
-      const branches = [...branchMap.entries()].map(([name, commits]) => ({
-        name,
-        commits
-      }))
-
-      const edges: GraphEdge[] = []
-      branches.forEach((branch) => {
-        for (let index = 1; index < branch.commits.length; index++) {
-          edges.push({ from: branch.commits[index - 1].id, to: branch.commits[index].id })
-        }
-      })
-
-      res.json({ project, branches, edges })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to build repository graph'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const workflowStepDiffHandler: RequestHandler = async (req, res) => {
-    const { workflowId, stepId } = req.params
-    if (!workflowId || !stepId) {
-      res.status(400).json({ error: 'workflowId and stepId are required' })
-      return
-    }
-    const detail = workflowRuntime.getWorkflowDetail(workflowId)
-    if (!detail) {
-      res.status(404).json({ error: 'Unknown workflow' })
-      return
-    }
-    const project = persistence.projects.getById(detail.workflow.projectId)
-    if (!project) {
-      res.status(404).json({ error: 'Unknown project' })
-      return
-    }
-    const step = detail.steps.find((item) => item.id === stepId)
-    if (!step) {
-      res.status(404).json({ error: 'Unknown workflow step' })
-      return
-    }
-    const commit = extractCommitFromStep(step)
-    if (!commit) {
-      res.status(404).json({ error: 'No commit for this step' })
-      return
-    }
-    try {
-      const diffArgs = [
-        'show',
-        commit.commitHash,
-        '--stat',
-        '--patch',
-        '--unified=200',
-        '--',
-        '.',
-        ':(exclude).hyperagent.json',
-        ':(exclude).hyperagent/**',
-        ':(exclude)**/.hyperagent.json',
-        ':(exclude)**/.hyperagent/**'
-      ]
-      const diffText = await runGitCommand(diffArgs, project.repositoryPath)
-      res.json({
-        workflowId,
-        stepId,
-        commitHash: commit.commitHash,
-        branch: commit.branch === 'unknown' ? project.defaultBranch : commit.branch,
-        message: commit.message,
-        diffText
-      })
-    } catch (error) {
-      res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to read diff' })
-    }
-  }
-
-  const listProjectsHandler: RequestHandler = async (_req, res) => {
-    try {
-      const projects = persistence.projects.list()
-      const gitMap = await collectGitMetadata(projects.map((project) => project.repositoryPath))
-      const payload = projects.map((project) => ({
-        ...project,
-        git: gitMap.get(path.resolve(project.repositoryPath)) ?? null
-      }))
-      res.json({ projects: payload })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to list projects'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const projectDetailHandler: RequestHandler = async (req, res) => {
-    const projectId = req.params.projectId
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId is required' })
-      return
-    }
-    const project = persistence.projects.getById(projectId)
-    if (!project) {
-      res.status(404).json({ error: 'Unknown project' })
-      return
-    }
-    try {
-      const gitMap = await collectGitMetadata([project.repositoryPath])
-      const payload = {
-        ...project,
-        git: gitMap.get(path.resolve(project.repositoryPath)) ?? null
-      }
-      res.json({ project: payload })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to read project metadata'
-      res.status(500).json({ error: message })
-    }
-  }
-
   const getProjectOr404 = (projectId: string | undefined, res: Response) => {
     if (!projectId) {
       res.status(400).json({ error: 'projectId is required' })
@@ -1695,511 +950,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       return null
     }
     return project
-  }
-
-  const respondWithUpdatedGit = async (res: Response, repoPath: string) => {
-    try {
-      const git = await readGitMetadata(repoPath)
-      res.json({ git })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to read git metadata'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const projectDevspaceHandler: RequestHandler = async (req, res) => {
-    const projectId = req.params.projectId
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId is required' })
-      return
-    }
-    const project = persistence.projects.getById(projectId)
-    if (!project) {
-      res.status(404).json({ error: 'Unknown project' })
-      return
-    }
-    try {
-      await ensureWorkspaceDirectory(project.repositoryPath)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Project repository path is unavailable'
-      res.status(400).json({ error: message })
-      return
-    }
-    const session = await ensureProjectCodeServer(project)
-    if (!session) {
-      res.status(500).json({ error: 'Failed to launch code-server for project' })
-      return
-    }
-    res.json({
-      projectId: project.id,
-      sessionId: session.id,
-      codeServerUrl: session.publicUrl,
-      workspacePath: session.dir,
-      branch: session.branch
-    })
-  }
-
-  const projectDiffHandler: RequestHandler = async (req, res) => {
-    const projectId = req.params.projectId
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId is required' })
-      return
-    }
-    const project = persistence.projects.getById(projectId)
-    if (!project) {
-      res.status(404).json({ error: 'Unknown project' })
-      return
-    }
-    const isRepo = await isGitRepository(project.repositoryPath)
-    if (!isRepo) {
-      res.status(400).json({ error: 'Project repository is not a Git repository' })
-      return
-    }
-    try {
-      const diffArgs = ['diff', '--stat', '--patch', '--unified=200']
-      const diffText = await runGitCommand(diffArgs, project.repositoryPath)
-      const statusText = await runGitCommand(['status', '-sb'], project.repositoryPath)
-      res.json({
-        projectId: project.id,
-        diffText,
-        hasChanges: diffText.trim().length > 0,
-        status: statusText
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to compute project diff'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const gitStageHandler: RequestHandler = async (req, res) => {
-    const project = getProjectOr404(req.params.projectId, res)
-    if (!project) return
-    const body = req.body ?? {}
-    const paths = Array.isArray(body.paths)
-      ? body.paths
-          .filter((entry: unknown): entry is string => typeof entry === 'string')
-          .map((entry: string) => entry.trim())
-          .filter((entry: string) => entry.length)
-      : []
-    const mode = body.mode === 'unstage' ? 'unstage' : 'stage'
-    if (!paths.length) {
-      res.status(400).json({ error: 'paths are required' })
-      return
-    }
-    try {
-      if (mode === 'stage') {
-        await runGitCommand(['add', '--', ...paths], project.repositoryPath)
-      } else {
-        await runGitCommand(['reset', 'HEAD', '--', ...paths], project.repositoryPath)
-      }
-      await respondWithUpdatedGit(res, project.repositoryPath)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to update git stage'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const gitDiscardHandler: RequestHandler = async (req, res) => {
-    const project = getProjectOr404(req.params.projectId, res)
-    if (!project) return
-    const { path: targetPath, isUntracked } = req.body ?? {}
-    if (typeof targetPath !== 'string' || !targetPath.trim()) {
-      res.status(400).json({ error: 'path is required' })
-      return
-    }
-    try {
-      if (isUntracked) {
-        await runGitCommand(['clean', '-f', '-d', '--', targetPath], project.repositoryPath)
-      } else {
-        await runGitCommand(['checkout', '--', targetPath], project.repositoryPath)
-      }
-      await respondWithUpdatedGit(res, project.repositoryPath)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to discard changes'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const gitCommitHandler: RequestHandler = async (req, res) => {
-    const project = getProjectOr404(req.params.projectId, res)
-    if (!project) return
-    const message = typeof req.body?.message === 'string' ? req.body.message.trim() : ''
-    if (!message) {
-      res.status(400).json({ error: 'Commit message is required' })
-      return
-    }
-    try {
-      await runGitCommand(['commit', '-m', message], project.repositoryPath)
-      await respondWithUpdatedGit(res, project.repositoryPath)
-    } catch (error) {
-      const text = error instanceof Error ? error.message : 'Failed to commit changes'
-      res.status(500).json({ error: text })
-    }
-  }
-
-  const generateCommitMessageHandler: RequestHandler = async (req, res) => {
-    const project = getProjectOr404(req.params.projectId, res)
-    if (!project) return
-
-    try {
-      // Build the prompt for GitHub Copilot
-      let prompt = 'Generate a concise git commit message following conventional commit format (type: description). '
-
-      // Get git diff to provide context
-      let diffContext = ''
-      try {
-        // Try to get staged diff first, then unstaged if no staged changes
-        diffContext = await runGitCommand(['diff', '--staged'], project.repositoryPath)
-        if (!diffContext.trim()) {
-          diffContext = await runGitCommand(['diff'], project.repositoryPath)
-        }
-      } catch {
-        // If git commands fail, continue without diff context
-      }
-
-      if (diffContext.trim()) {
-        prompt += `Here are the changes:\n\n${diffContext}\n\n`
-      } else {
-        prompt += 'Analyze the repository changes and generate an appropriate commit message. '
-      }
-
-      prompt += 'Only return the commit message, nothing else.'
-
-      // Call GitHub Copilot CLI
-      const { spawn } = await import('child_process')
-      const result = await new Promise<string>((resolve, reject) => {
-        const args = [
-          'copilot',
-          '-p',
-          prompt,
-          '--add-dir',
-          project.repositoryPath,
-          '--allow-tool',
-          'shell(git:status)',
-          '--allow-tool',
-          'shell(git:diff)',
-          '--allow-tool',
-          'shell(git:diff --staged)',
-          '--silent'
-        ]
-
-        const child = spawn('npx', args, {
-          cwd: project.repositoryPath,
-          stdio: ['pipe', 'pipe', 'pipe']
-        })
-
-        let stdout = ''
-        let stderr = ''
-
-        child.stdout?.on('data', (data) => {
-          stdout += data.toString()
-        })
-
-        child.stderr?.on('data', (data) => {
-          stderr += data.toString()
-        })
-
-        child.on('error', (error) => {
-          reject(new Error(`Failed to spawn copilot: ${error.message}`))
-        })
-
-        child.on('close', (code) => {
-          if (code === 0) {
-            const message = stdout.trim()
-            if (message) {
-              resolve(message)
-            } else {
-              reject(new Error('No commit message generated'))
-            }
-          } else {
-            const errorMsg = stderr.trim() || `copilot exited with code ${code}`
-            reject(new Error(`Failed to generate commit message: ${errorMsg}`))
-          }
-        })
-      })
-
-      res.json({ commitMessage: result })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to generate commit message'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const gitCheckoutHandler: RequestHandler = async (req, res) => {
-    const project = getProjectOr404(req.params.projectId, res)
-    if (!project) return
-    const ref = typeof req.body?.ref === 'string' ? req.body.ref.trim() : ''
-    if (!ref) {
-      res.status(400).json({ error: 'ref is required' })
-      return
-    }
-    try {
-      await runGitCommand(['checkout', ref], project.repositoryPath)
-      await respondWithUpdatedGit(res, project.repositoryPath)
-    } catch (error) {
-      const text = error instanceof Error ? error.message : 'Failed to checkout ref'
-      res.status(500).json({ error: text })
-    }
-  }
-
-  const gitStashHandler: RequestHandler = async (req, res) => {
-    const project = getProjectOr404(req.params.projectId, res)
-    if (!project) return
-    const pathInput = typeof req.body?.path === 'string' ? req.body.path.trim() : ''
-    if (!pathInput) {
-      res.status(400).json({ error: 'path is required' })
-      return
-    }
-    try {
-      await runGitCommand(
-        ['stash', 'push', '--include-untracked', '-m', `${FILE_STASH_PREFIX}${pathInput}`, '--', pathInput],
-        project.repositoryPath
-      )
-      await respondWithUpdatedGit(res, project.repositoryPath)
-    } catch (error) {
-      const text = error instanceof Error ? error.message : 'Failed to stash file'
-      res.status(500).json({ error: text })
-    }
-  }
-
-  const gitUnstashHandler: RequestHandler = async (req, res) => {
-    const project = getProjectOr404(req.params.projectId, res)
-    if (!project) return
-    const pathInput = typeof req.body?.path === 'string' ? req.body.path.trim() : ''
-    if (!pathInput) {
-      res.status(400).json({ error: 'path is required' })
-      return
-    }
-    try {
-      const stashListRaw = await runGitCommand(['stash', 'list', '--pretty=%gd::%s'], project.repositoryPath)
-      const stashEntries = parseGitStashList(stashListRaw)
-      const entry = stashEntries.find((candidate) => candidate.filePath === pathInput)
-      if (!entry) {
-        res.status(404).json({ error: 'No stash found for path' })
-        return
-      }
-      await runGitCommand(['checkout', entry.name, '--', pathInput], project.repositoryPath)
-      await runGitCommand(['stash', 'drop', entry.name], project.repositoryPath)
-      await respondWithUpdatedGit(res, project.repositoryPath)
-    } catch (error) {
-      const text = error instanceof Error ? error.message : 'Failed to apply stash'
-      res.status(500).json({ error: text })
-    }
-  }
-
-  const gitPullHandler: RequestHandler = async (req, res) => {
-    const project = getProjectOr404(req.params.projectId, res)
-    if (!project) return
-    const remote = typeof req.body?.remote === 'string' ? req.body.remote.trim() : ''
-    const branchInput = typeof req.body?.branch === 'string' ? req.body.branch.trim() : ''
-    if (!remote) {
-      res.status(400).json({ error: 'remote is required' })
-      return
-    }
-    const args = branchInput ? ['pull', remote, branchInput] : ['pull', remote]
-    try {
-      await runGitCommand(args, project.repositoryPath)
-      await respondWithUpdatedGit(res, project.repositoryPath)
-    } catch (error) {
-      const text = error instanceof Error ? error.message : 'Failed to pull remote'
-      res.status(500).json({ error: text })
-    }
-  }
-
-  const gitPushHandler: RequestHandler = async (req, res) => {
-    const project = getProjectOr404(req.params.projectId, res)
-    if (!project) return
-    const remote = typeof req.body?.remote === 'string' ? req.body.remote.trim() : ''
-    const branchInput = typeof req.body?.branch === 'string' ? req.body.branch.trim() : ''
-    if (!remote) {
-      res.status(400).json({ error: 'remote is required' })
-      return
-    }
-    const args = branchInput ? ['push', remote, branchInput] : ['push', remote]
-    try {
-      await runGitCommand(args, project.repositoryPath)
-      await respondWithUpdatedGit(res, project.repositoryPath)
-    } catch (error) {
-      const text = error instanceof Error ? error.message : 'Failed to push remote'
-      res.status(500).json({ error: text })
-    }
-  }
-
-  const registerRadicleRepositoryHandler: RequestHandler = async (req, res) => {
-    const { repositoryPath, name, description, visibility } = req.body ?? {}
-    if (!repositoryPath || typeof repositoryPath !== 'string') {
-      res.status(400).json({ error: 'repositoryPath is required' })
-      return
-    }
-    try {
-      const resolvedPath = path.resolve(repositoryPath.trim())
-      const repository = await radicleModule.registerRepository({
-        repositoryPath: resolvedPath,
-        name: typeof name === 'string' && name.length ? name : undefined,
-        description: typeof description === 'string' && description.length ? description : undefined,
-        visibility: visibility === 'public' || visibility === 'private' ? visibility : undefined
-      })
-      persistence.radicleRegistrations.upsert({
-        repositoryPath: resolvedPath,
-        name: typeof name === 'string' && name.length ? name : undefined,
-        description: typeof description === 'string' && description.length ? description : undefined,
-        visibility: visibility === 'public' || visibility === 'private' ? visibility : undefined,
-        defaultBranch: repository.defaultBranch ?? undefined
-      })
-      res.json({ repository })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to register repository with Radicle'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const browseFilesystemHandler: RequestHandler = async (req, res) => {
-    const requestedPath = typeof req.query.path === 'string' && req.query.path.length ? req.query.path : os.homedir()
-    try {
-      const resolved = path.resolve(requestedPath)
-      const stats = await fs.stat(resolved)
-      if (!stats.isDirectory()) {
-        res.status(400).json({ error: 'Path is not a directory' })
-        return
-      }
-      const entries = await fs.readdir(resolved, { withFileTypes: true })
-      const directories = entries.filter((entry) => entry.isDirectory())
-      const payload = await Promise.all(
-        directories.map(async (entry) => {
-          const absolute = path.join(resolved, entry.name)
-          const gitRepo = await isGitRepository(absolute)
-          let radicleRegistered = false
-          let radicleRegistrationReason: string | null = null
-          if (!gitRepo) {
-            radicleRegistrationReason = 'Not a Git repository'
-          } else {
-            try {
-              const info = await radicleModule.inspectRepository(absolute)
-              radicleRegistered = info.registered
-              if (radicleRegistered) {
-                persistence.radicleRegistrations.upsert({
-                  repositoryPath: absolute,
-                  name: entry.name,
-                  defaultBranch: info.defaultBranch ?? undefined
-                })
-              }
-            } catch (error) {
-              const message = error instanceof Error ? error.message : 'Failed to inspect repository for Radicle'
-              radicleRegistrationReason = message
-            }
-          }
-          return {
-            name: entry.name,
-            path: absolute,
-            isGitRepository: gitRepo,
-            radicleRegistered,
-            radicleRegistrationReason
-          }
-        })
-      )
-      payload.sort((a, b) => a.name.localeCompare(b.name))
-      const parent = path.dirname(resolved)
-      const isRoot = resolved === path.parse(resolved).root
-      res.json({
-        path: resolved,
-        parent: isRoot ? null : parent,
-        entries: payload
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to browse filesystem'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const createProjectHandler: RequestHandler = async (req, res) => {
-    const { name, repositoryPath, description, defaultBranch, visibility } = req.body ?? {}
-    if (!name || typeof name !== 'string' || !repositoryPath || typeof repositoryPath !== 'string') {
-      res.status(400).json({ error: 'name and repositoryPath are required' })
-      return
-    }
-    const normalizedName = name.trim()
-    const normalizedBranch =
-      typeof defaultBranch === 'string' && defaultBranch.trim().length ? defaultBranch.trim() : 'main'
-    const normalizedDescription =
-      typeof description === 'string' && description.trim().length ? description.trim() : undefined
-    const normalizedPath = repositoryPath.trim()
-    const normalizedVisibility = visibility === 'public' || visibility === 'private' ? visibility : 'private'
-    let resolvedPath: string
-    try {
-      resolvedPath = await initializeWorkspaceRepository(normalizedPath, normalizedBranch)
-      await fs.mkdir(path.join(resolvedPath, '.hyperagent'), { recursive: true })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to initialize workspace directory'
-      res.status(500).json({ error: message })
-      return
-    }
-
-    try {
-      const registration = await radicleModule.registerRepository({
-        repositoryPath: resolvedPath,
-        name: normalizedName,
-        description: normalizedDescription,
-        visibility: normalizedVisibility
-      })
-      persistence.radicleRegistrations.upsert({
-        repositoryPath: resolvedPath,
-        name: normalizedName,
-        description: normalizedDescription ?? null,
-        visibility: normalizedVisibility,
-        defaultBranch: registration.defaultBranch ?? normalizedBranch
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to register repository with Radicle'
-      res.status(500).json({ error: message })
-      return
-    }
-
-    const project = persistence.projects.getByRepositoryPath(resolvedPath)
-    if (!project) {
-      res.status(500).json({ error: 'Workspace is not eligible for Hyperagent (missing .hyperagent folder)' })
-      return
-    }
-    res.status(201).json(project)
-  }
-
-  const listWorkflowsHandler: RequestHandler = (req, res) => {
-    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined
-    const workflows = workflowRuntime.listWorkflows(projectId)
-    const payload = workflows.map((workflow) => ({
-      workflow,
-      steps: persistence.workflowSteps.listByWorkflow(workflow.id)
-    }))
-    res.json({ workflows: payload })
-  }
-
-  const createWorkflowHandler: RequestHandler = (req, res) => {
-    const { projectId, kind, tasks, data, autoStart } = req.body ?? {}
-    if (!projectId || typeof projectId !== 'string') {
-      res.status(400).json({ error: 'projectId is required' })
-      return
-    }
-    const project = persistence.projects.getById(projectId)
-    if (!project) {
-      res.status(404).json({ error: 'Unknown project' })
-      return
-    }
-    const normalizedTasks = normalizePlannerTasks(tasks)
-    if (!normalizedTasks.length) {
-      res.status(400).json({ error: 'At least one task is required' })
-      return
-    }
-    const plannerRun: PlannerRun = {
-      id: `planner-${Date.now()}`,
-      kind: typeof kind === 'string' && kind.length ? kind : 'custom',
-      tasks: normalizedTasks,
-      data: isPlainObject(data) ? data : {}
-    }
-    const workflow = workflowRuntime.createWorkflowFromPlan({ projectId, plannerRun })
-    if (autoStart) {
-      workflowRuntime.startWorkflow(workflow.id)
-    }
-    const detail = workflowRuntime.getWorkflowDetail(workflow.id)
-    res.status(201).json(detail ?? { workflow })
   }
 
   const listProjectPullRequestsHandler: RequestHandler = (req, res) => {
@@ -2564,162 +1314,58 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     res.json({ ok: true })
   }
 
-  const startWorkflowHandler: RequestHandler = (req, res) => {
-    const workflowId = req.params.workflowId
-    if (!workflowId) {
-      res.status(400).json({ error: 'workflowId is required' })
-      return
-    }
-    const detail = workflowRuntime.getWorkflowDetail(workflowId)
-    if (!detail) {
-      res.status(404).json({ error: 'Unknown workflow' })
-      return
-    }
-    workflowRuntime.startWorkflow(workflowId)
-    res.json({ workflowId, status: 'running' })
-  }
+  const workspaceSummaryRouter = createWorkspaceSummaryRouter({
+    wrapAsync,
+    persistence,
+    radicleModule,
+    workflowRuntime,
+    readGitMetadata,
+    runGitCommand,
+    graphBranchLimit: GRAPH_BRANCH_LIMIT,
+    graphCommitsPerBranch: GRAPH_COMMITS_PER_BRANCH,
+    initializeWorkspaceRepository
+  })
 
-  const workflowDetailHandler: RequestHandler = (req, res) => {
-    const workflowId = req.params.workflowId
-    if (!workflowId) {
-      res.status(400).json({ error: 'workflowId is required' })
-      return
-    }
-    const detail = workflowRuntime.getWorkflowDetail(workflowId)
-    if (!detail) {
-      res.status(404).json({ error: 'Unknown workflow' })
-      return
-    }
-    res.json(detail)
-  }
+  const workspaceSessionsRouter = createWorkspaceSessionsRouter({
+    wrapAsync,
+    codingAgentRunner,
+    codingAgentStorage,
+    codingAgentCommandRunner,
+    ensureWorkspaceDirectory
+  })
 
-  const workflowStepProvenanceHandler: RequestHandler = async (req, res) => {
-    const workflowId = req.params.workflowId
-    const stepId = req.params.stepId
-    if (!workflowId || !stepId) {
-      res.status(400).json({ error: 'workflowId and stepId are required' })
-      return
-    }
-    const detail = workflowRuntime.getWorkflowDetail(workflowId)
-    if (!detail) {
-      res.status(404).json({ error: 'Unknown workflow' })
-      return
-    }
-    const step = detail.steps.find((entry) => entry.id === stepId)
-    if (!step) {
-      res.status(404).json({ error: 'Unknown workflow step' })
-      return
-    }
-    const logsPath = deriveLogsPathForStep(step, detail.runs)
-    if (!logsPath) {
-      res.status(404).json({ error: 'Provenance file not available for this step' })
-      return
-    }
-    try {
-      const raw = await fs.readFile(logsPath, 'utf8')
-      const workspacePath = readWorkspacePathFromResult(step.result)
-      const workspaceEntries = await collectWorkspaceEntries(workspacePath)
-      res.json({
-        logsPath,
-        workspacePath,
-        content: raw,
-        parsed: safeParseJson(raw),
-        workspaceEntries
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load provenance file'
-      res.status(500).json({ error: message })
-    }
-  }
+  const workspaceWorkflowsRouter = createWorkspaceWorkflowsRouter({
+    wrapAsync,
+    workflowRuntime,
+    persistence,
+    runGitCommand,
+    validateWorkflowRunnerToken
+  })
 
-  const workflowRunnerCallbackHandler: RequestHandler = async (req, res) => {
-    const workflowId = req.params.workflowId
-    const stepId = req.params.stepId
-    if (!workflowId || !stepId) {
-      res.status(400).json({ error: 'workflowId and stepId are required' })
-      return
-    }
-    if (!validateWorkflowRunnerToken(req)) {
-      res.status(401).json({ error: 'Invalid workflow runner token' })
-      return
-    }
-    const runnerInstanceId = typeof req.body?.runnerInstanceId === 'string' ? req.body.runnerInstanceId.trim() : ''
-    if (!runnerInstanceId.length) {
-      res.status(400).json({ error: 'runnerInstanceId is required' })
-      return
-    }
-    try {
-      await workflowRuntime.runStepById({ workflowId, stepId, runnerInstanceId })
-      res.json({ ok: true })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to execute workflow step'
-      const normalized = message.toLowerCase()
-      if (normalized.includes('unknown workflow step')) {
-        res.status(404).json({ error: message })
-        return
+  const workspaceCodeServerRouter = createWorkspaceCodeServerRouter({
+    wrapAsync,
+    persistence,
+    ensureWorkspaceDirectory,
+    ensureProjectCodeServer: async (project) => {
+      const session = await ensureProjectCodeServer(project)
+      if (!session) return null
+      return {
+        id: session.id,
+        publicUrl: session.publicUrl,
+        dir: session.dir,
+        branch: session.branch
       }
-      if (normalized.includes('not running') || normalized.includes('runner token')) {
-        res.status(409).json({ error: message })
-        return
-      }
-      if (normalized.includes('does not belong')) {
-        res.status(400).json({ error: message })
-        return
-      }
-      res.status(500).json({ error: message })
     }
-  }
+  })
 
-  const listCodeSessionsHandler: RequestHandler = (_req, res) => {
-    res.json({ sessions: persistence.codeServerSessions.listActive() })
-  }
-
-  const listTerminalSessionsHandler: RequestHandler = async (req, res) => {
-    try {
-      const userId = resolveUserIdFromRequest(req)
-      const projectFilter =
-        typeof req.query.projectId === 'string' && req.query.projectId.trim().length ? req.query.projectId.trim() : null
-      const sessions = await terminalModule.listSessions(userId)
-      const filtered = projectFilter ? sessions.filter((session) => session.projectId === projectFilter) : sessions
-      res.json({ sessions: filtered })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to list terminal sessions'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const createTerminalSessionHandler: RequestHandler = async (req, res) => {
-    const userId = resolveUserIdFromRequest(req)
-    const { cwd, shell, projectId } = req.body ?? {}
-    try {
-      const session = await terminalModule.createSession(userId, {
-        cwd: typeof cwd === 'string' && cwd.trim().length ? cwd : undefined,
-        shell: typeof shell === 'string' && shell.trim().length ? shell : undefined,
-        projectId: typeof projectId === 'string' && projectId.trim().length ? projectId : null
-      })
-      res.status(201).json({ session })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to create terminal session'
-      const statusCode = /too many active terminal sessions/i.test(message) ? 429 : 500
-      res.status(statusCode).json({ error: message })
-    }
-  }
-
-  const deleteTerminalSessionHandler: RequestHandler = async (req, res) => {
-    const userId = resolveUserIdFromRequest(req)
-    const sessionId = req.params.sessionId
-    if (!sessionId) {
-      res.status(400).json({ error: 'sessionId is required' })
-      return
-    }
-    const record = await terminalModule.getSession(sessionId)
-    if (!record || record.userId !== userId) {
-      res.status(404).json({ error: 'Unknown terminal session' })
-      return
-    }
-    await terminalModule.closeSession(sessionId, userId)
-    res.status(204).end()
-  }
+  const workspaceTerminalModule = createWorkspaceTerminalModule({
+    wrapAsync,
+    terminalModule,
+    WebSocketCtor,
+    WebSocketServerCtor,
+    resolveUserIdFromRequest,
+    resolveUserIdFromHeaders
+  })
 
   installProcessErrorHandlers()
 
@@ -2731,29 +1377,15 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   )
 
   app.post('/api/agent/run', wrapAsync(agentRunHandler))
+  app.use(workspaceSummaryRouter)
+  app.use(workspaceSessionsRouter)
+  app.use(workspaceWorkflowsRouter)
+  app.use(workspaceCodeServerRouter)
+  app.use(workspaceTerminalModule.router)
 
-  app.get('/api/radicle/status', wrapAsync(radicleStatusHandler))
-  app.get('/api/radicle/repositories', wrapAsync(radicleRepositoriesHandler))
-  app.post('/api/radicle/register', wrapAsync(registerRadicleRepositoryHandler))
-  app.get('/api/fs/browse', wrapAsync(browseFilesystemHandler))
-  app.get('/api/projects', wrapAsync(listProjectsHandler))
-  app.get('/api/projects/:projectId/graph', wrapAsync(repositoryGraphHandler))
-  app.get('/api/projects/:projectId/diff', wrapAsync(projectDiffHandler))
-  app.post('/api/projects/:projectId/devspace', wrapAsync(projectDevspaceHandler))
   app.get('/api/projects/:projectId/pull-requests', wrapAsync(listProjectPullRequestsHandler))
   app.get('/api/reviews/active', wrapAsync(listActiveReviewsHandler))
   app.post('/api/projects/:projectId/pull-requests', wrapAsync(createProjectPullRequestHandler))
-  app.get('/api/projects/:projectId', wrapAsync(projectDetailHandler))
-  app.post('/api/projects/:projectId/git/stage', wrapAsync(gitStageHandler))
-  app.post('/api/projects/:projectId/git/discard', wrapAsync(gitDiscardHandler))
-  app.post('/api/projects/:projectId/git/commit', wrapAsync(gitCommitHandler))
-  app.post('/api/projects/:projectId/git/generate-commit-message', wrapAsync(generateCommitMessageHandler))
-  app.post('/api/projects/:projectId/git/checkout', wrapAsync(gitCheckoutHandler))
-  app.post('/api/projects/:projectId/git/stash', wrapAsync(gitStashHandler))
-  app.post('/api/projects/:projectId/git/unstash', wrapAsync(gitUnstashHandler))
-  app.post('/api/projects/:projectId/git/pull', wrapAsync(gitPullHandler))
-  app.post('/api/projects/:projectId/git/push', wrapAsync(gitPushHandler))
-  app.post('/api/projects', wrapAsync(createProjectHandler))
   app.get('/api/pull-requests/:prId', wrapAsync(pullRequestDetailHandler))
   app.get('/api/pull-requests/:prId/diff', wrapAsync(pullRequestDiffHandler))
   app.get('/api/pull-requests/:prId/threads', wrapAsync(pullRequestThreadsHandler))
@@ -2764,222 +1396,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   app.post('/api/threads/:threadId/comments', wrapAsync(addThreadCommentHandler))
   app.post('/api/threads/:threadId/resolve', wrapAsync(resolveThreadHandler))
   app.post('/api/review-runs/:runId/callback', wrapAsync(reviewRunCallbackHandler))
-  app.get('/api/workflows', wrapAsync(listWorkflowsHandler))
-  app.post('/api/workflows', wrapAsync(createWorkflowHandler))
-  app.post('/api/workflows/:workflowId/start', wrapAsync(startWorkflowHandler))
-  app.get('/api/workflows/:workflowId', wrapAsync(workflowDetailHandler))
-  app.post('/api/workflows/:workflowId/steps/:stepId/callback', wrapAsync(workflowRunnerCallbackHandler))
-  app.get('/api/workflows/:workflowId/steps/:stepId/diff', wrapAsync(workflowStepDiffHandler))
-  app.get('/api/workflows/:workflowId/steps/:stepId/provenance', wrapAsync(workflowStepProvenanceHandler))
-  app.get('/api/code-server/sessions', wrapAsync(listCodeSessionsHandler))
-  app.get('/api/terminal/sessions', wrapAsync(listTerminalSessionsHandler))
-  app.post('/api/terminal/sessions', wrapAsync(createTerminalSessionHandler))
-  app.delete('/api/terminal/sessions/:sessionId', wrapAsync(deleteTerminalSessionHandler))
-  app.get('/api/coding-agent/providers', wrapAsync(listCodingAgentProvidersHandler))
-  app.get('/api/coding-agent/sessions', wrapAsync(listCodingAgentSessionsHandler))
-  app.get('/api/coding-agent/sessions/:sessionId', wrapAsync(getCodingAgentSessionHandler))
-
-  const postCodingAgentMessageHandler: RequestHandler = async (req, res) => {
-    const sessionId = req.params.sessionId
-    if (!sessionId) {
-      res.status(400).json({ error: 'sessionId is required' })
-      return
-    }
-    const body = req.body ?? {}
-    const text = typeof body.text === 'string' ? body.text.trim() : ''
-    const requestedModelId = typeof body.modelId === 'string' && body.modelId.trim().length ? body.modelId.trim() : null
-    const role = typeof body.role === 'string' && body.role.trim().length ? body.role.trim() : 'user'
-    if (!text.length) {
-      res.status(400).json({ error: 'text is required' })
-      return
-    }
-    try {
-      const existing = await codingAgentStorage.getSession(sessionId)
-      if (!existing) {
-        res.status(404).json({ error: 'Unknown session' })
-        return
-      }
-      const run = await codingAgentRunner.getRun(sessionId)
-      if (role !== 'user') {
-        console.warn(`[coding-agent] Unsupported role "${role}" for session ${sessionId}; sending as user message.`)
-      }
-      try {
-        await ensureWorkspaceDirectory(existing.session.workspacePath)
-      } catch {
-        res.status(400).json({ error: 'Session workspace is unavailable' })
-        return
-      }
-      const providerFromMessages = existing.messages
-        .slice()
-        .reverse()
-        .map((message) => (typeof message.providerId === 'string' ? message.providerId.trim() : ''))
-        .find((candidate) => candidate.length)
-      const resolvedProviderId =
-        [existing.session.providerId, run?.providerId, providerFromMessages]
-          .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
-          .find((candidate) => candidate.length)
-          ?.trim() ?? CODING_AGENT_PROVIDER_ID
-      const modelFromMessages = existing.messages
-        .slice()
-        .reverse()
-        .map((message) => (typeof message.modelId === 'string' ? message.modelId.trim() : ''))
-        .find((candidate) => candidate.length)
-      const resolvedModelId =
-        [requestedModelId, existing.session.modelId, run?.model, modelFromMessages]
-          .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
-          .find((candidate) => candidate.length)
-          ?.trim() ?? DEFAULT_CODING_AGENT_MODEL
-      const adapter = getProviderAdapter(resolvedProviderId)
-      if (!adapter) {
-        res.status(400).json({ error: `Unsupported provider: ${resolvedProviderId}` })
-        return
-      }
-      const invocation = adapter.buildInvocation
-        ? adapter.buildInvocation({
-            sessionId,
-            modelId: resolvedModelId,
-            text,
-            workspacePath: existing.session.workspacePath,
-            messages: existing.messages,
-            session: existing
-          })
-        : null
-      if (!invocation) {
-        res.status(500).json({ error: `Provider ${resolvedProviderId} cannot build invocation` })
-        return
-      }
-      try {
-        await runProviderInvocation(invocation, {
-          cwd: existing.session.workspacePath,
-          opencodeCommandRunner: codingAgentCommandRunner
-        })
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Provider invocation failed'
-        res.status(500).json({ error: message })
-        return
-      }
-      const updated = await codingAgentStorage.getSession(sessionId)
-      const detail = updated ?? existing
-      res.status(201).json({
-        ...detail,
-        session: {
-          ...detail.session,
-          providerId: resolvedProviderId,
-          modelId: resolvedModelId
-        }
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to post coding agent message'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  app.post('/api/coding-agent/sessions', wrapAsync(startCodingAgentSessionHandler))
-  app.post('/api/coding-agent/sessions/:sessionId/messages', wrapAsync(postCodingAgentMessageHandler))
-  app.post('/api/coding-agent/sessions/:sessionId/kill', wrapAsync(killCodingAgentSessionHandler))
-  app.get('/api/coding-agent/runs', wrapAsync(listCodingAgentRunsHandler))
-
-  const sendTerminalPayload = (socket: WebSocketType, payload: Record<string, unknown>) => {
-    if (socket.readyState !== WebSocketCtor.OPEN) return
-    socket.send(JSON.stringify(payload))
-  }
-
-  const rawDataToString = (raw: RawData): string => {
-    if (typeof raw === 'string') return raw
-    if (Buffer.isBuffer(raw)) return raw.toString('utf8')
-    if (Array.isArray(raw)) {
-      return Buffer.concat(raw.map((item) => (Buffer.isBuffer(item) ? item : Buffer.from(item)))).toString('utf8')
-    }
-    return Buffer.from(raw as ArrayBuffer).toString('utf8')
-  }
-
-  const handleTerminalSocketMessage = (raw: RawData, live: LiveTerminalSession) => {
-    let parsed: any
-    try {
-      parsed = JSON.parse(rawDataToString(raw))
-    } catch {
-      return
-    }
-    if (parsed?.type === 'input' && typeof parsed.data === 'string') {
-      live.pty.write(parsed.data)
-      return
-    }
-    if (parsed?.type === 'resize') {
-      const cols = typeof parsed.cols === 'number' && parsed.cols > 0 ? parsed.cols : undefined
-      const rows = typeof parsed.rows === 'number' && parsed.rows > 0 ? parsed.rows : undefined
-      if (cols || rows) {
-        live.pty.resize(cols ?? live.pty.cols, rows ?? live.pty.rows)
-      }
-      return
-    }
-    if (parsed?.type === 'close') {
-      void terminalModule.closeSession(live.id, live.userId)
-    }
-  }
-
-  terminalWsServer.on('connection', (socket: WebSocketType, request: IncomingMessage) => {
-    const sessionId = extractTerminalSessionId(request.url)
-    if (!sessionId) {
-      socket.close(1008, 'Missing terminal session id')
-      return
-    }
-    const userId = resolveUserIdFromHeaders(request.headers)
-    try {
-      console.info(
-        `[WS] terminal connected session=${sessionId} from=${request.socket?.remoteAddress ?? 'unknown'} (user=${userId})`
-      )
-    } catch {
-      // ignore logging failures
-    }
-    ;(async () => {
-      try {
-        const live = await terminalModule.attachSession(sessionId, userId)
-        sendTerminalPayload(socket, { type: 'ready', sessionId: live.id })
-        const disposables: Array<() => void> = []
-        const dataSubscription = live.pty.onData((data) => {
-          try {
-            console.info(
-              `[WS] terminal -> client session=${sessionId} data=${typeof data === 'string' ? data.substring(0, 200) : '[binary]'}`
-            )
-          } catch {
-            // ignore
-          }
-          sendTerminalPayload(socket, { type: 'output', data })
-        })
-        const exitSubscription = live.pty.onExit(({ exitCode, signal }) => {
-          sendTerminalPayload(socket, {
-            type: 'exit',
-            exitCode,
-            signal: typeof signal === 'number' ? signal : null
-          })
-          socket.close(1000)
-        })
-        disposables.push(() => dataSubscription.dispose())
-        disposables.push(() => exitSubscription.dispose())
-
-        const messageHandler = (raw: RawData) => handleTerminalSocketMessage(raw, live)
-        socket.on('message', messageHandler)
-        const cleanup = () => {
-          if (!disposables.length) return
-          while (disposables.length) {
-            const dispose = disposables.pop()
-            try {
-              dispose?.()
-            } catch {
-              // ignore
-            }
-          }
-          socket.off('message', messageHandler)
-        }
-        socket.on('close', cleanup)
-        socket.on('error', cleanup)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unable to attach terminal session'
-        sendTerminalPayload(socket, { type: 'error', message })
-        socket.close(1011, message.slice(0, 120))
-      }
-    })()
-  })
 
   app.use('/code-server/:sessionId', codeServerProxyHandler)
 
@@ -3001,10 +1417,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   })
 
   const handleUpgrade = (req: IncomingMessage, socket: Socket, head: Buffer) => {
-    if (extractTerminalSessionId(req.url)) {
-      terminalWsServer.handleUpgrade(req, socket, head, (ws: WebSocketType) => {
-        terminalWsServer.emit('connection', ws, req)
-      })
+    if (workspaceTerminalModule.matchesUpgrade(req)) {
+      workspaceTerminalModule.handleUpgrade(req, socket, head)
       return
     }
     const sessionIdFromUrl = extractSessionIdFromUrl(req.url)
@@ -3031,14 +1445,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
 
   const shutdownApp = async () => {
     await shutdownAllCodeServers()
-    terminalWsServer.clients.forEach((client: WebSocketType) => {
-      try {
-        client.close()
-      } catch {
-        // ignore
-      }
-    })
-    await new Promise<void>((resolve) => terminalWsServer.close(() => resolve()))
+    await workspaceTerminalModule.shutdown()
     if (manageWorkerLifecycle) {
       await workflowRuntime.stopWorker()
     }
@@ -3074,23 +1481,6 @@ function detectGitAuthorFromCli(): { name: string; email: string } | null {
     return { name, email }
   }
   return null
-}
-
-const sanitizeRepoIdComponent = (repoPath: string): string => {
-  const normalized = repoPath.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-  return normalized.length ? normalized : 'radicle-repo'
-}
-
-function createSyntheticProjectRecord(repoPath: string, registration: RadicleRegistrationRecord | null): ProjectRecord {
-  return {
-    id: `rad-only-${sanitizeRepoIdComponent(repoPath)}`,
-    name: registration?.name ?? (path.basename(repoPath) || repoPath),
-    description: registration?.description ?? null,
-    repositoryPath: repoPath,
-    repositoryProvider: 'radicle',
-    defaultBranch: registration?.defaultBranch ?? 'main',
-    createdAt: registration?.registeredAt ?? new Date().toISOString()
-  }
 }
 
 function readGitConfigValue(key: string): string | null {

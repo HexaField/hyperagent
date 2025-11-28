@@ -1,5 +1,8 @@
 import type { Provider } from '../../../src/modules/llm'
-import { DEFAULT_CODING_AGENT_PROVIDER } from '../../../src/modules/provider'
+import {
+  DEFAULT_CODING_AGENT_MODEL as PROVIDER_DEFAULT_CODING_AGENT_MODEL,
+  DEFAULT_CODING_AGENT_PROVIDER
+} from '../../../src/modules/provider'
 
 export const DEFAULT_PORT = Number(process.env.UI_SERVER_PORT || 5556)
 export const CODE_SERVER_HOST = process.env.CODE_SERVER_HOST || '127.0.0.1'
@@ -10,6 +13,8 @@ export const WORKFLOW_AGENT_PROVIDER =
 export const WORKFLOW_AGENT_MODEL = process.env.WORKFLOW_AGENT_MODEL ?? 'github-copilot/gpt-5-mini'
 export const WORKFLOW_AGENT_MAX_ROUNDS = parsePositiveInteger(process.env.WORKFLOW_AGENT_MAX_ROUNDS)
 export const CODING_AGENT_PROVIDER_ID = DEFAULT_CODING_AGENT_PROVIDER
+export const DEFAULT_CODING_AGENT_MODEL =
+  process.env.CODING_AGENT_MODEL ?? PROVIDER_DEFAULT_CODING_AGENT_MODEL
 export const FALLBACK_CODING_AGENT_MODEL_IDS = ['github-copilot/gpt-5-mini', 'github-copilot/gpt-4o', 'openai/gpt-4o-mini']
 export const KNOWN_CODING_AGENT_MODEL_LABELS: Record<string, string> = {
   'github-copilot/gpt-5-mini': 'GitHub Copilot · GPT-5 Mini',
