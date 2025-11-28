@@ -27,8 +27,7 @@ export async function fetchCodingAgentProviders(): Promise<CodingAgentProvider[]
   }
 }
 
-// Backwards-compatible opencode-style client helpers but routed to coding-agent APIs
-export type OpencodeSessionSummary = {
+export type CodingAgentSessionSummary = {
   id: string
   title: string | null
   workspacePath: string
@@ -44,7 +43,7 @@ export type OpencodeSessionSummary = {
   }
 }
 
-export type OpencodeMessage = {
+export type CodingAgentMessage = {
   id: string
   role: string
   createdAt: string
@@ -54,12 +53,12 @@ export type OpencodeMessage = {
   text: string
 }
 
-export type OpencodeSessionDetail = {
-  session: OpencodeSessionSummary
-  messages: OpencodeMessage[]
+export type CodingAgentSessionDetail = {
+  session: CodingAgentSessionSummary
+  messages: CodingAgentMessage[]
 }
 
-export type OpencodeRunRecord = {
+export type CodingAgentRunRecord = {
   sessionId: string
   pid: number
   workspacePath: string
@@ -75,24 +74,26 @@ export type OpencodeRunRecord = {
   signal: string | null
 }
 
-export async function fetchOpencodeSessions(params?: { workspacePath?: string }): Promise<OpencodeSessionSummary[]> {
+export async function fetchCodingAgentSessions(params?: {
+  workspacePath?: string
+}): Promise<CodingAgentSessionSummary[]> {
   const query = params?.workspacePath ? `?workspacePath=${encodeURIComponent(params.workspacePath)}` : ''
-  const payload = await fetchJson<{ sessions: OpencodeSessionSummary[] }>(`/api/coding-agent/sessions${query}`)
+  const payload = await fetchJson<{ sessions: CodingAgentSessionSummary[] }>(`/api/coding-agent/sessions${query}`)
   return payload.sessions
 }
 
-export async function fetchOpencodeSessionDetail(sessionId: string): Promise<OpencodeSessionDetail> {
-  return await fetchJson<OpencodeSessionDetail>(`/api/coding-agent/sessions/${encodeURIComponent(sessionId)}`)
+export async function fetchCodingAgentSessionDetail(sessionId: string): Promise<CodingAgentSessionDetail> {
+  return await fetchJson<CodingAgentSessionDetail>(`/api/coding-agent/sessions/${encodeURIComponent(sessionId)}`)
 }
 
-export async function startOpencodeRun(input: {
+export async function startCodingAgentRun(input: {
   workspacePath: string
   prompt: string
   title?: string
   model?: string
   providerId?: string
-}): Promise<OpencodeRunRecord> {
-  const payload = await fetchJson<{ run: OpencodeRunRecord }>(`/api/coding-agent/sessions`, {
+}): Promise<CodingAgentRunRecord> {
+  const payload = await fetchJson<{ run: CodingAgentRunRecord }>(`/api/coding-agent/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input)
@@ -100,7 +101,7 @@ export async function startOpencodeRun(input: {
   return payload.run
 }
 
-export async function killOpencodeSession(sessionId: string): Promise<boolean> {
+export async function killCodingAgentSession(sessionId: string): Promise<boolean> {
   const payload = await fetchJson<{ success: boolean }>(
     `/api/coding-agent/sessions/${encodeURIComponent(sessionId)}/kill`,
     {
@@ -110,16 +111,16 @@ export async function killOpencodeSession(sessionId: string): Promise<boolean> {
   return Boolean(payload.success)
 }
 
-export async function fetchOpencodeRuns(): Promise<OpencodeRunRecord[]> {
-  const payload = await fetchJson<{ runs: OpencodeRunRecord[] }>(`/api/coding-agent/runs`)
+export async function fetchCodingAgentRuns(): Promise<CodingAgentRunRecord[]> {
+  const payload = await fetchJson<{ runs: CodingAgentRunRecord[] }>(`/api/coding-agent/runs`)
   return payload.runs
 }
 
-export async function postOpencodeMessage(
+export async function postCodingAgentMessage(
   sessionId: string,
   input: { role?: string; text: string; modelId?: string }
-): Promise<OpencodeSessionDetail> {
-  const payload = await fetchJson<OpencodeSessionDetail>(
+): Promise<CodingAgentSessionDetail> {
+  const payload = await fetchJson<CodingAgentSessionDetail>(
     `/api/coding-agent/sessions/${encodeURIComponent(sessionId)}/messages`,
     {
       method: 'POST',

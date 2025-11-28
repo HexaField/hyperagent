@@ -1,6 +1,6 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js'
-import type { OpencodeMessage as CodingAgentMessage } from '../lib/codingAgent'
+import type { CodingAgentMessage } from '../lib/codingAgent'
 import ToolRenderer from '../lib/ToolRenderer'
 
 export type MessageScrollerProps = {
@@ -64,7 +64,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
     } catch {}
     // Do not change the user's autoScroll preference here.
     // We only clear any persisted scroll position and perform the requested scroll.
-    // The parent (OpencodeConsole) is responsible for flipping its own autoScroll state when the user clicks resume.
+    // The parent (CodingAgentConsole) is responsible for flipping its own autoScroll state when the user clicks resume.
     // First attempt a smooth scroll then force an instant settle
     scrollToBottom(el, true)
   })

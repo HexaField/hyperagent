@@ -16,8 +16,8 @@ describe('coding agent client helpers', () => {
   it('fetches providers from the API', async () => {
     const providers = [
       {
-        id: 'opencode',
-        label: 'Coding Agent (Opencode CLI)',
+        id: 'coding-agent-cli',
+        label: 'Coding Agent CLI',
         defaultModelId: 'github-copilot/gpt-5-mini',
         models: [{ id: 'github-copilot/gpt-5-mini', label: 'GitHub Copilot · GPT-5 Mini' }]
       }

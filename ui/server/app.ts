@@ -1452,7 +1452,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       const stdout = result?.stdout ?? ''
       return ensureCodingAgentModelList(parseCodingAgentModelList(stdout))
     } catch (error) {
-      console.warn('Failed to list coding agent models via opencode CLI, falling back to defaults.', error)
+      console.warn('Failed to list coding agent models via coding agent CLI, falling back to defaults.', error)
       return ensureCodingAgentModelList([])
     }
   }
@@ -1462,7 +1462,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     const defaultModelId = modelIds[0] ?? DEFAULT_CODING_AGENT_MODEL
     return {
       id: CODING_AGENT_PROVIDER_ID,
-      label: 'Coding Agent (Opencode CLI)',
+      label: 'Coding Agent CLI',
       defaultModelId,
       models: modelIds.map((id) => ({ id, label: formatCodingAgentModelLabel(id) }))
     }

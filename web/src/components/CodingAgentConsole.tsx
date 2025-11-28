@@ -1,53 +1,50 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
 import {
-  fetchOpencodeRuns,
-  fetchOpencodeSessionDetail,
-  fetchOpencodeSessions,
-  killOpencodeSession,
-  postOpencodeMessage,
-  startOpencodeRun,
-  type OpencodeMessage as CodingAgentMessage,
-  type OpencodeRunRecord as CodingAgentRunRecord,
-  type OpencodeSessionDetail as CodingAgentSessionDetail,
-  type OpencodeSessionSummary as CodingAgentSessionSummary
+  fetchCodingAgentRuns,
+  fetchCodingAgentSessionDetail,
+  fetchCodingAgentSessions,
+  killCodingAgentSession,
+  postCodingAgentMessage,
+  startCodingAgentRun,
+  type CodingAgentMessage,
+  type CodingAgentProvider,
+  type CodingAgentRunRecord,
+  type CodingAgentSessionDetail,
+  type CodingAgentSessionSummary
 } from '../lib/codingAgent'
 import ToolRenderer from '../lib/ToolRenderer'
 import SingleWidgetHeader from './layout/SingleWidgetHeader'
 import MessageScroller from './MessageScroller'
 
 const REFRESH_INTERVAL_MS = 4000
-const STORAGE_PREFIXES = ['coding-agent-console:v1', 'opencode-console:v1'] as const
-const STORAGE_PREFIX = STORAGE_PREFIXES[0]
+const STORAGE_PREFIX = 'coding-agent-console:v1'
 const SESSION_OVERRIDES_SUFFIX = ':session-settings'
-const LEGACY_MODEL_OVERRIDES_SUFFIX = ':models'
 const STATE_EVENT = 'coding-agent-console:state'
-const STATE_EVENT_ALIASES = [STATE_EVENT, 'opencode-console:state'] as const
 const SEARCH_PARAM_SESSION = 'codingAgentSession'
-const LEGACY_SEARCH_PARAM_SESSION = 'opencodeSession'
 const DEFAULT_WORKSPACE_KEY = '__default__'
-const CODING_AGENT_PROVIDERS = [
-  {
-    id: 'opencode',
-    label: 'Coding Agent (Opencode CLI)',
-    defaultModelId: 'github-copilot/gpt-5-mini',
-    models: [
-      { id: 'github-copilot/gpt-5-mini', label: 'GitHub Copilot · GPT-5 Mini' },
-      { id: 'github-copilot/gpt-4o', label: 'GitHub Copilot · GPT-4o' },
-      { id: 'openai/gpt-4o-mini', label: 'OpenAI · GPT-4o Mini' }
-    ]
-  }
-] as const
-type CodingAgentProviderConfig = (typeof CODING_AGENT_PROVIDERS)[number]
+type CodingAgentProviderConfig = CodingAgentProvider
 type CodingAgentProviderId = CodingAgentProviderConfig['id']
+const FALLBACK_PROVIDER: CodingAgentProviderConfig = {
+  id: 'coding-agent-cli',
+  label: 'Coding Agent CLI',
+  defaultModelId: 'github-copilot/gpt-5-mini',
+  models: [
+    { id: 'github-copilot/gpt-5-mini', label: 'GitHub Copilot · GPT-5 Mini' },
+    { id: 'github-copilot/gpt-4o', label: 'GitHub Copilot · GPT-4o' },
+    { id: 'openai/gpt-4o-mini', label: 'OpenAI · GPT-4o Mini' }
+  ]
+}
+const DEFAULT_PROVIDERS: readonly CodingAgentProviderConfig[] = [FALLBACK_PROVIDER]
 type SessionOverride = {
   providerId?: CodingAgentProviderId
   modelId?: string
 }
+const providerConfigs = () => DEFAULT_PROVIDERS
 const PROVIDER_CONFIG_MAP = new Map<CodingAgentProviderId, CodingAgentProviderConfig>(
-  CODING_AGENT_PROVIDERS.map((config) => [config.id, config])
+  providerConfigs().map((config) => [config.id, config])
 )
-const DEFAULT_PROVIDER = CODING_AGENT_PROVIDERS[0]
+const DEFAULT_PROVIDER = providerConfigs()[0]
 const DEFAULT_MODEL_ID = DEFAULT_PROVIDER.defaultModelId
 type PersistedState = {
   selectedSessionId?: string | null
@@ -64,16 +61,12 @@ function normalizeWorkspaceKey(value: string | null | undefined): string {
   return trimmed && trimmed.length > 0 ? trimmed : DEFAULT_WORKSPACE_KEY
 }
 
-function storageKeyFor(workspaceKey: string, prefix: string = STORAGE_PREFIX): string {
-  return `${prefix}:${workspaceKey}`
+function storageKeyFor(workspaceKey: string): string {
+  return `${STORAGE_PREFIX}:${workspaceKey}`
 }
 
-function sessionOverridesKeyFor(workspaceKey: string, prefix: string = STORAGE_PREFIX): string {
-  return `${storageKeyFor(workspaceKey, prefix)}${SESSION_OVERRIDES_SUFFIX}`
-}
-
-function legacyModelOverridesKeyFor(workspaceKey: string, prefix: string = STORAGE_PREFIX): string {
-  return `${storageKeyFor(workspaceKey, prefix)}${LEGACY_MODEL_OVERRIDES_SUFFIX}`
+function sessionOverridesKeyFor(workspaceKey: string): string {
+  return `${storageKeyFor(workspaceKey)}${SESSION_OVERRIDES_SUFFIX}`
 }
 
 function normalizeProviderId(value: string | null | undefined): CodingAgentProviderId {
@@ -106,17 +99,15 @@ function modelLabel(providerId: string | null | undefined, modelId: string | nul
 
 function readStoredState(workspaceKey: string): PersistedState {
   if (typeof window === 'undefined') return {}
-  for (const prefix of STORAGE_PREFIXES) {
-    try {
-      const raw = window.localStorage.getItem(storageKeyFor(workspaceKey, prefix))
-      if (raw) {
-        const parsed = JSON.parse(raw) as PersistedState | null
-        if (parsed && typeof parsed === 'object') {
-          return parsed
-        }
+  try {
+    const raw = window.localStorage.getItem(storageKeyFor(workspaceKey))
+    if (raw) {
+      const parsed = JSON.parse(raw) as PersistedState | null
+      if (parsed && typeof parsed === 'object') {
+        return parsed
       }
-    } catch {}
-  }
+    }
+  } catch {}
   return {}
 }
 
@@ -125,7 +116,7 @@ function readPersistedState(workspaceKey: string): PersistedState {
   if (typeof window === 'undefined') return state
   try {
     const params = new URLSearchParams(window.location.search)
-    const sessionParam = params.get(SEARCH_PARAM_SESSION) ?? params.get(LEGACY_SEARCH_PARAM_SESSION)
+    const sessionParam = params.get(SEARCH_PARAM_SESSION)
     if (sessionParam) state.selectedSessionId = sessionParam
   } catch {}
   return state
@@ -148,27 +139,19 @@ function persistState(workspaceKey: string, patch: Partial<PersistedState>) {
     window.localStorage.setItem(key, nextRaw)
   } catch {}
   const detail = { workspaceKey, state: next }
-  for (const eventName of STATE_EVENT_ALIASES) {
-    try {
-      window.dispatchEvent(new CustomEvent(eventName, { detail }))
-    } catch {}
-  }
+  try {
+    window.dispatchEvent(new CustomEvent(STATE_EVENT, { detail }))
+  } catch {}
 }
 
 function updateSearchParam(name: string, value: string | null | undefined) {
   if (typeof window === 'undefined') return
   try {
     const url = new URL(window.location.href)
-    const targetNames = name === SEARCH_PARAM_SESSION ? [SEARCH_PARAM_SESSION, LEGACY_SEARCH_PARAM_SESSION] : [name]
     if (value === undefined || value === null || value === '') {
-      for (const param of targetNames) {
-        url.searchParams.delete(param)
-      }
+      url.searchParams.delete(name)
     } else {
       url.searchParams.set(name, value)
-      if (name === SEARCH_PARAM_SESSION) {
-        url.searchParams.delete(LEGACY_SEARCH_PARAM_SESSION)
-      }
     }
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
   } catch {}
@@ -176,17 +159,7 @@ function updateSearchParam(name: string, value: string | null | undefined) {
 
 function readSessionOverrides(workspaceKey: string): Record<string, SessionOverride> {
   if (typeof window === 'undefined') return {}
-  for (const prefix of STORAGE_PREFIXES) {
-    const parsed = parseSessionOverrides(window.localStorage.getItem(sessionOverridesKeyFor(workspaceKey, prefix)))
-    if (parsed) return parsed
-  }
-  for (const prefix of STORAGE_PREFIXES) {
-    const parsed = parseLegacyModelOverrides(
-      window.localStorage.getItem(legacyModelOverridesKeyFor(workspaceKey, prefix))
-    )
-    if (parsed) return parsed
-  }
-  return {}
+  return parseSessionOverrides(window.localStorage.getItem(sessionOverridesKeyFor(workspaceKey))) ?? {}
 }
 
 function parseSessionOverrides(raw: string | null): Record<string, SessionOverride> | null {
@@ -205,25 +178,6 @@ function parseSessionOverrides(raw: string | null): Record<string, SessionOverri
           ...(providerId ? { providerId } : {}),
           ...(modelId ? { modelId: normalizeModelId(providerId ?? DEFAULT_PROVIDER.id, modelId) } : {})
         }
-      }
-    }
-    return next
-  } catch {
-    return null
-  }
-}
-
-function parseLegacyModelOverrides(raw: string | null): Record<string, SessionOverride> | null {
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return null
-    const next: Record<string, SessionOverride> = {}
-    for (const [sessionId, modelId] of Object.entries(parsed)) {
-      if (!sessionId || typeof modelId !== 'string') continue
-      next[sessionId] = {
-        providerId: DEFAULT_PROVIDER.id,
-        modelId: normalizeModelId(DEFAULT_PROVIDER.id, modelId)
       }
     }
     return next
@@ -264,15 +218,15 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
 
   const [sessions, { refetch: refetchSessions }] = createResource(workspaceForFetch, async (value) => {
     const trimmed = value?.trim()
-    return await fetchOpencodeSessions(trimmed ? { workspacePath: trimmed } : undefined)
+    return await fetchCodingAgentSessions(trimmed ? { workspacePath: trimmed } : undefined)
   })
-  const [runs, { refetch: refetchRuns }] = createResource(fetchOpencodeRuns)
+  const [runs, { refetch: refetchRuns }] = createResource(fetchCodingAgentRuns)
   const [selectedSessionId, setSelectedSessionId] = createSignal<string | null>(null)
   const [sessionDetail, { refetch: refetchSessionDetail, mutate: mutateSessionDetail }] = createResource(
     selectedSessionId,
     async (sessionId) => {
       if (!sessionId) return null
-      return await fetchOpencodeSessionDetail(sessionId)
+      return await fetchCodingAgentSessionDetail(sessionId)
     }
   )
 
@@ -408,7 +362,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         }
         const providerId = DEFAULT_PROVIDER.id
         const modelId = DEFAULT_MODEL_ID
-        const run = await startOpencodeRun({
+        const run = await startCodingAgentRun({
           workspacePath,
           prompt: text,
           model: modelId
@@ -436,7 +390,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
 
       const sessionId = selectedSessionId()
       if (!sessionId) return
-      await postOpencodeMessage(sessionId, { text })
+      await postCodingAgentMessage(sessionId, { text })
       setReplyText('')
       const ta = replyEl()
       if (ta) ta.style.height = 'auto'
@@ -459,7 +413,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     setKillingSessionId(sessionId)
     setError(null)
     try {
-      await killOpencodeSession(sessionId)
+      await killCodingAgentSession(sessionId)
       await Promise.all([refetchRuns(), refetchSessions()])
       if (sessionSettingsId() === sessionId) closeSessionSettings()
     } catch (err) {
@@ -556,22 +510,18 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         setPendingSessionId(null)
       }
     }
-    for (const eventName of STATE_EVENT_ALIASES) {
-      try {
-        window.addEventListener(eventName, stateHandler as EventListener)
-      } catch {}
-    }
+    try {
+      window.addEventListener(STATE_EVENT, stateHandler as EventListener)
+    } catch {}
 
     let focusHandler: ((e: FocusEvent) => void) | null = null
 
     onCleanup(() => {
       if (typeof mq.removeEventListener === 'function') mq.removeEventListener('change', handler)
       else mq.removeListener(handler)
-      for (const eventName of STATE_EVENT_ALIASES) {
-        try {
-          window.removeEventListener(eventName, stateHandler as EventListener)
-        } catch {}
-      }
+      try {
+        window.removeEventListener(STATE_EVENT, stateHandler as EventListener)
+      } catch {}
       try {
         window.removeEventListener('keydown', keydownHandler)
       } catch {}
@@ -1094,7 +1044,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                     setSessionSettingsModel((current) => normalizeModelId(nextProvider, current))
                   }}
                 >
-                  <For each={CODING_AGENT_PROVIDERS}>
+                  <For each={DEFAULT_PROVIDERS}>
                     {(provider) => <option value={provider.id}>{provider.label}</option>}
                   </For>
                 </select>
