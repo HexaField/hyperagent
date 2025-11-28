@@ -8,7 +8,7 @@ describe('opencode provider adapter', () => {
   }
 
   it('places the prompt before CLI flags', () => {
-    const invocation = adapter.buildInvocation({
+    const invocation = adapter.buildInvocation!({
       sessionId: 'ses_unit',
       modelId: 'github-copilot/gpt-5-mini',
       text: 'Continue the plan'
@@ -27,7 +27,7 @@ describe('opencode provider adapter', () => {
 
   it('protects prompts that start with a dash', () => {
     const rawPrompt = '-list files'
-    const invocation = adapter.buildInvocation({
+    const invocation = adapter.buildInvocation!({
       sessionId: 'ses_dash',
       modelId: 'github-copilot/gpt-5-mini',
       text: rawPrompt

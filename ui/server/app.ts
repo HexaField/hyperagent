@@ -576,6 +576,30 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   app.use(corsMiddleware)
   app.use(express.json({ limit: '1mb' }))
 
+  // Attach stack traces to JSON error responses when handlers only set `{ error }`.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const originalJson = res.json.bind(res)
+    ;(res as any).json = function (body: any) {
+      try {
+        const verbose = process.env.UI_VERBOSE_ERRORS === 'true'
+        if (
+          verbose &&
+          body &&
+          typeof body === 'object' &&
+          Object.prototype.hasOwnProperty.call(body, 'error') &&
+          !Object.prototype.hasOwnProperty.call(body, 'stack')
+        ) {
+          const stack = new Error(String(body.error)).stack
+          body.stack = stack
+        }
+      } catch {
+        // ignore
+      }
+      return originalJson(body)
+    }
+    next()
+  })
+
   const activeCodeServers = new Map<string, CodeServerSession>()
   const applyProxyResponseHeaders = (proxyRes: IncomingMessage, _req: IncomingMessage, res: Response) => {
     if (corsOrigin) {
@@ -1262,12 +1286,15 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       console.log('runLoop completed', sessionId)
       emit({ type: 'result', payload: result })
     } catch (error: unknown) {
+      logFullError(error, { method: req.method, url: req.originalUrl, label: 'agentRunHandler' })
       const message = error instanceof Error ? error.message : 'Agent loop failed'
+      const stack = error instanceof Error ? (error.stack ?? null) : String(error)
       if (!closed) {
         emit({
           type: 'error',
           payload: {
-            message
+            message,
+            stack
           }
         })
       }
@@ -2862,56 +2889,128 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     res.status(204).end()
   }
 
-  app.get('/api/health', (_req, res) => {
-    res.json({ ok: true })
-  })
+  // Centralized error logging helper
+  const logFullError = (error: unknown, context?: { method?: string; url?: string; label?: string }) => {
+    try {
+      const when = new Date().toISOString()
+      const header =
+        `[ERROR] ${when}` +
+        (context?.method && context?.url ? ` ${context.method} ${context.url}` : '') +
+        (context?.label ? ` (${context.label})` : '')
+      if (error instanceof Error) {
+        console.error(header)
+        console.error(error.stack ?? error.message)
+      } else {
+        console.error(header)
+        console.error(String(error))
+      }
+    } catch {
+      // ignore logging failures
+    }
+  }
 
-  app.get('/api/radicle/status', radicleStatusHandler)
-  app.get('/api/radicle/repositories', radicleRepositoriesHandler)
-  app.post('/api/radicle/register', registerRadicleRepositoryHandler)
-  app.get('/api/fs/browse', browseFilesystemHandler)
-  app.get('/api/projects', listProjectsHandler)
-  app.get('/api/projects/:projectId/graph', repositoryGraphHandler)
-  app.get('/api/projects/:projectId/diff', projectDiffHandler)
-  app.post('/api/projects/:projectId/devspace', projectDevspaceHandler)
-  app.get('/api/projects/:projectId/pull-requests', listProjectPullRequestsHandler)
-  app.get('/api/reviews/active', listActiveReviewsHandler)
-  app.post('/api/projects/:projectId/pull-requests', createProjectPullRequestHandler)
-  app.get('/api/projects/:projectId', projectDetailHandler)
-  app.post('/api/projects/:projectId/git/stage', gitStageHandler)
-  app.post('/api/projects/:projectId/git/discard', gitDiscardHandler)
-  app.post('/api/projects/:projectId/git/commit', gitCommitHandler)
-  app.post('/api/projects/:projectId/git/generate-commit-message', generateCommitMessageHandler)
-  app.post('/api/projects/:projectId/git/checkout', gitCheckoutHandler)
-  app.post('/api/projects/:projectId/git/stash', gitStashHandler)
-  app.post('/api/projects/:projectId/git/unstash', gitUnstashHandler)
-  app.post('/api/projects/:projectId/git/pull', gitPullHandler)
-  app.post('/api/projects/:projectId/git/push', gitPushHandler)
-  app.post('/api/projects', createProjectHandler)
-  app.get('/api/pull-requests/:prId', pullRequestDetailHandler)
-  app.get('/api/pull-requests/:prId/diff', pullRequestDiffHandler)
-  app.get('/api/pull-requests/:prId/threads', pullRequestThreadsHandler)
-  app.post('/api/pull-requests/:prId/reviews', triggerPullRequestReviewHandler)
-  app.post('/api/pull-requests/:prId/merge', mergePullRequestHandler)
-  app.post('/api/pull-requests/:prId/close', closePullRequestHandler)
-  app.post('/api/pull-requests/:prId/apply-suggestion', applySuggestionHandler)
-  app.post('/api/threads/:threadId/comments', addThreadCommentHandler)
-  app.post('/api/threads/:threadId/resolve', resolveThreadHandler)
-  app.post('/api/review-runs/:runId/callback', reviewRunCallbackHandler)
-  app.get('/api/workflows', listWorkflowsHandler)
-  app.post('/api/workflows', createWorkflowHandler)
-  app.post('/api/workflows/:workflowId/start', startWorkflowHandler)
-  app.get('/api/workflows/:workflowId', workflowDetailHandler)
-  app.post('/api/workflows/:workflowId/steps/:stepId/callback', workflowRunnerCallbackHandler)
-  app.get('/api/workflows/:workflowId/steps/:stepId/diff', workflowStepDiffHandler)
-  app.get('/api/workflows/:workflowId/steps/:stepId/provenance', workflowStepProvenanceHandler)
-  app.get('/api/code-server/sessions', listCodeSessionsHandler)
-  app.get('/api/terminal/sessions', listTerminalSessionsHandler)
-  app.post('/api/terminal/sessions', createTerminalSessionHandler)
-  app.delete('/api/terminal/sessions/:sessionId', deleteTerminalSessionHandler)
-  app.get('/api/coding-agent/providers', listCodingAgentProvidersHandler)
-  app.get('/api/coding-agent/sessions', listCodingAgentSessionsHandler)
-  app.get('/api/coding-agent/sessions/:sessionId', getCodingAgentSessionHandler)
+  // Wrap async handlers so unhandled rejections are logged and full stacks are returned to clients
+  const wrapAsync = (handler: RequestHandler): RequestHandler => {
+    return (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const result = (handler as any)(req, res, next)
+        if (result && typeof result.then === 'function') {
+          result.catch((err: unknown) => {
+            logFullError(err, { method: req.method, url: req.originalUrl })
+            if (!res.headersSent) {
+              const message = err instanceof Error ? err.message : 'Internal server error'
+              const verbose = process.env.UI_VERBOSE_ERRORS === 'true'
+              if (verbose) {
+                const stack = err instanceof Error ? err.stack : String(err)
+                res.status(500).json({ error: message, stack })
+              } else {
+                res.status(500).json({ error: message })
+              }
+            }
+          })
+        }
+      } catch (err) {
+        logFullError(err, { method: req.method, url: req.originalUrl })
+        if (!res.headersSent) {
+          const message = err instanceof Error ? err.message : 'Internal server error'
+          const verbose = process.env.UI_VERBOSE_ERRORS === 'true'
+          if (verbose) {
+            const stack = err instanceof Error ? err.stack : String(err)
+            res.status(500).json({ error: message, stack })
+          } else {
+            res.status(500).json({ error: message })
+          }
+        }
+      }
+    }
+  }
+
+  // Process-level handlers for uncaught exceptions and rejections
+  if (!(globalThis as any).__hyperagent_ui_error_handlers_installed) {
+    ;(globalThis as any).__hyperagent_ui_error_handlers_installed = true
+    process.on('unhandledRejection', (reason) => {
+      logFullError(reason, { label: 'unhandledRejection' })
+    })
+    process.on('uncaughtException', (err) => {
+      logFullError(err, { label: 'uncaughtException' })
+    })
+  }
+
+  app.get(
+    '/api/health',
+    wrapAsync((_req, res) => {
+      res.json({ ok: true })
+    })
+  )
+
+  app.post('/api/agent/run', wrapAsync(agentRunHandler))
+
+  app.get('/api/radicle/status', wrapAsync(radicleStatusHandler))
+  app.get('/api/radicle/repositories', wrapAsync(radicleRepositoriesHandler))
+  app.post('/api/radicle/register', wrapAsync(registerRadicleRepositoryHandler))
+  app.get('/api/fs/browse', wrapAsync(browseFilesystemHandler))
+  app.get('/api/projects', wrapAsync(listProjectsHandler))
+  app.get('/api/projects/:projectId/graph', wrapAsync(repositoryGraphHandler))
+  app.get('/api/projects/:projectId/diff', wrapAsync(projectDiffHandler))
+  app.post('/api/projects/:projectId/devspace', wrapAsync(projectDevspaceHandler))
+  app.get('/api/projects/:projectId/pull-requests', wrapAsync(listProjectPullRequestsHandler))
+  app.get('/api/reviews/active', wrapAsync(listActiveReviewsHandler))
+  app.post('/api/projects/:projectId/pull-requests', wrapAsync(createProjectPullRequestHandler))
+  app.get('/api/projects/:projectId', wrapAsync(projectDetailHandler))
+  app.post('/api/projects/:projectId/git/stage', wrapAsync(gitStageHandler))
+  app.post('/api/projects/:projectId/git/discard', wrapAsync(gitDiscardHandler))
+  app.post('/api/projects/:projectId/git/commit', wrapAsync(gitCommitHandler))
+  app.post('/api/projects/:projectId/git/generate-commit-message', wrapAsync(generateCommitMessageHandler))
+  app.post('/api/projects/:projectId/git/checkout', wrapAsync(gitCheckoutHandler))
+  app.post('/api/projects/:projectId/git/stash', wrapAsync(gitStashHandler))
+  app.post('/api/projects/:projectId/git/unstash', wrapAsync(gitUnstashHandler))
+  app.post('/api/projects/:projectId/git/pull', wrapAsync(gitPullHandler))
+  app.post('/api/projects/:projectId/git/push', wrapAsync(gitPushHandler))
+  app.post('/api/projects', wrapAsync(createProjectHandler))
+  app.get('/api/pull-requests/:prId', wrapAsync(pullRequestDetailHandler))
+  app.get('/api/pull-requests/:prId/diff', wrapAsync(pullRequestDiffHandler))
+  app.get('/api/pull-requests/:prId/threads', wrapAsync(pullRequestThreadsHandler))
+  app.post('/api/pull-requests/:prId/reviews', wrapAsync(triggerPullRequestReviewHandler))
+  app.post('/api/pull-requests/:prId/merge', wrapAsync(mergePullRequestHandler))
+  app.post('/api/pull-requests/:prId/close', wrapAsync(closePullRequestHandler))
+  app.post('/api/pull-requests/:prId/apply-suggestion', wrapAsync(applySuggestionHandler))
+  app.post('/api/threads/:threadId/comments', wrapAsync(addThreadCommentHandler))
+  app.post('/api/threads/:threadId/resolve', wrapAsync(resolveThreadHandler))
+  app.post('/api/review-runs/:runId/callback', wrapAsync(reviewRunCallbackHandler))
+  app.get('/api/workflows', wrapAsync(listWorkflowsHandler))
+  app.post('/api/workflows', wrapAsync(createWorkflowHandler))
+  app.post('/api/workflows/:workflowId/start', wrapAsync(startWorkflowHandler))
+  app.get('/api/workflows/:workflowId', wrapAsync(workflowDetailHandler))
+  app.post('/api/workflows/:workflowId/steps/:stepId/callback', wrapAsync(workflowRunnerCallbackHandler))
+  app.get('/api/workflows/:workflowId/steps/:stepId/diff', wrapAsync(workflowStepDiffHandler))
+  app.get('/api/workflows/:workflowId/steps/:stepId/provenance', wrapAsync(workflowStepProvenanceHandler))
+  app.get('/api/code-server/sessions', wrapAsync(listCodeSessionsHandler))
+  app.get('/api/terminal/sessions', wrapAsync(listTerminalSessionsHandler))
+  app.post('/api/terminal/sessions', wrapAsync(createTerminalSessionHandler))
+  app.delete('/api/terminal/sessions/:sessionId', wrapAsync(deleteTerminalSessionHandler))
+  app.get('/api/coding-agent/providers', wrapAsync(listCodingAgentProvidersHandler))
+  app.get('/api/coding-agent/sessions', wrapAsync(listCodingAgentSessionsHandler))
+  app.get('/api/coding-agent/sessions/:sessionId', wrapAsync(getCodingAgentSessionHandler))
 
   const postCodingAgentMessageHandler: RequestHandler = async (req, res) => {
     const sessionId = req.params.sessionId
@@ -3008,11 +3107,10 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 
-  app.get('/api/coding-agent/runs', listCodingAgentRunsHandler)
-  app.post('/api/coding-agent/sessions', startCodingAgentSessionHandler)
-  app.post('/api/coding-agent/sessions/:sessionId/kill', killCodingAgentSessionHandler)
-  app.post('/api/coding-agent/sessions/:sessionId/messages', postCodingAgentMessageHandler)
-  app.post('/api/agent/run', agentRunHandler)
+  app.post('/api/coding-agent/sessions', wrapAsync(startCodingAgentSessionHandler))
+  app.post('/api/coding-agent/sessions/:sessionId/messages', wrapAsync(postCodingAgentMessageHandler))
+  app.post('/api/coding-agent/sessions/:sessionId/kill', wrapAsync(killCodingAgentSessionHandler))
+  app.get('/api/coding-agent/runs', wrapAsync(listCodingAgentRunsHandler))
 
   const sendTerminalPayload = (socket: WebSocketType, payload: Record<string, unknown>) => {
     if (socket.readyState !== WebSocketCtor.OPEN) return
@@ -3117,6 +3215,23 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   })
 
   app.use('/code-server/:sessionId', codeServerProxyHandler)
+
+  // Express error handler: log full error and return stack to client
+  app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+    try {
+      logFullError(err, { method: req.method, url: req.originalUrl, label: 'expressErrorMiddleware' })
+    } catch {
+      // ignore
+    }
+    if (res.headersSent) {
+      // Delegate to default Express error handler if headers already sent
+      next(err as any)
+      return
+    }
+    const message = err instanceof Error ? err.message : 'Internal server error'
+    const stack = err instanceof Error ? err.stack : String(err)
+    res.status(500).json({ error: message, stack })
+  })
 
   const handleUpgrade = (req: IncomingMessage, socket: Socket, head: Buffer) => {
     if (extractTerminalSessionId(req.url)) {

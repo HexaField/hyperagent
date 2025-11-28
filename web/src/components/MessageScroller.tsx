@@ -155,7 +155,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
     } catch {}
   })
 
-  function DetailsWithToggle(props: { summaryText: string; duration?: string; children?: any }) {
+  function DetailsWithToggle(props: { summaryText: string; duration?: string; title?: string; children?: any }) {
     const [open, setOpen] = createSignal(false)
     return (
       <details
@@ -166,6 +166,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
         <summary class="px-3 py-2 cursor-pointer flex items-center justify-between">
           <div class="flex items-center gap-2">
             <div class="font-medium">{props.summaryText}</div>
+            <div class="text-xs text-[var(--text-muted)]">{props.title}</div>
           </div>
           <div class="flex items-center gap-2">
             <div class="text-xs text-[var(--text-muted)]">{props.duration}</div>
@@ -203,6 +204,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
 
       if (part.type === 'tool') {
         const toolName = String(part.tool ?? part.toolName ?? part.name ?? '')
+        const title = part.title ?? part.state?.title ?? ''
         const text = typeof part.text === 'string' && part.text.trim() ? part.text.trim() : null
         const output =
           typeof (part.state?.output ?? part.output) === 'string' ? (part.state?.output ?? part.output) : null
@@ -345,7 +347,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
         const diffText = extractDiffText(part)
         const summaryText = toolName || (text ?? 'Tool')
         elements.push(
-          <DetailsWithToggle summaryText={summaryText} duration={durationLabel}>
+          <DetailsWithToggle summaryText={summaryText} duration={durationLabel} title={title}>
             {/* Try to render todos or file/diagnostic tags first */}
             {nameIndicatesTodo
               ? (() => {
@@ -383,7 +385,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
                 <DiffViewer diffText={diffText} />
               </div>
             ) : (output || text) && !(nameIndicatesTodo && tryParseTodos(output ?? text)) ? (
-              <ToolRenderer part={part} showHeader={false} />
+              <ToolRenderer part={part} />
             ) : null}
           </DetailsWithToggle>
         )

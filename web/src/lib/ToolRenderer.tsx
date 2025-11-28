@@ -20,8 +20,20 @@ function renderJson(s: string) {
   }
 }
 
-export default function ToolRenderer(props: { part: any; showHeader?: boolean }): JSX.Element {
+function ToolLabel(props: { toolName: string; title?: string }): JSX.Element {
+  const title = props.title ?? ''
+  const toolName: string = props.toolName
+  return (
+    <div>
+      <div class="font-medium mb-1">{toolName || 'Tool'}</div>
+      {title ? <div class="mb-1">{title}</div> : null}
+    </div>
+  )
+}
+
+export default function ToolRenderer(props: { part: any }): JSX.Element {
   const part = props.part
+  const title = part.title ?? part.state?.title ?? ''
   const toolName: string = (part.tool ?? part.toolName ?? part.name ?? '').toString()
   const text: string | null = typeof part.text === 'string' ? part.text : null
   const output: string | null =
@@ -120,14 +132,11 @@ export default function ToolRenderer(props: { part: any; showHeader?: boolean })
     )
   }
 
-  const showHeader = props.showHeader === undefined ? true : !!props.showHeader
-
   // If a diff is present in other locations (e.g. metadata.diff), prefer rendering it
   const extraDiff = extractDiffText(part)
   if (extraDiff) {
     return (
       <div>
-        {showHeader ? <div class="font-medium mb-1">Diff</div> : null}
         <DiffViewer diffText={extraDiff} />
       </div>
     )
@@ -136,21 +145,11 @@ export default function ToolRenderer(props: { part: any; showHeader?: boolean })
   if (output) {
     const lowered = toolName.toLowerCase()
     if (lowered.includes('npm') || (text && /npm/i.test(text))) {
-      return (
-        <div>
-          {showHeader ? <div class="font-medium mb-1">{toolName || 'npm'}</div> : null}
-          {renderNpm(output)}
-        </div>
-      )
+      return <div>{renderNpm(output)}</div>
     }
 
     if (lowered.includes('git') || (text && /git/i.test(text))) {
-      return (
-        <div>
-          {showHeader ? <div class="font-medium mb-1">{toolName || 'git'}</div> : null}
-          {renderGit(output)}
-        </div>
-      )
+      return <div>{renderGit(output)}</div>
     }
 
     if (
@@ -159,35 +158,23 @@ export default function ToolRenderer(props: { part: any; showHeader?: boolean })
       lowered.includes('shell') ||
       (text && /\$\s|npm install|yarn/i.test(text))
     ) {
-      return (
-        <div>
-          {showHeader ? <div class="font-medium mb-1">{toolName || 'shell'}</div> : null}
-          {renderShell(output)}
-        </div>
-      )
+      return <div>{renderShell(output)}</div>
     }
 
-    if (part.type === 'file-diff' || part.type === 'diff' || /diff --git/.test(output)) {
+    if (part.type === 'edit' || part.type === 'file-diff' || part.type === 'diff' || /diff --git/.test(output)) {
       return (
         <div>
-          {showHeader ? <div class="font-medium mb-1">Diff</div> : null}
           <DiffViewer diffText={output} />
         </div>
       )
     }
 
-    return (
-      <div>
-        {showHeader ? <div class="font-medium mb-1">{toolName || 'Tool'}</div> : null}
-        {renderDefault(output)}
-      </div>
-    )
+    return <div>{renderDefault(output)}</div>
   }
 
   if (text) {
     return (
       <div>
-        {showHeader ? <div class="font-medium mb-1">{toolName || 'Tool'}</div> : null}
         <p class="mb-1 last:mb-0 break-words">{text}</p>
       </div>
     )
@@ -195,7 +182,6 @@ export default function ToolRenderer(props: { part: any; showHeader?: boolean })
 
   return (
     <div>
-      {showHeader ? <div class="font-medium mb-1">{toolName || 'Tool'}</div> : null}
       <p class="text-xs text-[var(--text-muted)]">No output captured.</p>
     </div>
   )
