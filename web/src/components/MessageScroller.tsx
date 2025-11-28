@@ -8,7 +8,6 @@ export type MessageScrollerProps = {
   class?: string
   onAutoScrollChange?: (v: boolean) => void
   scrollToBottomTrigger?: number
-  debug?: boolean
   sessionId?: string | null
 }
 
@@ -17,14 +16,12 @@ export default function MessageScroller(props: MessageScrollerProps) {
   const [autoScroll, setAutoScroll] = createSignal(true)
   let lastCount = 0
   let lastMessageKey: string | null = null
-  
 
   // store per-session scroll positions to restore after remount
   const SCROLL_POSITIONS: Map<string, number> = (globalThis as any).__MessageScrollerPositions || new Map()
   try {
     ;(globalThis as any).__MessageScrollerPositions = SCROLL_POSITIONS
   } catch {}
-  
 
   function scrollToBottom(el: HTMLElement, smooth = true) {
     if (!el) return
@@ -72,18 +69,6 @@ export default function MessageScroller(props: MessageScrollerProps) {
     scrollToBottom(el, true)
   })
 
-  // mount/unmount and session change logging (debug)
-  createEffect(() => {
-    const el = container()
-    if (!props.debug) return
-    if (el) console.debug('[MessageScroller] mounted container', { sessionId: props.sessionId })
-    onCleanup(() => {
-      try {
-        console.debug('[MessageScroller] unmounting container', { sessionId: props.sessionId })
-      } catch {}
-    })
-  })
-
   // auto-scroll when messages appended
   createEffect(() => {
     const msgs = props.messages ?? []
@@ -94,8 +79,6 @@ export default function MessageScroller(props: MessageScrollerProps) {
     const last = msgs.length > 0 ? msgs[msgs.length - 1] : null
     const currentKey = last ? String((last as any).id ?? (last as any).createdAt ?? (last as any).text ?? '') : null
     if (should && currentKey && currentKey !== lastMessageKey) {
-      if (props.debug) console.debug('[MessageScroller] auto-scroll on new last message', { currentKey, lastMessageKey })
-      // Clear any persisted scroll position for this session since we're auto-scrolling
       try {
         const sid = props.sessionId
         if (sid) SCROLL_POSITIONS.delete(sid)
@@ -114,7 +97,6 @@ export default function MessageScroller(props: MessageScrollerProps) {
       const atBottom = distance <= 4
       setAutoScroll(atBottom)
       props.onAutoScrollChange?.(atBottom)
-      if (props.debug) console.debug('[MessageScroller] scroll', { distance, atBottom })
       // persist scrollTop per session
       try {
         const sid = props.sessionId
@@ -136,7 +118,6 @@ export default function MessageScroller(props: MessageScrollerProps) {
     let mo: MutationObserver | null = null
     try {
       mo = new MutationObserver((records) => {
-        if (props.debug) console.debug('[MessageScroller] mutation', { recordsLength: records.length })
         if (autoScroll()) scrollToBottom(el, true)
       })
       mo.observe(el, { childList: true, subtree: true, characterData: true })
@@ -181,7 +162,9 @@ export default function MessageScroller(props: MessageScrollerProps) {
           <div>
             <span class="font-semibold">{k}:</span>{' '}
             {typeof v === 'object' && v !== null ? (
-              <pre class="whitespace-pre-wrap rounded bg-[var(--bg-card)] p-2 text-xs">{JSON.stringify(v, null, 2)}</pre>
+              <pre class="whitespace-pre-wrap rounded bg-[var(--bg-card)] p-2 text-xs">
+                {JSON.stringify(v, null, 2)}
+              </pre>
             ) : (
               <span>{String(v)}</span>
             )}
@@ -207,7 +190,8 @@ export default function MessageScroller(props: MessageScrollerProps) {
       }
       if (part.type === 'tool') {
         const text = typeof part.text === 'string' && part.text.trim() ? part.text.trim() : null
-        const output = typeof (part.state?.output ?? part.output) === 'string' ? (part.state?.output ?? part.output) : null
+        const output =
+          typeof (part.state?.output ?? part.output) === 'string' ? (part.state?.output ?? part.output) : null
         if (output || text) {
           elements.push(<ToolRenderer part={part} />)
         }

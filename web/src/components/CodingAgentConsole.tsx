@@ -347,19 +347,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [replyEl, setReplyEl] = createSignal<HTMLTextAreaElement | null>(null)
   const [autoScroll, setAutoScroll] = createSignal(true)
   const [scrollTrigger, setScrollTrigger] = createSignal(0)
-  const SCROLL_DEBUG = false
-
-  if (SCROLL_DEBUG) {
-    createEffect(() => {
-      console.debug('[OpencodeConsole] selectedSessionId', selectedSessionId())
-    })
-    createEffect(() => {
-      console.debug('[OpencodeConsole] messages.length', messages().length)
-    })
-    createEffect(() => {
-      console.debug('[OpencodeConsole] sessionDetail', sessionDetail())
-    })
-  }
 
   function resizeReply() {
     const ta = replyEl()
@@ -576,14 +563,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     }
 
     let focusHandler: ((e: FocusEvent) => void) | null = null
-    if (SCROLL_DEBUG) {
-      focusHandler = (e: FocusEvent) => {
-        try {
-          console.debug('[OpencodeConsole] focusin', { target: e.target, active: document.activeElement })
-        } catch {}
-      }
-      window.addEventListener('focusin', focusHandler as EventListener, true)
-    }
 
     onCleanup(() => {
       if (typeof mq.removeEventListener === 'function') mq.removeEventListener('change', handler)
@@ -636,10 +615,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     return sessionDetail() ?? null
   })
   const messages = createMemo<CodingAgentMessage[]>(() => selectedDetail()?.messages ?? [])
-
-  // Message scrolling is handled by <MessageScroller />
-
-  // MessageScroller handles scroll, mutations and debug logging when enabled
 
   const sessionRows = createMemo<SessionRow[]>(() => {
     const currentSessions = sessions() ?? []
@@ -828,7 +803,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         class={transcriptScrollerClass}
         onAutoScrollChange={setAutoScroll}
         scrollToBottomTrigger={scrollTrigger()}
-        debug={SCROLL_DEBUG}
         sessionId={selectedSessionId()}
       />
     )
@@ -918,13 +892,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           onInput={(e) => {
             setReplyText(e.currentTarget.value)
             resizeReply()
-          }}
-          onFocus={() => {
-            if (SCROLL_DEBUG) console.debug('[OpencodeConsole] reply textarea focus')
-            // Intentionally do not request a scroll when focusing or typing.
-          }}
-          onBlur={() => {
-            if (SCROLL_DEBUG) console.debug('[OpencodeConsole] reply textarea blur')
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
