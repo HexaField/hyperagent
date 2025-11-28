@@ -48,6 +48,30 @@ import {
 } from '../lib/terminal'
 
 const TEMPLATE_ID_SET = new Set<WidgetTemplateId>(WIDGET_TEMPLATES.map((template) => template.id))
+const MOBILE_VIEWPORT_QUERY = '(max-width: 640px)'
+const DEFAULT_SINGLE_TEMPLATE_ID = (WIDGET_TEMPLATES[0]?.id ?? 'workspace-summary') as WidgetTemplateId
+
+const singleViewTemplateStorageKey = (workspaceId: string) => `workspace:${workspaceId}:single-template`
+
+function readStoredSingleViewTemplate(workspaceId: string): WidgetTemplateId | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(singleViewTemplateStorageKey(workspaceId))
+    if (!raw || !TEMPLATE_ID_SET.has(raw as WidgetTemplateId)) return null
+    return raw as WidgetTemplateId
+  } catch {
+    return null
+  }
+}
+
+function writeStoredSingleViewTemplate(workspaceId: string, templateId: WidgetTemplateId) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(singleViewTemplateStorageKey(workspaceId), templateId)
+  } catch {
+    /* ignore */
+  }
+}
 
 type WidgetInstance = {
   templateId: WidgetTemplateId
@@ -92,6 +116,35 @@ export default function WorkspacePage() {
   const [widgetInstances, setWidgetInstances] = createSignal<WidgetInstance[]>([])
 
   const [workspaceViewMode, setWorkspaceViewMode] = createSignal<'canvas' | 'single'>('canvas')
+  const [preferredViewMode, setPreferredViewMode] = createSignal<'canvas' | 'single'>('canvas')
+  const [isMobileViewport, setIsMobileViewport] = createSignal(false)
+
+  const openSingleViewForTemplate = (workspace: WorkspaceRecord, templateId: WidgetTemplateId) => {
+    if (typeof window === 'undefined') return
+    try {
+      const widget = createWidgetConfig({
+        templateId,
+        workspace,
+        instanceId: `single-${templateId}`,
+        offsetIndex: 0,
+        navigator,
+        removable: false
+      })
+      window.dispatchEvent(
+        new CustomEvent('workspace:open-single-view', {
+          detail: {
+            storageKey: `workspace:${workspace.id}`,
+            widgets: [widget],
+            onRemoveWidget: (id: string) =>
+              setWidgetInstances((prev) => prev.filter((entry) => entry.instanceId !== id)),
+            workspaceId: workspace.id
+          }
+        })
+      )
+    } catch {
+      /* ignore */
+    }
+  }
 
   // initialize view mode from workspace preference or small screen heuristics
   createEffect(() => {
@@ -103,45 +156,39 @@ export default function WorkspacePage() {
         try {
           const parsed = JSON.parse(raw)
           if (parsed === 'single') {
-            setWorkspaceViewMode('single')
+            setPreferredViewMode('single')
             return
           }
         } catch {
           if (raw === 'single') {
-            setWorkspaceViewMode('single')
+            setPreferredViewMode('single')
             return
           }
         }
       }
       // no stored preference -> prefer single on small viewports
-      if (window.matchMedia && window.matchMedia('(max-width: 640px)').matches) setWorkspaceViewMode('single')
-      else setWorkspaceViewMode('canvas')
+      if (window.matchMedia && window.matchMedia(MOBILE_VIEWPORT_QUERY).matches) setPreferredViewMode('single')
+      else setPreferredViewMode('canvas')
     } catch {
-      setWorkspaceViewMode('canvas')
+      setPreferredViewMode('canvas')
     }
+  })
+
+  createEffect(() => {
+    setWorkspaceViewMode(isMobileViewport() ? 'single' : preferredViewMode())
   })
 
   // when view mode changes, notify the app root to render the single overlay
   createEffect(() => {
     if (typeof window === 'undefined') return
+    const ws = activeWorkspace()
+    if (!ws) return
     if (workspaceViewMode() === 'single') {
-      const ws = activeWorkspace()
-      if (!ws) return
-      try {
-        window.dispatchEvent(
-          new CustomEvent('workspace:open-single-view', {
-            detail: {
-              storageKey: `workspace:${ws.id}`,
-              widgets: widgets(),
-              onRemoveWidget: (id: string) =>
-                setWidgetInstances((prev) => prev.filter((entry) => entry.instanceId !== id)),
-              workspaceId: ws.id
-            }
-          })
-        )
-      } catch {
-        // ignore
-      }
+      const storedTemplate = readStoredSingleViewTemplate(ws.id)
+      const fallbackTemplate = widgetInstances()[0]?.templateId ?? DEFAULT_SINGLE_TEMPLATE_ID
+      const templateId = storedTemplate ?? fallbackTemplate
+      if (!storedTemplate) writeStoredSingleViewTemplate(ws.id, templateId)
+      openSingleViewForTemplate(ws, templateId)
     } else {
       try {
         window.dispatchEvent(new CustomEvent('workspace:close-single-view'))
@@ -204,12 +251,11 @@ export default function WorkspacePage() {
       const detail = custom.detail
       if (!detail || typeof detail.mode !== 'string') return
       const nextMode = detail.mode === 'single' ? 'single' : 'canvas'
-      setWorkspaceViewMode(nextMode)
+      setPreferredViewMode(nextMode)
+      const ws = activeWorkspace()
+      if (!ws || typeof window === 'undefined') return
       try {
-        const ws = activeWorkspace()
-        if (ws && typeof window !== 'undefined') {
-          window.localStorage.setItem(`workspace:${ws.id}:view`, nextMode)
-        }
+        window.localStorage.setItem(`workspace:${ws.id}:view`, nextMode)
       } catch {
         // ignore storage errors
       }
@@ -220,27 +266,21 @@ export default function WorkspacePage() {
       if (!detail || !detail.templateId || !TEMPLATE_ID_SET.has(detail.templateId)) return
       const ws = activeWorkspace()
       if (!ws) return
-      const instanceId = generateWidgetInstanceId(detail.templateId)
-      try {
-        const widget = createWidgetConfig({
-          templateId: detail.templateId,
-          workspace: ws,
-          instanceId,
-          offsetIndex: 0,
-          navigator,
-          removable: true
-        })
-        window.dispatchEvent(
-          new CustomEvent('workspace:open-single-view', {
-            detail: { storageKey: `workspace:${ws.id}`, widgets: [widget] }
-          })
-        )
-      } catch {}
+      writeStoredSingleViewTemplate(ws.id, detail.templateId)
+      openSingleViewForTemplate(ws, detail.templateId)
     }
+    const mq = window.matchMedia(MOBILE_VIEWPORT_QUERY)
+    const updateViewportFlag = () => setIsMobileViewport(mq.matches)
+    updateViewportFlag()
+    if (typeof mq.addEventListener === 'function') mq.addEventListener('change', updateViewportFlag)
+    else if (typeof mq.addListener === 'function') mq.addListener(updateViewportFlag)
+
     window.addEventListener('workspace:add-widget', handleAddWidget)
     window.addEventListener('workspace:view-change', handleViewChange)
     window.addEventListener('workspace:open-single-widget', handleOpenSingleWidget)
     onCleanup(() => {
+      if (typeof mq.removeEventListener === 'function') mq.removeEventListener('change', updateViewportFlag)
+      else if (typeof mq.removeListener === 'function') mq.removeListener(updateViewportFlag)
       window.removeEventListener('workspace:add-widget', handleAddWidget)
       window.removeEventListener('workspace:view-change', handleViewChange)
       window.removeEventListener('workspace:open-single-widget', handleOpenSingleWidget)
@@ -252,13 +292,15 @@ export default function WorkspacePage() {
       <Show when={!selection.isLoading()} fallback={<WorkspaceLoadingState />}>
         <Show when={activeWorkspace()} fallback={<WorkspaceEmptyState onOpenNavigator={navigator.open} />}>
           {(workspace) => (
-            <CanvasWorkspace
-              storageKey={`workspace:${workspace().id}`}
-              widgets={widgets()}
-              onRemoveWidget={(id) => {
-                setWidgetInstances((prev) => prev.filter((entry) => entry.instanceId !== id))
-              }}
-            />
+            <Show when={workspaceViewMode() === 'canvas'}>
+              <CanvasWorkspace
+                storageKey={`workspace:${workspace().id}`}
+                widgets={widgets()}
+                onRemoveWidget={(id) => {
+                  setWidgetInstances((prev) => prev.filter((entry) => entry.instanceId !== id))
+                }}
+              />
+            </Show>
           )}
         </Show>
       </Show>
@@ -418,7 +460,6 @@ function createWidgetConfig(options: CreateWidgetConfigOptions): CanvasWidgetCon
         initialSize: { width: 720, height: 520 },
         startOpen: true,
         removable,
-        hideSingleHeader: true,
         content: () => <SessionsWidget workspacePath={workspace.repositoryPath} />
       }
     default:

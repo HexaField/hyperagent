@@ -14,7 +14,7 @@ import {
   type CodingAgentSessionSummary
 } from '../lib/codingAgent'
 import ToolRenderer from '../lib/ToolRenderer'
-import SingleWidgetHeader from './layout/SingleWidgetHeader'
+import { WIDGET_TEMPLATES } from '../constants/widgetTemplates'
 import MessageScroller from './MessageScroller'
 
 const REFRESH_INTERVAL_MS = 4000
@@ -285,6 +285,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
 
   const closeSessionDrawer = () => {
     setDrawerOpen(false)
+    setWidgetMenuOpen(false)
     if (typeof window === 'undefined') {
       setDrawerVisible(false)
       return
@@ -302,6 +303,13 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [replyEl, setReplyEl] = createSignal<HTMLTextAreaElement | null>(null)
   const [autoScroll, setAutoScroll] = createSignal(true)
   const [scrollTrigger, setScrollTrigger] = createSignal(0)
+
+  const openSingleWidgetByTemplate = (templateId: string) => {
+    try {
+      if (typeof window === 'undefined') return
+      window.dispatchEvent(new CustomEvent('workspace:open-single-widget', { detail: { templateId } }))
+    } catch {}
+  }
 
   function resizeReply() {
     const ta = replyEl()
@@ -962,13 +970,20 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
 
   const MobileLayout = (
     <div class="flex h-full min-h-0 flex-col overflow-hidden">
-      <SingleWidgetHeader
-        title={() =>
-          selectedDetail() ? selectedDetail()!.session.title || selectedDetail()!.session.id : 'No session selected'
-        }
-        onBack={() => openSessionDrawer()}
-        backLabel="← Sessions"
-      />
+      <div class="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-semibold text-[var(--text)] truncate">
+            {selectedDetail() ? selectedDetail()!.session.title || selectedDetail()!.session.id : 'No session selected'}
+          </p>
+        </div>
+        <button
+          type="button"
+          class="ml-3 rounded-full border border-[var(--border)] px-3 py-1 text-xs"
+          onClick={() => openSessionDrawer()}
+        >
+          Sessions
+        </button>
+      </div>
       <div class="flex-1 min-h-0 overflow-hidden">
         {SessionDetail({ variant: 'mobile', class: 'flex h-full min-h-0 flex-col p-4 overflow-hidden' })}
       </div>
@@ -994,6 +1009,32 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                   >
                     ☰
                   </button>
+                  <Show when={widgetMenuOpen()}>
+                    <>
+                      <button
+                        type="button"
+                        class="fixed inset-0"
+                        aria-label="Close widget menu"
+                        onClick={() => setWidgetMenuOpen(false)}
+                      />
+                      <div class="fixed left-0 right-0 top-12 z-50 max-w-none border-t border-b border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-lg">
+                        <For each={WIDGET_TEMPLATES}>
+                          {(template) => (
+                            <button
+                              type="button"
+                              class="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-[var(--bg-muted)]"
+                              onClick={() => {
+                                openSingleWidgetByTemplate(template.id)
+                                setWidgetMenuOpen(false)
+                              }}
+                            >
+                              {template.label}
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </>
+                  </Show>
                 </div>
                 <h2 class="text-base font-semibold">Sessions</h2>
               </div>
