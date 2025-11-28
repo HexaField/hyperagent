@@ -1,6 +1,6 @@
 import type { RouteSectionProps } from '@solidjs/router'
 import { Route, Router } from '@solidjs/router'
-import { For, Show, createResource, createSignal, onCleanup, onMount, type JSX } from 'solid-js'
+import { For, Show, createEffect, createResource, createSignal, onCleanup, onMount, type JSX } from 'solid-js'
 import type { CanvasWidgetConfig } from './components/layout/CanvasWorkspace'
 import SingleWidgetView from './components/layout/SingleWidgetView'
 import RepositoryNavigator from './components/navigation/RepositoryNavigator'
@@ -10,6 +10,12 @@ import { CanvasNavigatorContext, useCanvasNavigator } from './contexts/CanvasNav
 import { WorkspaceSelectionProvider } from './contexts/WorkspaceSelectionContext'
 import { fetchJson } from './lib/http'
 import WorkspacePage from './pages/WorkspacePage'
+
+declare global {
+  interface Window {
+    __singleWidgetViewActive?: boolean
+  }
+}
 
 type RadicleStatus = {
   reachable: boolean
@@ -54,12 +60,17 @@ export default function App() {
 
   onMount(() => {
     if (typeof window === 'undefined') return
+    window.__singleWidgetViewActive = Boolean(singleState())
     const openHandler = (ev: Event) => {
       const detail = (ev as CustomEvent).detail
       if (!detail) return
       setSingleState({ storageKey: detail.storageKey, widgets: detail.widgets, onRemoveWidget: detail.onRemoveWidget })
+      window.__singleWidgetViewActive = true
     }
-    const closeHandler = () => setSingleState(null)
+    const closeHandler = () => {
+      setSingleState(null)
+      window.__singleWidgetViewActive = false
+    }
     window.addEventListener('workspace:open-single-view', openHandler)
     window.addEventListener('workspace:close-single-view', closeHandler)
     onCleanup(() => {
@@ -85,6 +96,25 @@ export default function App() {
 function CanvasChrome() {
   const navigator = useCanvasNavigator()
   const [widgetMenuOpen, setWidgetMenuOpen] = createSignal(false)
+  const [singleViewActive, setSingleViewActive] = createSignal(
+    typeof window !== 'undefined' ? Boolean(window.__singleWidgetViewActive) : false
+  )
+
+  onMount(() => {
+    if (typeof window === 'undefined') return
+    const handleOpen = () => setSingleViewActive(true)
+    const handleClose = () => setSingleViewActive(false)
+    window.addEventListener('workspace:open-single-view', handleOpen)
+    window.addEventListener('workspace:close-single-view', handleClose)
+    onCleanup(() => {
+      window.removeEventListener('workspace:open-single-view', handleOpen)
+      window.removeEventListener('workspace:close-single-view', handleClose)
+    })
+  })
+
+  createEffect(() => {
+    if (singleViewActive()) setWidgetMenuOpen(false)
+  })
 
   const widgetActions = WIDGET_TEMPLATES.map((template) => ({
     label: template.label,
@@ -111,90 +141,92 @@ function CanvasChrome() {
   const toggleWorkspaceMenu = () => (navigator.isOpen() ? navigator.close() : navigator.open())
 
   return (
-    <div
-      class="pointer-events-none absolute inset-x-0 top-0 flex justify-between px-6 py-6"
-      onPointerDown={stopCanvasPropagation}
-    >
-      <div class="pointer-events-auto flex flex-col gap-3">
-        <button
-          type="button"
-          class="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-card)]/90 px-4 py-2 text-sm font-semibold text-[var(--text)] shadow-[0_18px_30px_rgba(15,23,42,0.12)]"
-          onClick={toggleWorkspaceMenu}
-        >
-          <span class="text-lg">☰</span>
-          Workspace
-        </button>
-        <Show when={navigator.isOpen()}>
-          <ChromePanel title="Workspace" onNavigate={() => navigator.close()} widthClass="w-[36rem]">
-            <div class="flex flex-col gap-3">
-              <div class="flex items-center justify-between gap-3">
-                <div class="text-sm">
-                  <p class="text-xs text-[var(--text-muted)]">View mode</p>
-                </div>
-                <div class="flex gap-2">
-                  <button
-                    type="button"
-                    class="rounded-xl border border-[var(--border)] px-3 py-1 text-sm"
-                    onClick={() => {
-                      if (typeof window === 'undefined') return
-                      try {
-                        const params = new URLSearchParams(window.location.search)
-                        const workspaceId = params.get('workspaceId')
-                        if (workspaceId) window.localStorage.setItem(`workspace:${workspaceId}:view`, 'canvas')
-                      } catch {}
-                      window.dispatchEvent(new CustomEvent('workspace:view-change', { detail: { mode: 'canvas' } }))
-                      navigator.close()
-                    }}
-                  >
-                    Canvas
-                  </button>
-                  <button
-                    type="button"
-                    class="rounded-xl border border-[var(--border)] bg-blue-600 px-3 py-1 text-sm font-semibold text-white"
-                    onClick={() => {
-                      if (typeof window === 'undefined') return
-                      try {
-                        const params = new URLSearchParams(window.location.search)
-                        const workspaceId = params.get('workspaceId')
-                        if (workspaceId) window.localStorage.setItem(`workspace:${workspaceId}:view`, 'single')
-                      } catch {}
-                      window.dispatchEvent(new CustomEvent('workspace:view-change', { detail: { mode: 'single' } }))
-                      navigator.close()
-                    }}
-                  >
-                    Single widget
-                  </button>
-                </div>
-              </div>
-              <div class="max-h-[70vh] overflow-y-auto pr-1">
-                <RepositoryNavigator />
-              </div>
-            </div>
-          </ChromePanel>
-        </Show>
-      </div>
-      <div class="pointer-events-auto flex flex-col items-end gap-3">
-        <div class="flex items-center gap-3">
-          <ThemeToggle />
+    <Show when={!singleViewActive()}>
+      <div
+        class="pointer-events-none absolute inset-x-0 top-0 flex justify-between px-6 py-6"
+        onPointerDown={stopCanvasPropagation}
+      >
+        <div class="pointer-events-auto flex flex-col gap-3">
           <button
             type="button"
             class="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-card)]/90 px-4 py-2 text-sm font-semibold text-[var(--text)] shadow-[0_18px_30px_rgba(15,23,42,0.12)]"
-            onClick={() => setWidgetMenuOpen((value) => !value)}
+            onClick={toggleWorkspaceMenu}
           >
-            Widgets
             <span class="text-lg">☰</span>
+            Workspace
           </button>
+          <Show when={navigator.isOpen()}>
+            <ChromePanel title="Workspace" onNavigate={() => navigator.close()} widthClass="w-[36rem]">
+              <div class="flex flex-col gap-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="text-sm">
+                    <p class="text-xs text-[var(--text-muted)]">View mode</p>
+                  </div>
+                  <div class="flex gap-2">
+                    <button
+                      type="button"
+                      class="rounded-xl border border-[var(--border)] px-3 py-1 text-sm"
+                      onClick={() => {
+                        if (typeof window === 'undefined') return
+                        try {
+                          const params = new URLSearchParams(window.location.search)
+                          const workspaceId = params.get('workspaceId')
+                          if (workspaceId) window.localStorage.setItem(`workspace:${workspaceId}:view`, 'canvas')
+                        } catch {}
+                        window.dispatchEvent(new CustomEvent('workspace:view-change', { detail: { mode: 'canvas' } }))
+                        navigator.close()
+                      }}
+                    >
+                      Canvas
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded-xl border border-[var(--border)] bg-blue-600 px-3 py-1 text-sm font-semibold text-white"
+                      onClick={() => {
+                        if (typeof window === 'undefined') return
+                        try {
+                          const params = new URLSearchParams(window.location.search)
+                          const workspaceId = params.get('workspaceId')
+                          if (workspaceId) window.localStorage.setItem(`workspace:${workspaceId}:view`, 'single')
+                        } catch {}
+                        window.dispatchEvent(new CustomEvent('workspace:view-change', { detail: { mode: 'single' } }))
+                        navigator.close()
+                      }}
+                    >
+                      Single widget
+                    </button>
+                  </div>
+                </div>
+                <div class="max-h-[70vh] overflow-y-auto pr-1">
+                  <RepositoryNavigator />
+                </div>
+              </div>
+            </ChromePanel>
+          </Show>
         </div>
-        <Show when={widgetMenuOpen()}>
-          <ChromePanel
-            title="Widget library"
-            actions={widgetActions}
-            alignment="end"
-            onNavigate={() => setWidgetMenuOpen(false)}
-          />
-        </Show>
+        <div class="pointer-events-auto flex flex-col items-end gap-3">
+          <div class="flex items-center gap-3">
+            <ThemeToggle />
+            <button
+              type="button"
+              class="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-card)]/90 px-4 py-2 text-sm font-semibold text-[var(--text)] shadow-[0_18px_30px_rgba(15,23,42,0.12)]"
+              onClick={() => setWidgetMenuOpen((value) => !value)}
+            >
+              Widgets
+              <span class="text-lg">☰</span>
+            </button>
+          </div>
+          <Show when={widgetMenuOpen()}>
+            <ChromePanel
+              title="Widget library"
+              actions={widgetActions}
+              alignment="end"
+              onNavigate={() => setWidgetMenuOpen(false)}
+            />
+          </Show>
+        </div>
       </div>
-    </div>
+    </Show>
   )
 }
 
