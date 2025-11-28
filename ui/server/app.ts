@@ -100,6 +100,8 @@ import {
   DEFAULT_OPENCODE_PROVIDER,
   type OpencodeRunner
 } from '../../src/modules/opencodeRunner'
+import { getProviderAdapter } from '../../src/modules/providers'
+import { runProviderInvocation } from '../../src/modules/providerRunner'
 import { createOpencodeStorage, type OpencodeStorage } from '../../src/modules/opencodeStorage'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import { createDiffModule } from '../../src/modules/review/diff'
@@ -1562,7 +1564,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
     const normalizedWorkspace = workspacePath.trim()
     const providerId = typeof rawProviderId === 'string' && rawProviderId.trim().length ? rawProviderId.trim() : CODING_AGENT_PROVIDER_ID
-    if (providerId !== CODING_AGENT_PROVIDER_ID) {
+    const adapter = getProviderAdapter(providerId)
+    if (!adapter) {
       res.status(400).json({ error: `Unsupported provider: ${providerId}` })
       return
     }
@@ -1575,6 +1578,13 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
     try {
       const resolvedModel = typeof model === 'string' && model.trim().length ? model.trim() : DEFAULT_OPENCODE_MODEL
+      if (adapter.validateModel) {
+        const ok = await Promise.resolve(adapter.validateModel(resolvedModel))
+        if (!ok) {
+          res.status(400).json({ error: `Model not supported by provider: ${resolvedModel}` })
+          return
+        }
+      }
       const run = await opencodeRunner.startRun({
         workspacePath: normalizedWorkspace,
         prompt: prompt.trim(),
@@ -2946,8 +2956,32 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
         .find((candidate) => candidate.length)
         ?.trim() ?? DEFAULT_OPENCODE_MODEL
-      const cliArgs = ['run', '--session', sessionId, '--format', 'json', '--model', resolvedModelId, '--', text]
-      await opencodeCommandRunner(cliArgs, { cwd: existing.session.workspacePath })
+      const adapter = getProviderAdapter(resolvedProviderId)
+      if (!adapter) {
+        res.status(400).json({ error: `Unsupported provider: ${resolvedProviderId}` })
+        return
+      }
+      const invocation = adapter.buildInvocation
+        ? adapter.buildInvocation({
+            sessionId,
+            modelId: resolvedModelId,
+            text,
+            workspacePath: existing.session.workspacePath,
+            messages: existing.messages,
+            session: existing
+          })
+        : null
+      if (!invocation) {
+        res.status(500).json({ error: `Provider ${resolvedProviderId} cannot build invocation` })
+        return
+      }
+      try {
+        await runProviderInvocation(invocation, { cwd: existing.session.workspacePath, opencodeCommandRunner })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Provider invocation failed'
+        res.status(500).json({ error: message })
+        return
+      }
       const updated = await opencodeStorage.getSession(sessionId)
       const detail = updated ?? existing
       res.status(201).json({
