@@ -1,5 +1,6 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
+import { WIDGET_TEMPLATES } from '../constants/widgetTemplates'
 import {
   fetchCodingAgentRuns,
   fetchCodingAgentSessionDetail,
@@ -14,7 +15,6 @@ import {
   type CodingAgentSessionSummary
 } from '../lib/codingAgent'
 import ToolRenderer from '../lib/ToolRenderer'
-import { WIDGET_TEMPLATES } from '../constants/widgetTemplates'
 import MessageScroller from './MessageScroller'
 
 const REFRESH_INTERVAL_MS = 4000

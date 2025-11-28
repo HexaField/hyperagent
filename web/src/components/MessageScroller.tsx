@@ -2,6 +2,7 @@ import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js'
 import type { CodingAgentMessage } from '../lib/codingAgent'
 import ToolRenderer from '../lib/ToolRenderer'
+import TodoList from './TodoList'
 
 export type MessageScrollerProps = {
   messages: CodingAgentMessage[]
@@ -182,21 +183,75 @@ export default function MessageScroller(props: MessageScrollerProps) {
     const elements: JSX.Element[] = []
     for (const part of parts) {
       if (!part) continue
+
       if (part.type === 'text' || part.type === 'step-finish') {
         if (typeof part.text === 'string' && part.text.trim()) {
           elements.push(<p class="mb-1 last:mb-0 break-words">{part.text.trim()}</p>)
         }
         continue
       }
+
       if (part.type === 'tool') {
+        const toolName = String(part.tool ?? part.toolName ?? part.name ?? '')
         const text = typeof part.text === 'string' && part.text.trim() ? part.text.trim() : null
         const output =
           typeof (part.state?.output ?? part.output) === 'string' ? (part.state?.output ?? part.output) : null
+
+        // Heuristic: tool name indicates todowrite
+        const nameIndicatesTodo =
+          toolName.toLowerCase().includes('todo') || toolName.toLowerCase().includes('todowrite')
+
+        const tryParseTodos = (candidate: string | null) => {
+          if (!candidate) return null
+          try {
+            const parsed = JSON.parse(candidate)
+            if (!Array.isArray(parsed)) return null
+            const ok = parsed.every(
+              (it) => it && typeof it === 'object' && ('content' in it || 'text' in it) && 'id' in it
+            )
+            if (!ok) return null
+            const todos = parsed.map((it: any) => ({
+              content: String(it.content ?? it.text ?? ''),
+              id: String(it.id ?? Math.random().toString(36).slice(2, 8)),
+              priority:
+                it.priority === 'high' || it.priority === 'medium' || it.priority === 'low' ? it.priority : 'low',
+              status:
+                it.status === 'pending' ||
+                it.status === 'in_progress' ||
+                it.status === 'completed' ||
+                it.status === 'cancelled'
+                  ? it.status
+                  : 'pending'
+            }))
+            return todos
+          } catch {
+            return null
+          }
+        }
+
+        // Prefer parsing when name suggests todo
+        if (nameIndicatesTodo) {
+          const candidate = output ?? text
+          const parsed = tryParseTodos(candidate)
+          if (parsed) {
+            elements.push(<TodoList todos={parsed} />)
+            continue
+          }
+        }
+
+        // Otherwise, attempt to parse output/text as JSON todo array
+        const parsedAny = tryParseTodos(output ?? text)
+        if (parsedAny) {
+          elements.push(<TodoList todos={parsedAny} />)
+          continue
+        }
+
         if (output || text) {
           elements.push(<ToolRenderer part={part} />)
         }
         continue
       }
+
       if (part.type === 'file-diff' || part.type === 'diff') {
         elements.push(<p class="mb-1 last:mb-0 break-words">[diff]</p>)
         continue
