@@ -342,6 +342,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
           return ''
         })()
 
+        const diffText = extractDiffText(part)
         const summaryText = toolName || (text ?? 'Tool')
         elements.push(
           <DetailsWithToggle summaryText={summaryText} duration={durationLabel}>
@@ -377,7 +378,11 @@ export default function MessageScroller(props: MessageScrollerProps) {
               return null
             })()}
 
-            {(output || text) && !(nameIndicatesTodo && tryParseTodos(output ?? text)) ? (
+            {diffText ? (
+              <div class="mt-2 mb-2">
+                <DiffViewer diffText={diffText} />
+              </div>
+            ) : (output || text) && !(nameIndicatesTodo && tryParseTodos(output ?? text)) ? (
               <ToolRenderer part={part} showHeader={false} />
             ) : null}
           </DetailsWithToggle>
@@ -406,16 +411,34 @@ export default function MessageScroller(props: MessageScrollerProps) {
     return elements
   }
 
+  function groupedMessages() {
+    const msgs = props.messages ?? []
+    const groups: { role: string; messages: CodingAgentMessage[]; timestamp: string }[] = []
+    for (const m of msgs) {
+      if (!m) continue
+      if (groups.length === 0 || groups[groups.length - 1].role !== m.role) {
+        groups.push({ role: m.role, messages: [m], timestamp: String(m.createdAt) })
+      } else {
+        // append to existing group and update timestamp to most recent message
+        groups[groups.length - 1].messages.push(m)
+        groups[groups.length - 1].timestamp = String(m.createdAt)
+      }
+    }
+    return groups
+  }
+
   return (
     <div ref={(el) => setContainer(el ?? null)} class={props.class ?? ''}>
-      <For each={props.messages}>
-        {(message) => (
+      <For each={groupedMessages()}>
+        {(group) => (
           <article class="rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-4">
             <header class="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
-              <span class="uppercase tracking-wide">{message.role}</span>
-              <span>{new Date(message.createdAt).toLocaleString()}</span>
+              <span class="uppercase tracking-wide">{group.role}</span>
+              <span>{new Date(group.timestamp).toLocaleString()}</span>
             </header>
-            <div class="whitespace-pre-wrap text-[var(--text)] break-words text-sm">{renderMessageParts(message)}</div>
+            <div class="whitespace-pre-wrap text-[var(--text)] break-words text-sm">
+              <For each={group.messages}>{(message) => <div class="mb-3">{renderMessageParts(message)}</div>}</For>
+            </div>
           </article>
         )}
       </For>

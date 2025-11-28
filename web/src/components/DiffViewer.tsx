@@ -28,7 +28,6 @@ type DiffHunk = {
 
 export default function DiffViewer(props: DiffViewerProps) {
   const [expandedFiles, setExpandedFiles] = createSignal<Set<string>>(new Set())
-
   const files = createMemo<DiffFile[]>(() => parseDiffIntoFiles(props.diffText ?? ''))
 
   const toggleFile = (filePath: string) => {
@@ -119,15 +118,21 @@ function parseDiffIntoFiles(raw: string): DiffFile[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
 
-    if (line.startsWith('diff --git')) {
+    if (line.startsWith('diff --git') || line.startsWith('Index:') || line.startsWith('***')) {
       // Save previous file if exists
       if (currentFile) {
         files.push(currentFile)
       }
 
-      // Extract file path from diff header
-      const match = line.match(/diff --git a\/(.+) b\/(.+)/)
-      const filePath = match ? match[1] : 'unknown'
+      // Try multiple header styles: git diff or unified Index/---/+++ style
+      let filePath = 'unknown'
+      if (line.startsWith('diff --git')) {
+        const match = line.match(/diff --git a\/(.+) b\/(.+)/)
+        filePath = match ? match[1] : filePath
+      } else if (line.startsWith('Index:')) {
+        const match = line.match(/Index:\s*(.+)/)
+        filePath = match ? match[1].trim() : filePath
+      }
 
       currentFile = {
         header: line,
@@ -136,7 +141,7 @@ function parseDiffIntoFiles(raw: string): DiffFile[] {
         isExpanded: false
       }
       currentHunk = null
-    } else if (line.startsWith('@@')) {
+    } else if (line.startsWith('@@') || line.startsWith('--- ') || line.startsWith('+++ ')) {
       if (!currentFile) continue
 
       // Parse hunk header: @@ -oldStart,oldLines +newStart,newLines @@
@@ -169,7 +174,15 @@ function parseDiffIntoFiles(raw: string): DiffFile[] {
       } else if (line.startsWith('-')) {
         diffLine = { content: line, type: 'deletion', lineNumber: oldLineNumber }
         oldLineNumber++
+      } else if (line.startsWith(' ')) {
+        diffLine = { content: line, type: 'context', lineNumber: newLineNumber }
+        oldLineNumber++
+        newLineNumber++
+      } else if (line.startsWith('--- ') || line.startsWith('+++ ')) {
+        // file markers — ignore but keep context
+        diffLine = { content: line, type: 'header' }
       } else {
+        // fallback: treat as context
         diffLine = { content: line, type: 'context', lineNumber: newLineNumber }
         oldLineNumber++
         newLineNumber++

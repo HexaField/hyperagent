@@ -1,6 +1,7 @@
 import type { JSX } from 'solid-js'
 import { createSignal } from 'solid-js'
 import DiffViewer from '../components/DiffViewer'
+import { extractDiffText } from './messageParts'
 
 function isJSON(s: string) {
   try {
@@ -120,6 +121,17 @@ export default function ToolRenderer(props: { part: any; showHeader?: boolean })
   }
 
   const showHeader = props.showHeader === undefined ? true : !!props.showHeader
+
+  // If a diff is present in other locations (e.g. metadata.diff), prefer rendering it
+  const extraDiff = extractDiffText(part)
+  if (extraDiff) {
+    return (
+      <div>
+        {showHeader ? <div class="font-medium mb-1">Diff</div> : null}
+        <DiffViewer diffText={extraDiff} />
+      </div>
+    )
+  }
 
   if (output) {
     const lowered = toolName.toLowerCase()

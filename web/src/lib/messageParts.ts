@@ -43,9 +43,16 @@ export function extractToolCalls(parts: Part[] | undefined): ToolCall[] {
 
 export function extractDiffText(part: Part | undefined): string | null {
   if (!part) return null
-  if (typeof part.text === 'string') return part.text
-  // sometimes diffs may be under part.diff or part.payload
-  if (typeof part.diff === 'string') return part.diff
-  if (typeof part.payload === 'string') return part.payload
+  // Common locations for diffs: part.text, part.diff, part.payload
+  if (typeof part.text === 'string' && /diff --git|Index:|^@@ /m.test(part.text)) return part.text
+  if (typeof part.diff === 'string' && /diff --git|Index:|^@@ /m.test(part.diff)) return part.diff
+  if (typeof part.payload === 'string' && /diff --git|Index:|^@@ /m.test(part.payload)) return part.payload
+  // Check for diffs stored in state.output or state.metadata.diff (used by edit tools)
+  if (part.state) {
+    const s = part.state as any
+    if (typeof s.output === 'string' && /diff --git|Index:|^@@ /m.test(s.output)) return s.output
+    if (s.metadata && typeof s.metadata.diff === 'string' && /diff --git|Index:|^@@ /m.test(s.metadata.diff))
+      return s.metadata.diff
+  }
   return null
 }
