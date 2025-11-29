@@ -228,6 +228,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       return await fetchCodingAgentSessionDetail(sessionId)
     }
   )
+  const [messageCache, setMessageCache] = createSignal<Record<string, CodingAgentMessage[]>>({})
 
   createEffect(() => {
     const handle = setInterval(() => {
@@ -569,7 +570,27 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     if (draftingSession()) return null
     return sessionDetail() ?? null
   })
-  const messages = createMemo<CodingAgentMessage[]>(() => selectedDetail()?.messages ?? [])
+  const messages = createMemo<CodingAgentMessage[]>(() => {
+    const sessionId = selectedSessionId()
+    if (!sessionId) return []
+    const cached = messageCache()[sessionId]
+    if (cached) return cached
+    if (draftingSession()) return []
+    return selectedDetail()?.messages ?? []
+  })
+
+  createEffect(() => {
+    const detail = selectedDetail()
+    if (!detail) return
+    const sessionId = detail.session.id
+    const incoming = detail.messages ?? []
+    setMessageCache((prev) => {
+      const prevMessages = prev[sessionId] ?? []
+      const nextMessages = reconcileMessages(prevMessages, incoming)
+      if (prevMessages === nextMessages && prev[sessionId] === prevMessages) return prev
+      return { ...prev, [sessionId]: nextMessages }
+    })
+  })
 
   const sessionRows = createMemo<SessionRow[]>(() => {
     const currentSessions = sessions() ?? []
@@ -1106,6 +1127,42 @@ const SESSION_STATE_META: Record<SessionState, { label: string; badgeClass: stri
   terminated: {
     label: 'Stopped',
     badgeClass: 'bg-amber-100 text-amber-700 dark:bg-amber-400/20 dark:text-amber-100'
+  }
+}
+
+function reconcileMessages(prev: CodingAgentMessage[], incoming: CodingAgentMessage[]): CodingAgentMessage[] {
+  if (!incoming || incoming.length === 0) return []
+  if (!prev || prev.length === 0) return incoming
+  const prevEntries = new Map(
+    prev.map((message) => [message.id, { message, signature: messageSignature(message) }])
+  )
+  let changed = prev.length !== incoming.length
+  const next = incoming.map((message) => {
+    const prevEntry = prevEntries.get(message.id)
+    if (!prevEntry) {
+      changed = true
+      return message
+    }
+    const signature = messageSignature(message)
+    if (prevEntry.signature === signature) return prevEntry.message
+    changed = true
+    return message
+  })
+  return changed ? next : prev
+}
+
+function messageSignature(message: CodingAgentMessage): string {
+  try {
+    return JSON.stringify({
+      text: message.text,
+      completedAt: message.completedAt,
+      modelId: message.modelId,
+      providerId: message.providerId,
+      parts: message.parts,
+      role: message.role
+    })
+  } catch {
+    return `${message.id}-${message.completedAt ?? ''}-${message.text ?? ''}-${message.parts?.length ?? 0}`
   }
 }
 
