@@ -233,4 +233,5 @@ If you were to build toward this:
 - `UI_TLS_CERT_PATH` / `UI_TLS_KEY_PATH` override the UI server certificates; `VITE_TLS_CERT_PATH` / `VITE_TLS_KEY_PATH` do the same for the Vite dev server (both default to the generated files).
 - Set `UI_PUBLIC_HOST` (or `UI_PUBLIC_ORIGIN`) to the externally reachable host so embedded code-server URLs are absolute; the UI server also reflects that value in `Access-Control-Allow-Origin` (override via `UI_CORS_ORIGIN` when needed).
 - When embedding code-server on another host/port, set `UI_FRAME_ANCESTOR` (defaults to the CORS origin/public host) so the proxy rewrites `Content-Security-Policy` to allow that frame ancestor.
+- The Docker workflow runner automatically mounts the UI certificate bundle so HTTPS callbacks validate the self-signed cert; override via `WORKFLOW_RUNNER_CA_PATH` if you keep certificates elsewhere.
 - When running workflows or proxies via Docker, mount or copy the certificate bundle so other services can trust the HTTPS-only UI endpoints.

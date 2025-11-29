@@ -4,6 +4,7 @@ import { createWorkspaceManager } from './workspace'
 export type RadicleConfig = {
   defaultRemote?: string
   tempRootDir?: string
+  radCliPath?: string
 }
 
 export type RadicleBranchInfo = {

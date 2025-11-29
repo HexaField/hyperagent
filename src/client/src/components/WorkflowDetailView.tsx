@@ -1,5 +1,5 @@
 import type { JSX } from 'solid-js'
-import { For, Show, createEffect, createMemo, createResource, createSignal } from 'solid-js'
+import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup } from 'solid-js'
 import { fetchJson } from '../shared/api/httpClient'
 import DiffViewer from './DiffViewer'
 
@@ -18,6 +18,8 @@ type WorkflowStep = {
   workflowId: string
   status: string
   sequence: number
+  dependsOn: string[]
+  taskId?: string | null
   data: Record<string, unknown>
   result: Record<string, unknown> | null
   runnerInstanceId: string | null
@@ -78,6 +80,8 @@ type AgentConversation = {
     worker: AgentWorkerTurn
     verifier: AgentVerifierTurn
   }>
+  provider?: string | null
+  model?: string | null
 }
 
 type WorkspaceInfo = {
@@ -104,6 +108,36 @@ type WorkflowStepResult = {
   provenance?: {
     logsPath?: string | null
   }
+  pullRequest?: {
+    id: string
+  }
+  policyAudit?: {
+    runnerInstanceId?: string | null
+    decision?: {
+      allowed?: boolean
+      reason?: string
+      metadata?: Record<string, unknown>
+    }
+    recordedAt?: string
+  }
+}
+
+type WorkflowRunnerEvent = {
+  id: string
+  workflowId: string
+  stepId: string
+  type: string
+  status: string
+  runnerInstanceId: string | null
+  attempts: number
+  latencyMs: number | null
+  metadata: Record<string, unknown> | null
+  createdAt: string
+}
+
+type WorkflowEventsPayload = {
+  workflowId: string
+  events: WorkflowRunnerEvent[]
 }
 
 type WorkspaceEntry = {
@@ -117,6 +151,7 @@ type ProvenancePayload = {
   content: string | null
   parsed: unknown
   workspaceEntries: WorkspaceEntry[]
+  downloadUrl?: string | null
 }
 
 type WorkflowDetailViewProps = {
@@ -139,13 +174,37 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
     setProvenanceError(null)
   })
 
-  const [detail] = createResource(
+  const [detail, { refetch: refetchDetail }] = createResource(
     () => props.workflowId,
     async (workflowId) => {
       if (!workflowId) return null
       return await fetchJson<WorkflowDetail>(`/api/workflows/${workflowId}`)
     }
   )
+
+  const [runnerEvents, { refetch: refetchRunnerEvents }] = createResource(
+    () => props.workflowId,
+    async (workflowId) => {
+      if (!workflowId) return null
+      return await fetchJson<WorkflowEventsPayload>(`/api/workflows/${workflowId}/events`)
+    }
+  )
+
+  createEffect(() => {
+    const workflowId = props.workflowId
+    const summary = detail()
+    if (!workflowId || !summary) {
+      return
+    }
+    if (!shouldPollWorkflow(summary.workflow, summary.steps)) {
+      return
+    }
+    const timer = setInterval(() => {
+      void refetchDetail()
+      void refetchRunnerEvents()
+    }, 2000)
+    onCleanup(() => clearInterval(timer))
+  })
 
   const workflowRecord = () => detail()?.workflow ?? null
 
@@ -166,6 +225,19 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
   const selectedAgent = createMemo<AgentConversation | null>(() => selectedResult()?.agent ?? null)
   const selectedCommit = createMemo<CommitInfo | null>(() => selectedResult()?.commit ?? null)
   const selectedWorkspace = createMemo<WorkspaceInfo | null>(() => selectedResult()?.workspace ?? null)
+  const selectedPolicyAudit = createMemo(() => selectedResult()?.policyAudit ?? null)
+  const selectedPullRequest = createMemo(() => selectedResult()?.pullRequest ?? null)
+    const plannerSteps = createMemo(() => detail()?.steps ?? [])
+    const describeDependencies = (step: WorkflowStep) =>
+      step.dependsOn && step.dependsOn.length ? step.dependsOn.join(', ') : 'None'
+  const agentProviderMeta = createMemo(() => {
+    const agent = selectedAgent()
+    if (!agent) return null
+    const providerLabel = agent.provider?.trim()
+    const modelLabel = agent.model?.trim()
+    if (!providerLabel && !modelLabel) return null
+    return [providerLabel, modelLabel].filter(Boolean).join(' · ')
+  })
   const stepInstructions = createMemo(() => {
     const resultInstructions = selectedResult()?.instructions
     if (typeof resultInstructions === 'string' && resultInstructions.trim().length) {
@@ -190,6 +262,14 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
     setProvenanceOpen(false)
     setProvenanceError(null)
   })
+
+  const runnerEventList = createMemo(() => runnerEvents()?.events ?? [])
+  const selectedRunnerEvents = createMemo(() => {
+    const stepId = selectedStepId()
+    if (!stepId) return []
+    return runnerEventList().filter((event) => event.stepId === stepId)
+  })
+  const changedFiles = createMemo(() => selectedCommit()?.changedFiles ?? [])
 
   const [diff] = createResource(
     () => {
@@ -320,6 +400,29 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
           </Show>
         </section>
 
+        <section class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
+          <h2 class="mb-3 text-lg font-semibold text-[var(--text)]">Planner timeline</h2>
+          <Show when={plannerSteps().length > 0} fallback={<p class="text-sm text-[var(--text-muted)]">Planner tasks will appear after a plan is attached to this workflow.</p>}>
+            <ol class="flex flex-col gap-3">
+              <For each={plannerSteps()}>
+                {(step) => (
+                  <li class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-3 text-sm text-[var(--text)]">
+                    <div class="flex items-center justify-between gap-2">
+                      <p class="font-semibold">
+                        {typeof step.data?.title === 'string' ? (step.data.title as string) : `Step ${step.sequence}`}
+                      </p>
+                      <span class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Seq {step.sequence}</span>
+                    </div>
+                    <p class="text-xs text-[var(--text-muted)]">Status · {step.status}</p>
+                    <p class="text-xs text-[var(--text-muted)]">Depends on · {describeDependencies(step)}</p>
+                    <p class="text-xs text-[var(--text-muted)]">Planner task · {step.taskId ?? 'not mapped'}</p>
+                  </li>
+                )}
+              </For>
+            </ol>
+          </Show>
+        </section>
+
         <div class="flex flex-col gap-4">
           <section class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
             <header class="space-y-1">
@@ -336,6 +439,89 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
               <Show when={diffError()}>{(message) => <p class="text-xs text-red-500">{message()}</p>}</Show>
             </header>
             <DiffViewer diffText={diff()?.diffText ?? null} />
+          </section>
+
+          <section class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
+            <header class="space-y-1">
+              <h2 class="text-lg font-semibold text-[var(--text)]">Branch &amp; PR status</h2>
+              <Show when={selectedCommit()}>
+                {(commit) => (
+                  <p class="text-xs text-[var(--text-muted)]">
+                    Branch {commit().branch} · Commit {shortHash(commit().commitHash)}
+                  </p>
+                )}
+              </Show>
+            </header>
+            <Show
+              when={selectedCommit()}
+              fallback={<p class="text-sm text-[var(--text-muted)]">Commit metadata will appear once this step finishes with a git update.</p>}
+            >
+              {(commit) => (
+                <div class="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-4 text-sm text-[var(--text)]">
+                  <p class="font-semibold">{commit().message || 'No commit message recorded.'}</p>
+                  <div class="flex flex-wrap gap-3 text-xs text-[var(--text-muted)]">
+                    <span>Hash · {commit().commitHash}</span>
+                    <span>Files changed · {changedFiles().length}</span>
+                  </div>
+                  <Show when={changedFiles().length > 0}>
+                    <ul class="max-h-40 overflow-auto rounded-xl border border-[var(--border)] bg-[var(--bg-card)] text-xs">
+                      <For each={changedFiles().slice(0, 8)}>
+                        {(file) => (
+                          <li class="border-b border-[var(--border)] px-3 py-2 font-mono text-[var(--text)] last:border-b-0">
+                            {file}
+                          </li>
+                        )}
+                      </For>
+                      <Show when={changedFiles().length > 8}>
+                        <li class="px-3 py-2 text-[var(--text-muted)]">+{changedFiles().length - 8} more</li>
+                      </Show>
+                    </ul>
+                  </Show>
+                  <Show when={selectedPullRequest()}>
+                    {(pullRequest) => (
+                      <p class="text-xs text-[var(--text-muted)]">
+                        Pull request queued · ID {pullRequest().id}
+                      </p>
+                    )}
+                  </Show>
+                </div>
+              )}
+            </Show>
+          </section>
+
+          <section class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
+            <header class="space-y-1">
+              <h2 class="text-lg font-semibold text-[var(--text)]">Runner telemetry</h2>
+              <Show when={selectedRunnerEvents().length === 0}>
+                <p class="text-xs text-[var(--text-muted)]">Runner heartbeats will appear while this step is enqueued or executing.</p>
+              </Show>
+            </header>
+            <Show when={selectedRunnerEvents().length > 0}>
+              <ul class="flex flex-col gap-2">
+                <For each={selectedRunnerEvents()}>
+                  {(event) => (
+                    <li class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-3 text-xs text-[var(--text)]">
+                      <div class="flex flex-wrap items-center justify-between gap-2">
+                        <p class="font-semibold">
+                          {event.type} · {event.status}
+                        </p>
+                        <span class="text-[var(--text-muted)]">{formatTimestamp(event.createdAt)}</span>
+                      </div>
+                      <div class="flex flex-wrap gap-3 text-[var(--text-muted)]">
+                        <Show when={event.runnerInstanceId}>
+                          {(id) => <span>Runner {shortToken(id())}</span>}
+                        </Show>
+                        <span>Attempts {event.attempts}</span>
+                        <Show when={formatLatency(event.latencyMs)}>{(latency) => <span>Latency {latency()}</span>}</Show>
+                      </div>
+                      <Show when={event.metadata?.error}>
+                        {(message) => <p class="mt-1 text-red-500">{String(message())}</p>}
+                      </Show>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
           </section>
 
           <section class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
@@ -378,6 +564,9 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                       </span>{' '}
                       — {agent().reason}
                     </p>
+                    <Show when={agentProviderMeta()}>
+                      {(meta) => <p class="text-xs text-[var(--text-muted)]">Agent · {meta()}</p>}
+                    </Show>
                     <p class="text-xs text-[var(--text-muted)] whitespace-pre-wrap">{agent().userInstructions}</p>
                     <div class="divide-y divide-[var(--border)] border border-[var(--border)] rounded-2xl">
                       <div class="space-y-1 p-4">
@@ -411,6 +600,29 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                         )}
                       </For>
                     </div>
+                  </div>
+                )}
+              </Show>
+              <Show when={selectedPolicyAudit()}>
+                {(audit) => (
+                  <div class="mt-3 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--bg-muted)] p-4 text-sm">
+                    <div class="flex items-center justify-between gap-2">
+                      <p class="font-semibold text-[var(--text)]">Policy decision</p>
+                      <span class="text-xs text-[var(--text-muted)]">
+                        Runner · {audit().runnerInstanceId ?? 'unknown'}
+                      </span>
+                    </div>
+                    <p class="text-sm text-[var(--text)]">
+                      {audit().decision?.allowed ? 'Allowed' : 'Blocked'}{' '}
+                      {audit().decision?.reason ? `— ${audit().decision?.reason}` : ''}
+                    </p>
+                    <Show when={audit().recordedAt}>
+                      {(timestamp) => (
+                        <p class="text-xs text-[var(--text-muted)]">
+                          Recorded {new Date(timestamp()).toLocaleString()}
+                        </p>
+                      )}
+                    </Show>
                   </div>
                 )}
               </Show>
@@ -451,6 +663,18 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                         <code class="block truncate rounded bg-[var(--bg-card)] px-2 py-1 text-xs text-[var(--text)]">
                           {payload().logsPath ?? 'Not recorded'}
                         </code>
+                        <Show when={payload().downloadUrl}>
+                          {(url) => (
+                            <a
+                              class="text-xs font-semibold text-blue-500 underline"
+                              href={url() ?? undefined}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Download raw JSON
+                            </a>
+                          )}
+                        </Show>
                         <div class="max-h-64 overflow-auto rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3 text-xs text-[var(--text)]">
                           <Show
                             when={formattedProvenance()}
@@ -501,6 +725,16 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
   )
 }
 
+const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+
+function shouldPollWorkflow(workflow: WorkflowRecord | null, steps: WorkflowStep[]): boolean {
+  if (!workflow) return false
+  if (!TERMINAL_WORKFLOW_STATUSES.has(workflow.status)) {
+    return true
+  }
+  return steps.some((step) => step.status === 'pending' || step.status === 'running')
+}
+
 function hasCommit(step: WorkflowStep): boolean {
   const commitPayload = (step.result as WorkflowStepResult | null)?.commit
   return typeof commitPayload?.commitHash === 'string'
@@ -519,4 +753,23 @@ function shortToken(token: string): string {
 function shortHash(hash: string): string {
   if (!hash) return ''
   return hash.length > 10 ? hash.slice(0, 10) : hash
+}
+
+function formatLatency(latencyMs: number | null): string | null {
+  if (typeof latencyMs !== 'number' || Number.isNaN(latencyMs)) {
+    return null
+  }
+  if (latencyMs < 1000) {
+    return `${latencyMs} ms`
+  }
+  return `${(latencyMs / 1000).toFixed(1)} s`
+}
+
+function formatTimestamp(value?: string | null): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return String(value)
+  }
+  return date.toLocaleString()
 }

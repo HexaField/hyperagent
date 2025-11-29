@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
 
 export type WorkflowRunnerGateway = {
   enqueue: (payload: WorkflowRunnerPayload) => Promise<void>
@@ -16,6 +18,7 @@ export type DockerWorkflowRunnerOptions = {
   callbackBaseUrl: string
   callbackToken?: string
   timeoutMs?: number
+  caCertPath?: string
 }
 
 const DEFAULT_IMAGE = 'curlimages/curl:8.11.1'
@@ -25,9 +28,10 @@ export function createDockerWorkflowRunnerGateway(options: DockerWorkflowRunnerO
   const binary = options.dockerBinary ?? 'docker'
   const image = options.image ?? DEFAULT_IMAGE
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const resolvedCaCertPath = resolveCaCertPath(options.caCertPath)
 
   return {
-    enqueue: (payload) => invokeDockerCurl(binary, image, timeoutMs, options, payload)
+    enqueue: (payload) => invokeDockerCurl(binary, image, timeoutMs, options, resolvedCaCertPath, payload)
   }
 }
 
@@ -36,6 +40,7 @@ async function invokeDockerCurl(
   image: string,
   timeoutMs: number,
   options: DockerWorkflowRunnerOptions,
+  caCertConfig: CaCertConfig | null,
   payload: WorkflowRunnerPayload
 ): Promise<void> {
   const callbackUrl = buildCallbackUrl(options.callbackBaseUrl, payload.workflowId, payload.stepId)
@@ -45,13 +50,48 @@ async function invokeDockerCurl(
     runnerInstanceId: payload.runnerInstanceId
   })
 
-  const args = ['run', '--rm', image, '-sS', '--fail-with-body', '-X', 'POST', callbackUrl, '-H', 'Content-Type: application/json']
+  const args = buildDockerArgs(image, caCertConfig)
+  const curlArgs = ['-sS', '--fail-with-body', '-X', 'POST', callbackUrl, '-H', 'Content-Type: application/json']
   if (options.callbackToken) {
-    args.push('-H', `X-Workflow-Runner-Token: ${options.callbackToken}`)
+    curlArgs.push('-H', `X-Workflow-Runner-Token: ${options.callbackToken}`)
   }
-  args.push('-d', body)
+  if (caCertConfig) {
+    curlArgs.push('--cacert', caCertConfig.containerPath)
+  }
+  curlArgs.push('-d', body)
 
-  await runDockerCommand(dockerBinary, args, timeoutMs)
+  await runDockerCommand(dockerBinary, [...args, ...curlArgs], timeoutMs)
+}
+
+type CaCertConfig = {
+  hostPath: string
+  containerPath: string
+}
+
+const CA_CONTAINER_PATH = '/hyperagent-runner/ca.pem'
+
+function resolveCaCertPath(candidate?: string): CaCertConfig | null {
+  if (!candidate) {
+    return null
+  }
+  const resolved = path.resolve(candidate)
+  if (!fs.existsSync(resolved)) {
+    console.warn('[workflow-runner] Provided CA certificate not found, skipping trusted mount.', { path: candidate })
+    return null
+  }
+  return {
+    hostPath: resolved,
+    containerPath: CA_CONTAINER_PATH
+  }
+}
+
+function buildDockerArgs(image: string, caCertConfig: CaCertConfig | null): string[] {
+  const args = ['run', '--rm']
+  if (caCertConfig) {
+    args.push('-v', `${caCertConfig.hostPath}:${caCertConfig.containerPath}:ro`)
+  }
+  args.push(image)
+  return args
 }
 
 function buildCallbackUrl(baseUrl: string, workflowId: string, stepId: string): string {

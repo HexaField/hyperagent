@@ -18,36 +18,54 @@ export function createAgentWorkflowExecutor(options: AgentWorkflowExecutorOption
   const model = options.model
   const maxRounds = options.maxRounds
   const onStream = options.onStream
+  const agentMetadata = {
+    provider: provider ?? null,
+    model: model ?? null
+  }
 
   return async function executeWithAgent(args: AgentExecutorArgs): Promise<AgentExecutorResult> {
     const sessionDir = resolveSessionDir(args)
     await ensureProviderConfig(sessionDir)
     const userInstructions = buildInstructions(args)
-    const loopResult = await runLoop({
+    try {
+      const loopResult = await runLoop({
+        userInstructions,
+        provider,
+        model,
+        maxRounds,
+        sessionDir,
+        onStream
+      })
+      const shouldCommit = loopResult.outcome === 'approved'
+      const logsPath = await detectLogsPath(sessionDir)
+      return {
+        stepResult: buildStepResultFromLoop(loopResult, userInstructions, agentMetadata),
+        commitMessage: shouldCommit ? buildCommitMessage(args, loopResult) : undefined,
+        skipCommit: !shouldCommit,
+        logsPath: logsPath ?? null
+      }
+    } catch (error) {
+      return await buildFallbackAgentResult({ sessionDir, userInstructions, args, cause: error })
+    }
+  }
+}
+
+function buildStepResultFromLoop(
+  loopResult: AgentLoopResult,
+  userInstructions: string,
+  metadata?: { provider: string | null; model: string | null }
+) {
+  return {
+    instructions: userInstructions,
+    summary: loopResult.reason,
+    agent: {
       userInstructions,
-      provider,
-      model,
-      maxRounds,
-      sessionDir,
-      onStream
-    })
-    const shouldCommit = loopResult.outcome === 'approved'
-    const logsPath = await detectLogsPath(sessionDir)
-    return {
-      stepResult: {
-        instructions: userInstructions,
-        summary: loopResult.reason,
-        agent: {
-          userInstructions,
-          outcome: loopResult.outcome,
-          reason: loopResult.reason,
-          bootstrap: loopResult.bootstrap,
-          rounds: loopResult.rounds
-        }
-      },
-      commitMessage: shouldCommit ? buildCommitMessage(args, loopResult) : undefined,
-      skipCommit: !shouldCommit,
-      logsPath: logsPath ?? null
+      outcome: loopResult.outcome,
+      reason: loopResult.reason,
+      bootstrap: loopResult.bootstrap,
+      rounds: loopResult.rounds,
+      provider: metadata?.provider ?? null,
+      model: metadata?.model ?? null
     }
   }
 }
@@ -148,5 +166,90 @@ async function detectLogsPath(sessionDir: string): Promise<string | undefined> {
       return undefined
     }
     throw error
+  }
+}
+
+type FallbackAgentArgs = {
+  sessionDir: string
+  userInstructions: string
+  args: AgentExecutorArgs
+  cause: unknown
+}
+
+async function buildFallbackAgentResult({ sessionDir, userInstructions, args, cause }: FallbackAgentArgs) {
+  const reason = buildFallbackReason(cause)
+  const fallbackPlan = synthesizePlan(userInstructions)
+  const workerTurn = {
+    round: 1,
+    raw: JSON.stringify({ plan: fallbackPlan.join('\n') }),
+    parsed: {
+      status: 'working',
+      plan: fallbackPlan.join('\n'),
+      work: fallbackPlan.slice(0, 2).join('\n'),
+      requests: ''
+    }
+  }
+  const verifierTurn = {
+    round: 1,
+    raw: JSON.stringify({ instructions: fallbackPlan.join('\n') }),
+    parsed: {
+      verdict: 'fail',
+      critique: 'Local workflow agent unavailable, using deterministic checklist.',
+      instructions: fallbackPlan.join('\n'),
+      priority: 1
+    }
+  }
+  const fallbackAgent = {
+    userInstructions,
+    outcome: 'failed' as const,
+    reason,
+    bootstrap: verifierTurn,
+    rounds: [{ worker: workerTurn, verifier: verifierTurn }]
+  }
+  const fallbackStepResult = {
+    instructions: userInstructions,
+    summary: 'Generated fallback workflow guidance because the configured agent provider is unavailable.',
+    note: 'Install and configure the workflow agent provider to replace this fallback output.',
+    agent: fallbackAgent
+  }
+  const fallbackLogPath = await writeFallbackLog(sessionDir, fallbackStepResult)
+  return {
+    stepResult: fallbackStepResult,
+    skipCommit: true,
+    logsPath: fallbackLogPath ?? null
+  }
+}
+
+function buildFallbackReason(error: unknown): string {
+  if (error instanceof Error) {
+    return `Workflow agent fallback triggered: ${error.message}`
+  }
+  return 'Workflow agent fallback triggered due to unknown error.'
+}
+
+function synthesizePlan(instructions: string): string[] {
+  const trimmed = instructions.trim()
+  if (!trimmed) return ['Review workspace context', 'Apply requested changes', 'Report blocking issues']
+  const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  if (!lines.length) return ['Review workspace context', 'Apply requested changes', 'Report blocking issues']
+  const bullets: string[] = []
+  for (const line of lines) {
+    const normalized = line.replace(/^[-*]\s*/, '').trim()
+    if (!normalized) continue
+    bullets.push(normalized)
+    if (bullets.length >= 5) break
+  }
+  return bullets.length ? bullets : ['Review workspace context', 'Apply requested changes', 'Report blocking issues']
+}
+
+async function writeFallbackLog(sessionDir: string, payload: Record<string, unknown>) {
+  try {
+    const dir = path.join(sessionDir, '.hyperagent')
+    await fs.mkdir(dir, { recursive: true })
+    const file = path.join(dir, `workflow-fallback-${Date.now()}.json`)
+    await fs.writeFile(file, JSON.stringify(payload, null, 2), 'utf8')
+    return file
+  } catch {
+    return null
   }
 }

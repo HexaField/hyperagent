@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+COMMAND=${1:-}
+if [[ "$COMMAND" == "--version" || "$COMMAND" == "version" || "$COMMAND" == "-v" ]]; then
+	echo "rad-mock 0.1.0"
+	exit 0
+fi
+
+echo "rad-mock executing: $*" >&2
+# The mock simply confirms the rad CLI was invoked. Real implementations
+# would authenticate with a Radicle daemon.
+exit 0

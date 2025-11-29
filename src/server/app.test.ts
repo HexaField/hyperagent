@@ -1137,6 +1137,27 @@ describe('createServerApp', () => {
       expect(listResponse.status).toBe(200)
       const listPayload = await listResponse.json()
       expect(listPayload.workflows.length).toBeGreaterThan(0)
+
+      const eventsResponse = await fetch(`${harness.baseUrl}/api/workflows/${workflowId}/events`)
+      expect(eventsResponse.status).toBe(200)
+      const eventsPayload = await eventsResponse.json()
+      expect(eventsPayload.workflowId).toBe(workflowId)
+      expect(Array.isArray(eventsPayload.events)).toBe(true)
+    } finally {
+      await harness.close()
+    }
+  })
+
+  it('reports workflow health metrics with runner events included', async () => {
+    const harness = await createIntegrationHarness()
+    try {
+      const response = await fetch(`${harness.baseUrl}/api/health/workflows`)
+      expect(response.status).toBe(200)
+      const payload = await response.json()
+      expect(payload.ok).toBe(true)
+      expect(payload).toHaveProperty('metrics')
+      expect(payload).toHaveProperty('deadLetters')
+      expect(Array.isArray(payload.events)).toBe(true)
     } finally {
       await harness.close()
     }

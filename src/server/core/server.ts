@@ -37,10 +37,10 @@ import { createDockerReviewRunnerGateway } from '../../../src/modules/review/run
 import { createReviewSchedulerModule } from '../../../src/modules/review/scheduler'
 import type { ReviewRunTrigger } from '../../../src/modules/review/types'
 import { createTerminalModule, type TerminalModule } from '../../../src/modules/terminal'
-import { createAgentWorkflowExecutor } from '../../../src/modules/workflowAgentExecutor'
 import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
+import { createWorkflowPolicyFromEnv } from '../../../src/modules/workflowPolicy'
 import type { GitFileChange, GitInfo } from '../../interfaces/core/git'
 import { parseGitStashList } from '../lib/git'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
@@ -93,6 +93,30 @@ export type CodeServerSession = {
 type RunLoop = typeof runVerifierWorkerLoop
 
 type ControllerFactory = (options: CodeServerOptions) => CodeServerController
+
+function ensureWorkflowAgentProviderReady(provider: Provider | undefined) {
+  if (!provider) return
+  const binary = resolveWorkflowAgentBinary(provider)
+  if (!binary) return
+  const check = spawnSync('which', [binary], { stdio: 'ignore' })
+  if (check.status !== 0) {
+    throw new Error(`Workflow agent provider "${provider}" requires the "${binary}" CLI to be available on PATH`)
+  }
+}
+
+function resolveWorkflowAgentBinary(provider: Provider): string | null {
+  switch (provider) {
+    case 'opencode':
+      return 'opencode'
+    case 'ollama':
+    case 'ollama-cli':
+      return 'ollama'
+    case 'goose':
+      return 'goose'
+    default:
+      return null
+  }
+}
 
 export const parseGitStatusOutput = (output: string | null): GitFileChange[] => {
   if (!output) return []
@@ -221,7 +245,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     options.radicleModule ??
     createRadicleModule({
       defaultRemote: process.env.RADICLE_REMOTE ?? 'origin',
-      tempRootDir: process.env.RADICLE_TEMP_DIR
+      tempRootDir: process.env.RADICLE_TEMP_DIR,
+      radCliPath: process.env.RADICLE_CLI_PATH
     })
 
   const maxTerminalSessionsEnv = process.env.TERMINAL_MAX_SESSIONS ?? process.env.TERMINAL_MAX_SESSIONS_PER_USER
@@ -283,12 +308,16 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 
-  const workflowAgentExecutor = createAgentWorkflowExecutor({
+  ensureWorkflowAgentProviderReady(WORKFLOW_AGENT_PROVIDER)
+
+  const workflowAgentExecutorOptions = {
     runLoop,
     provider: WORKFLOW_AGENT_PROVIDER,
     model: WORKFLOW_AGENT_MODEL,
     maxRounds: WORKFLOW_AGENT_MAX_ROUNDS
-  })
+  }
+
+  const workflowPolicy = createWorkflowPolicyFromEnv(process.env)
 
   const workflowCallbackBaseUrl =
     process.env.WORKFLOW_CALLBACK_BASE_URL ?? `https://host.docker.internal:${defaultPort}`
@@ -300,8 +329,16 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       image: process.env.WORKFLOW_RUNNER_IMAGE,
       callbackBaseUrl: workflowCallbackBaseUrl,
       callbackToken: workflowRunnerToken ?? undefined,
-      timeoutMs: process.env.WORKFLOW_RUNNER_TIMEOUT ? Number(process.env.WORKFLOW_RUNNER_TIMEOUT) : undefined
+      timeoutMs: process.env.WORKFLOW_RUNNER_TIMEOUT ? Number(process.env.WORKFLOW_RUNNER_TIMEOUT) : undefined,
+      caCertPath: process.env.WORKFLOW_RUNNER_CA_PATH ?? defaultCertPath
     })
+
+  const pullRequestModule = createPullRequestModule({
+    projects: persistence.projects,
+    pullRequests: persistence.pullRequests,
+    pullRequestCommits: persistence.pullRequestCommits,
+    pullRequestEvents: persistence.pullRequestEvents
+  })
 
   const manageWorkerLifecycle = !options.workflowRuntime
   const workflowRuntime =
@@ -311,8 +348,10 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       pollIntervalMs: options.workflowPollIntervalMs,
       radicle: radicleModule,
       commitAuthor,
-      agentExecutor: workflowAgentExecutor,
-      runnerGateway: workflowRunnerGateway
+      agentExecutorOptions: workflowAgentExecutorOptions,
+      runnerGateway: workflowRunnerGateway,
+      pullRequestModule,
+      policy: workflowPolicy
     })
   const reviewCallbackBaseUrl = process.env.REVIEW_CALLBACK_BASE_URL ?? `https://host.docker.internal:${defaultPort}`
   const reviewRunnerToken = process.env.REVIEW_RUNNER_TOKEN ?? process.env.REVIEW_CALLBACK_TOKEN ?? null
@@ -324,13 +363,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     logsDir: process.env.REVIEW_RUNNER_LOGS_DIR,
     timeoutMs: process.env.REVIEW_RUNNER_TIMEOUT ? Number(process.env.REVIEW_RUNNER_TIMEOUT) : undefined
   })
-  const pullRequestModule = createPullRequestModule({
-    projects: persistence.projects,
-    pullRequests: persistence.pullRequests,
-    pullRequestCommits: persistence.pullRequestCommits,
-    pullRequestEvents: persistence.pullRequestEvents
-  })
-
   const diffModule = createDiffModule()
   const reviewEngine = createReviewEngineModule()
   const reviewScheduler = createReviewSchedulerModule({
@@ -1393,6 +1425,29 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     '/api/health',
     wrapAsync((_req, res) => {
       res.json({ ok: true })
+    })
+  )
+
+  app.get(
+    '/api/health/workflows',
+    wrapAsync((_req, res) => {
+      const metrics = persistence.workflowSteps.getQueueMetrics()
+      const deadLetters = persistence.workflowRunnerDeadLetters.listRecent(20)
+      const events = persistence.workflowRunnerEvents.listRecent(100)
+      res.json({ ok: true, metrics, deadLetters, events })
+    })
+  )
+
+  app.get(
+    '/api/health/radicle',
+    wrapAsync(async (_req, res) => {
+      const status = await radicleModule.getStatus()
+      const registrations = persistence.radicleRegistrations.list()
+      res.json({
+        ok: status.reachable && status.loggedIn,
+        status,
+        registrations
+      })
     })
   )
 

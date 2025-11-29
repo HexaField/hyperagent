@@ -1,11 +1,12 @@
 import { Router, type Request, type RequestHandler } from 'express'
 import fs from 'fs/promises'
+import path from 'path'
 import type { Persistence } from '../../../../src/modules/database'
 import type { PlannerRun, PlannerTask, WorkflowDetail, WorkflowRuntime } from '../../../../src/modules/workflows'
 
 type WrapAsync = (handler: RequestHandler) => RequestHandler
 
-type WorkspaceWorkflowsPersistence = Pick<Persistence, 'projects' | 'workflowSteps'>
+type WorkspaceWorkflowsPersistence = Pick<Persistence, 'projects' | 'workflowSteps' | 'workflowRunnerEvents'>
 
 export type WorkspaceWorkflowsDeps = {
   wrapAsync: WrapAsync
@@ -198,6 +199,21 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
     res.json(detail)
   }
 
+  const workflowEventsHandler: RequestHandler = (req, res) => {
+    const workflowId = req.params.workflowId
+    if (!workflowId) {
+      res.status(400).json({ error: 'workflowId is required' })
+      return
+    }
+    const detail = workflowRuntime.getWorkflowDetail(workflowId)
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown workflow' })
+      return
+    }
+    const events = persistence.workflowRunnerEvents.listByWorkflow(workflowId, 200)
+    res.json({ workflowId, events })
+  }
+
   const workflowRunnerCallbackHandler: RequestHandler = async (req, res) => {
     const workflowId = req.params.workflowId
     const stepId = req.params.stepId
@@ -319,8 +335,42 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
         workspacePath,
         content: raw,
         parsed: safeParseJson(raw),
-        workspaceEntries
+        workspaceEntries,
+        downloadUrl: `/api/workflows/${workflowId}/steps/${stepId}/provenance/download`
       })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load provenance file'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const workflowStepProvenanceDownloadHandler: RequestHandler = async (req, res) => {
+    const workflowId = req.params.workflowId
+    const stepId = req.params.stepId
+    if (!workflowId || !stepId) {
+      res.status(400).json({ error: 'workflowId and stepId are required' })
+      return
+    }
+    const detail = workflowRuntime.getWorkflowDetail(workflowId)
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown workflow' })
+      return
+    }
+    const step = detail.steps.find((entry) => entry.id === stepId)
+    if (!step) {
+      res.status(404).json({ error: 'Unknown workflow step' })
+      return
+    }
+    const logsPath = deriveLogsPathForStep(step, detail.runs)
+    if (!logsPath) {
+      res.status(404).json({ error: 'Provenance file not available for this step' })
+      return
+    }
+    try {
+      const raw = await fs.readFile(logsPath)
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('Content-Disposition', `attachment; filename="${path.basename(logsPath)}"`)
+      res.send(raw)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load provenance file'
       res.status(500).json({ error: message })
@@ -331,9 +381,14 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
   router.post('/api/workflows', wrapAsync(createWorkflowHandler))
   router.post('/api/workflows/:workflowId/start', wrapAsync(startWorkflowHandler))
   router.get('/api/workflows/:workflowId', wrapAsync(workflowDetailHandler))
+  router.get('/api/workflows/:workflowId/events', wrapAsync(workflowEventsHandler))
   router.post('/api/workflows/:workflowId/steps/:stepId/callback', wrapAsync(workflowRunnerCallbackHandler))
   router.get('/api/workflows/:workflowId/steps/:stepId/diff', wrapAsync(workflowStepDiffHandler))
   router.get('/api/workflows/:workflowId/steps/:stepId/provenance', wrapAsync(workflowStepProvenanceHandler))
+  router.get(
+    '/api/workflows/:workflowId/steps/:stepId/provenance/download',
+    wrapAsync(workflowStepProvenanceDownloadHandler)
+  )
 
   return router
 }

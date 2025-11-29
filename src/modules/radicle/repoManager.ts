@@ -56,9 +56,67 @@ const checkoutBranchFromBase = async (repoPath: string, branchName: string, base
   await runGit(['branch', branchName, baseBranch], repoPath)
 }
 
-export const createRadicleRepoManager = ({ repoPath, remote }: { repoPath: string; remote?: string }) => {
+const remoteExists = async (repoPath: string, remoteName: string): Promise<boolean> => {
+  try {
+    await runGit(['config', '--get', `remote.${remoteName}.url`], repoPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const listGitRemotes = async (repoPath: string): Promise<string[]> => {
+  try {
+    const raw = await runGit(['remote'], repoPath)
+    return raw
+      .split('\n')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length)
+  } catch {
+    return []
+  }
+}
+
+const detectPushRemote = async (repoPath: string, preferred?: string | null): Promise<string> => {
+  const candidates = Array.from(
+    new Set([
+      preferred?.trim().length ? preferred.trim() : null,
+      'rad',
+      'origin'
+    ].filter((entry): entry is string => Boolean(entry)))
+  )
+  for (const candidate of candidates) {
+    if (await remoteExists(repoPath, candidate)) {
+      return candidate
+    }
+  }
+  const remotes = await listGitRemotes(repoPath)
+  if (remotes.length) {
+    return remotes[0]!
+  }
+  throw new Error(
+    `No Git remotes configured for ${repoPath}. Register the repository with Radicle or configure RADICLE_REMOTE.`
+  )
+}
+
+export const createRadicleRepoManager = ({
+  repoPath,
+  remote,
+  radCliPath
+}: {
+  repoPath: string
+  remote?: string
+  radCliPath?: string
+}) => {
   const resolvedRepo = path.resolve(repoPath)
-  const remoteName = remote ?? 'origin'
+  let resolvedRemoteName: string | null = null
+  const radBinary = radCliPath?.trim().length ? radCliPath.trim() : process.env.RADICLE_CLI_PATH ?? 'rad'
+
+  const getRemoteName = async () => {
+    if (resolvedRemoteName) return resolvedRemoteName
+    resolvedRemoteName = await detectPushRemote(resolvedRepo, remote ?? null)
+    return resolvedRemoteName
+  }
 
   const initIfNeeded = async () => {
     ensureDir(resolvedRepo)
@@ -120,8 +178,34 @@ export const createRadicleRepoManager = ({ repoPath, remote }: { repoPath: strin
     }
   }
 
+  const remoteUrl = async (remoteName: string): Promise<string | null> => {
+    try {
+      const output = await runGit(['config', '--get', `remote.${remoteName}.url`], resolvedRepo)
+      return output || null
+    } catch {
+      return null
+    }
+  }
+
+  const runRadCli = async (args: string[]) => {
+    await runCommand(radBinary, args, { cwd: resolvedRepo })
+  }
+
   const pushBranch = async (branchName: string) => {
-    await runGit(['push', remoteName, branchName], resolvedRepo)
+    const pushRemote = await getRemoteName()
+    await runGit(['push', pushRemote, branchName], resolvedRepo)
+    if (await shouldInvokeRadPush(pushRemote)) {
+      await runRadCli(['push', pushRemote, branchName])
+    }
+  }
+
+  const shouldInvokeRadPush = async (pushRemote: string): Promise<boolean> => {
+    if (pushRemote === 'rad') {
+      return true
+    }
+    const url = await remoteUrl(pushRemote)
+    if (!url) return false
+    return url.startsWith('rad://') || url.startsWith('rad:')
   }
 
   const getDiffForBranch = async (branchName: string, baseBranch: string): Promise<DiffResult> => {

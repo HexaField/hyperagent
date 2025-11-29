@@ -24,7 +24,11 @@ export const createRadicleModule = (config: RadicleConfig): RadicleModule => {
     const resolved = path.resolve(repoPath)
     const existing = repoManagers.get(resolved)
     if (existing) return existing
-    const manager = createRadicleRepoManager({ repoPath: resolved, remote: config.defaultRemote })
+    const manager = createRadicleRepoManager({
+      repoPath: resolved,
+      remote: config.defaultRemote,
+      radCliPath: config.radCliPath
+    })
     repoManagers.set(resolved, manager)
     return manager
   }

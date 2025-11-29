@@ -24,6 +24,23 @@ describe('WorkflowDetailView', () => {
       message: 'refactor',
       diffText: 'diff --git a/file.ts b/file.ts\n@@ -0,0 +1 @@\n+hello'
     }
+    const eventsPayload = {
+      workflowId: 'wf-1',
+      events: [
+        {
+          id: 'evt-1',
+          workflowId: 'wf-1',
+          stepId: 'step-1',
+          type: 'runner.enqueue',
+          status: 'succeeded',
+          runnerInstanceId: 'runner-1',
+          attempts: 1,
+          latencyMs: 42,
+          metadata: null,
+          createdAt: new Date().toISOString()
+        }
+      ]
+    }
 
     fetchJsonMock.mockImplementation((input: RequestInfo) => {
       if (input === '/api/workflows/wf-1') {
@@ -32,6 +49,9 @@ describe('WorkflowDetailView', () => {
       if (input === '/api/workflows/wf-1/steps/step-1/diff') {
         return Promise.resolve(diffPayload)
       }
+      if (input === '/api/workflows/wf-1/events') {
+        return Promise.resolve(eventsPayload)
+      }
       throw new Error(`Unexpected request: ${String(input)}`)
     })
 
@@ -39,10 +59,16 @@ describe('WorkflowDetailView', () => {
 
     await waitFor(() => expect(fetchJsonMock).toHaveBeenCalledWith('/api/workflows/wf-1'))
 
-    expect(await screen.findByText(/Task brief & agent trace/i)).toBeDefined()
-    expect(await screen.findByText('Implement the parser improvements.')).toBeDefined()
-    expect(await screen.findByText(/Outcome ·/i)).toBeDefined()
-    expect(await screen.findByText(/feature\/agent-flow · 1234567890/i)).toBeDefined()
+    await screen.findByText(/Task brief & agent trace/i)
+    await screen.findByText('Implement the parser improvements.')
+    await screen.findByText(/Outcome ·/i)
+    await screen.findByText(/feature\/agent-flow · 1234567890/i)
+    await screen.findByText(/Agent · opencode/i)
+    await screen.findByText(/Policy decision/i)
+    await screen.findByText(/Planner timeline/i)
+    await screen.findByText(/Branch & PR status/i)
+    await screen.findByText(/Runner telemetry/i)
+    await screen.findByText(/Pull request queued/i)
 
     // Wait for the diff to load and file to appear
     await waitFor(() => {
@@ -50,12 +76,14 @@ describe('WorkflowDetailView', () => {
     })
 
     // Verify that file is shown with correct number of changes
-    expect(await screen.findByText('file.ts')).toBeDefined()
+    const fileEntries = await screen.findAllByText('file.ts')
+    const diffFileEntry = fileEntries.find((entry) => entry.closest('.diff-file-header'))
+    expect(diffFileEntry).toBeDefined()
     expect(await screen.findByText('1 changes')).toBeDefined()
 
     // File should be collapsed by default (▶), click to expand
-    const fileHeader = await screen.findByText('file.ts')
-    const expandButton = fileHeader.closest('.diff-file-header') as HTMLElement
+    const expandButton = diffFileEntry?.closest('.diff-file-header') as HTMLElement
+    expect(expandButton).toBeDefined()
     expandButton?.click()
 
     // Now verify diff content is visible
@@ -80,6 +108,8 @@ function buildWorkflowDetail() {
         priority: 2
       }
     },
+    provider: 'opencode',
+    model: 'github-copilot/gpt-5-mini',
     rounds: [
       {
         worker: {
@@ -122,6 +152,8 @@ function buildWorkflowDetail() {
         workflowId: 'wf-1',
         status: 'completed',
         sequence: 1,
+        taskId: 'task-parser',
+        dependsOn: [],
         data: {
           title: 'Parser updates',
           instructions: 'Implement the parser improvements.'
@@ -141,7 +173,19 @@ function buildWorkflowDetail() {
             message: 'refactor',
             changedFiles: ['file.ts']
           },
-          agent: agentPayload
+          pullRequest: {
+            id: 'pr-123'
+          },
+          agent: agentPayload,
+          policyAudit: {
+            runnerInstanceId: 'runner-123',
+            decision: {
+              allowed: true,
+              reason: 'Token verified',
+              metadata: { protected: true }
+            },
+            recordedAt: now
+          }
         }
       }
     ]
