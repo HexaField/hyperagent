@@ -1,6 +1,6 @@
 import type { JSX } from 'solid-js'
-import { For, createEffect, createSignal, onCleanup } from 'solid-js'
-import type { CodingAgentMessage } from '../lib/codingAgent'
+import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js'
+import type { CodingAgentMessage, CodingAgentMessagePart } from '../lib/codingAgent'
 import { extractDiffText, extractToolCalls } from '../lib/messageParts'
 import ToolRenderer from '../lib/ToolRenderer'
 import DiffViewer from './DiffViewer'
@@ -18,7 +18,10 @@ export type MessageScrollerProps = {
 export default function MessageScroller(props: MessageScrollerProps) {
   const [container, setContainer] = createSignal<HTMLElement | null>(null)
   const [autoScroll, setAutoScroll] = createSignal(true)
+  const [copiedTargetKey, setCopiedTargetKey] = createSignal<string | null>(null)
+  const [selectionMenu, setSelectionMenu] = createSignal<{ text: string } | null>(null)
   let lastMessageKey: string | null = null
+  let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
   // store per-session scroll positions to restore after remount
   const SCROLL_POSITIONS: Map<string, number> = (globalThis as any).__MessageScrollerPositions || new Map()
@@ -69,6 +72,12 @@ export default function MessageScroller(props: MessageScrollerProps) {
     // The parent (CodingAgentConsole) is responsible for flipping its own autoScroll state when the user clicks resume.
     // First attempt a smooth scroll then force an instant settle
     scrollToBottom(el, true)
+  })
+
+  onCleanup(() => {
+    if (typeof window !== 'undefined' && copyResetTimer) {
+      clearTimeout(copyResetTimer)
+    }
   })
 
   // auto-scroll when messages appended
@@ -155,7 +164,15 @@ export default function MessageScroller(props: MessageScrollerProps) {
     } catch {}
   })
 
-  function DetailsWithToggle(props: { summaryText: string; duration?: string; title?: string; children?: any }) {
+  type DetailsToggleProps = {
+    summaryText: string
+    duration?: string
+    title?: string
+    children?: any
+    copyHint?: { payload: string; key: string }
+  }
+
+  function DetailsWithToggle(props: DetailsToggleProps) {
     const [open, setOpen] = createSignal(false)
     return (
       <details
@@ -181,10 +198,157 @@ export default function MessageScroller(props: MessageScrollerProps) {
             </svg>
           </div>
         </summary>
-        <div class="p-3">{props.children}</div>
+        <div class="relative p-3">
+          {open() && props.copyHint ? (
+            <button
+              type="button"
+              class="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-muted)] transition hover:bg-blue-600 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+              aria-label={copiedTargetKey() === props.copyHint.key ? 'Tool output copied' : 'Copy tool output'}
+              title="Copy tool output"
+              onClick={() => void copyTextPayload(props.copyHint!.payload, props.copyHint!.key)}
+            >
+              {copiedTargetKey() === props.copyHint.key ? (
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M20.285 6.708a1 1 0 00-1.513-1.3l-8.05 9.368-3.492-3.492a1 1 0 10-1.414 1.414l4.25 4.25a1 1 0 001.495-.06z"
+                  />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                  <path fill="currentColor" d="M8 2h10a2 2 0 012 2v12h-2V4H8z" />
+                  <path
+                    fill="currentColor"
+                    d="M5 6h10a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2zm0 2v12h10V8z"
+                  />
+                </svg>
+              )}
+            </button>
+          ) : null}
+          {props.children}
+        </div>
       </details>
     )
   }
+
+  function toolPartClipboardText(message: CodingAgentMessage, part: CodingAgentMessagePart): string {
+    const meta: string[] = []
+    const toolName = String((part as any)?.tool ?? (part as any)?.toolName ?? (part as any)?.name ?? '')
+    if (toolName) meta.push(`Tool: ${toolName}`)
+    if ((part as any)?.title) meta.push(String((part as any).title))
+    if (message.createdAt) meta.push(new Date(message.createdAt).toLocaleString())
+
+    const body: string[] = []
+    const append = (value: string | null | undefined) => {
+      if (typeof value === 'string' && value.trim()) body.push(value.trim())
+    }
+    append(part.text)
+    append((part as any)?.output)
+    append((part as any)?.state?.output)
+    const diffText = extractDiffText(part)
+    if (diffText) body.push(diffText)
+
+    if (body.length === 0) return ''
+    return [...meta, '', ...body].join('\n').trim()
+  }
+
+  async function copyTextPayload(payload: string, targetKey: string) {
+    if (!payload) return
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(payload)
+      } else if (typeof document !== 'undefined') {
+        const textarea = document.createElement('textarea')
+        textarea.value = payload
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.focus()
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      } else {
+        throw new Error('Clipboard API unavailable')
+      }
+      setCopiedTargetKey(targetKey)
+      if (typeof window !== 'undefined') {
+        if (copyResetTimer) clearTimeout(copyResetTimer)
+        copyResetTimer = setTimeout(() => setCopiedTargetKey(null), 2000)
+      }
+    } catch (error) {
+      console.error('Failed to copy message', error)
+    }
+  }
+
+  const closeSelectionMenu = () => {
+    setSelectionMenu(null)
+    if (typeof window === 'undefined') return
+    try {
+      const sel = window.getSelection()
+      sel?.removeAllRanges?.()
+    } catch {}
+  }
+
+  const handleSelectionCopy = async () => {
+    const menu = selectionMenu()
+    if (!menu) return
+    await copyTextPayload(menu.text, 'selection')
+    closeSelectionMenu()
+  }
+
+  function scheduleSelectionMenuUpdate() {
+    if (typeof window === 'undefined') return
+    setTimeout(() => {
+      const root = container()
+      if (!root) return
+      let sel: Selection | null = null
+      try {
+        sel = window.getSelection()
+      } catch {}
+      if (!sel || sel.isCollapsed) return
+      const anchorNode = sel.anchorNode
+      const focusNode = sel.focusNode
+      if (!anchorNode || !focusNode) return
+      if (!root.contains(anchorNode) || !root.contains(focusNode)) return
+      const text = sel.toString().trim()
+      if (!text) return
+      setSelectionMenu({ text })
+    }, 0)
+  }
+
+  createEffect(() => {
+    const el = container()
+    if (!el) return
+    const handlePointerUp = () => scheduleSelectionMenuUpdate()
+    const handleKeyUp = () => scheduleSelectionMenuUpdate()
+    el.addEventListener('pointerup', handlePointerUp)
+    el.addEventListener('keyup', handleKeyUp)
+    onCleanup(() => {
+      el.removeEventListener('pointerup', handlePointerUp)
+      el.removeEventListener('keyup', handleKeyUp)
+    })
+  })
+
+  createEffect(() => {
+    if (typeof window === 'undefined') return
+    const handleSelectionChange = () => {
+      try {
+        const sel = window.getSelection()
+        if (!sel || sel.isCollapsed) setSelectionMenu(null)
+      } catch {}
+    }
+    document.addEventListener('selectionchange', handleSelectionChange)
+    onCleanup(() => document.removeEventListener('selectionchange', handleSelectionChange))
+  })
+
+  createEffect(() => {
+    if (typeof window === 'undefined') return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeSelectionMenu()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    onCleanup(() => document.removeEventListener('keydown', handleKeyDown))
+  })
 
   function renderMessageParts(message: CodingAgentMessage) {
     const parts: any[] = (message as any).parts ?? []
@@ -192,7 +356,8 @@ export default function MessageScroller(props: MessageScrollerProps) {
       return message.text.split('\n').map((line) => <p class="mb-1 last:mb-0 break-words">{line}</p>)
     }
     const elements: JSX.Element[] = []
-    for (const part of parts) {
+    for (let index = 0; index < parts.length; index++) {
+      const part = parts[index]
       if (!part) continue
 
       if (part.type === 'text' || part.type === 'step-finish') {
@@ -346,8 +511,16 @@ export default function MessageScroller(props: MessageScrollerProps) {
 
         const diffText = extractDiffText(part)
         const summaryText = toolName || (text ?? 'Tool')
+        const partKey = String(part.id ?? `${message.id}-${index}`)
+        const toolCopyPayload = toolPartClipboardText(message, part)
+
         elements.push(
-          <DetailsWithToggle summaryText={summaryText} duration={durationLabel} title={title}>
+          <DetailsWithToggle
+            summaryText={summaryText}
+            duration={durationLabel}
+            title={title}
+            copyHint={toolCopyPayload ? { payload: toolCopyPayload, key: `tool:${message.id}:${partKey}` } : undefined}
+          >
             {/* Try to render todos or file/diagnostic tags first */}
             {nameIndicatesTodo
               ? (() => {
@@ -439,11 +612,52 @@ export default function MessageScroller(props: MessageScrollerProps) {
               <span>{new Date(group.timestamp).toLocaleString()}</span>
             </header>
             <div class="whitespace-pre-wrap text-[var(--text)] break-words text-sm">
-              <For each={group.messages}>{(message) => <div class="mb-3">{renderMessageParts(message)}</div>}</For>
+              <For each={group.messages}>
+                {(message) => (
+                  <div class="relative mb-3 rounded-xl border border-transparent p-3 transition hover:border-[var(--border)] last:mb-0">
+                    <div>{renderMessageParts(message)}</div>
+                  </div>
+                )}
+              </For>
             </div>
           </article>
         )}
       </For>
+      <Show when={selectionMenu()} keyed>
+        {(menu) => (
+          <div
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={closeSelectionMenu}
+          >
+            <div
+              class="w-full max-w-sm rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-5 shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div class="mb-2 text-base font-semibold text-[var(--text)]">Text selection</div>
+              <p class="mb-3 text-xs text-[var(--text-muted)]">Hold-select to open actions</p>
+              <div class="mb-5 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-3 text-sm text-[var(--text)]">
+                {menu.text}
+              </div>
+              <div class="flex justify-end gap-2">
+                <button
+                  type="button"
+                  class="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-semibold text-[var(--text)]"
+                  onClick={closeSelectionMenu}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={() => void handleSelectionCopy()}
+                >
+                  {copiedTargetKey() === 'selection' ? 'Copied' : 'Copy selection'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </Show>
     </div>
   )
 }
