@@ -28,14 +28,12 @@ const AppShell = (props: RouteSectionProps) => {
     toggle: () => setNavigatorOpen((value) => !value)
   }
   return (
-    <WorkspaceSelectionProvider>
-      <CanvasNavigatorContext.Provider value={navigatorController}>
-        <main class="relative flex min-h-screen w-full flex-col bg-[var(--bg-app)]">
-          <section class="relative flex-1 overflow-auto">{props.children}</section>
-          <CanvasChrome />
-        </main>
-      </CanvasNavigatorContext.Provider>
-    </WorkspaceSelectionProvider>
+    <CanvasNavigatorContext.Provider value={navigatorController}>
+      <main class="relative flex min-h-screen w-full flex-col bg-[var(--bg-app)]">
+        <section class="relative flex-1 overflow-auto">{props.children}</section>
+        <CanvasChrome />
+      </main>
+    </CanvasNavigatorContext.Provider>
   )
 }
 
@@ -83,14 +81,24 @@ export default function App() {
 
   return (
     <Show when={isReady()} fallback={<RadicleGate status={radicleStatus()} onRetry={() => refetchRadicleStatus()} />}>
-      <Router root={AppShell}>
+      <Router
+        root={(routeProps) => (
+          <WorkspaceSelectionProvider>
+            <AppShell {...routeProps} />
+            <Show when={singleState()}>
+              {(s) => (
+                <SingleWidgetView
+                  storageKey={s().storageKey}
+                  widgets={s().widgets}
+                  onRemoveWidget={s().onRemoveWidget}
+                />
+              )}
+            </Show>
+          </WorkspaceSelectionProvider>
+        )}
+      >
         <Route path="/" component={WorkspacePage} />
       </Router>
-      <Show when={singleState()}>
-        {(s) => (
-          <SingleWidgetView storageKey={s().storageKey} widgets={s().widgets} onRemoveWidget={s().onRemoveWidget} />
-        )}
-      </Show>
     </Show>
   )
 }

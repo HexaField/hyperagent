@@ -1,6 +1,6 @@
-import { For, Show, createSignal, onCleanup, onMount } from 'solid-js'
+import { Show, createSignal, onCleanup, onMount } from 'solid-js'
 import ThemeToggle from '../../components/ThemeToggle'
-import { WIDGET_TEMPLATES } from '../../constants/widgetTemplates'
+import HeaderWidgetMenu from './HeaderWidgetMenu'
 
 export type SingleWidgetHeaderProps = {
   title?: () => string
@@ -70,20 +70,10 @@ export default function SingleWidgetHeader(
                       onClick={() => setWidgetMenuOpen(false)}
                     />
                     <div class="fixed left-0 right-0 top-12 z-50 max-w-none border-t border-b border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-lg">
-                      <For each={WIDGET_TEMPLATES}>
-                        {(template) => (
-                          <button
-                            type="button"
-                            class="w-full text-left rounded-md px-3 py-2 text-sm hover:bg-[var(--bg-muted)]"
-                            onClick={() => {
-                              openSingleWidgetByTemplate(template.id)
-                              setWidgetMenuOpen(false)
-                            }}
-                          >
-                            {template.label}
-                          </button>
-                        )}
-                      </For>
+                      <HeaderWidgetMenu
+                        onClose={() => setWidgetMenuOpen(false)}
+                        onSelectWidget={(templateId) => openSingleWidgetByTemplate(templateId)}
+                      />
                     </div>
                   </>
                 </Show>
