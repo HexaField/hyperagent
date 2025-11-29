@@ -4,6 +4,8 @@ import { runProviderInvocation, runProviderInvocationStream } from './providerRu
 describe('runProviderInvocation', () => {
   it('executes CLI invocation via opencodeCommandRunner and returns stdout', async () => {
     const mockRunner = vi.fn(async (args: string[], options?: any) => {
+      void args
+      void options
       return { stdout: 'ok', stderr: '' }
     })
     const res = await runProviderInvocation(
@@ -16,12 +18,16 @@ describe('runProviderInvocation', () => {
 
   it('performs HTTP payload invocation using fetch', async () => {
     const originalFetch = globalThis.fetch
-    globalThis.fetch = vi.fn(async (url: any, opts: any) => ({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      text: async () => 'resp'
-    })) as any
+    globalThis.fetch = vi.fn(async (url: any, opts: any) => {
+      void url
+      void opts
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => 'resp'
+      }
+    }) as any
     try {
       const res = await runProviderInvocation(
         { payload: { url: 'http://example.local/test', method: 'POST', body: { a: 1 } } },

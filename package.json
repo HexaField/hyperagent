@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "format": "prettier --write .",
-    "lint": "eslint . --ext .ts",
+    "lint": "eslint . --ext .ts,.tsx",
     "check-errors": "tsc --noEmit",
     "test": "vitest run",
     "test:integration": "vitest run tests/integration",
@@ -58,6 +58,8 @@
     "@types/pacote": "^11.1.8",
     "@types/supertest": "^6.0.3",
     "@types/ws": "^8.18.1",
+    "@typescript-eslint/eslint-plugin": "^8.48.0",
+    "@typescript-eslint/parser": "^8.48.0",
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.2",
     "cross-fetch": "^3.1.8",

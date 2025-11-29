@@ -225,7 +225,7 @@ function extractOrCreateJSON(fullMessage: string): any {
   // Try to parse directly
   try {
     return JSON.parse(fullMessage)
-  } catch (e) {
+  } catch {
     // Try to extract JSON objects from the text and pick one that looks like structured output.
     const allMatches = Array.from(fullMessage.matchAll(/(\{[\s\S]*?\})/g)).map((r) => r[1])
     for (const jsonText of allMatches) {
@@ -250,7 +250,7 @@ function extractOrCreateJSON(fullMessage: string): any {
                 ) {
                   return innerParsed
                 }
-              } catch (e) {
+              } catch {
                 // not JSON, continue
               }
             }
@@ -259,7 +259,7 @@ function extractOrCreateJSON(fullMessage: string): any {
           // Otherwise, accept any non-empty object as a fallback.
           if (Object.keys(parsed).length > 0) return parsed
         }
-      } catch (e2) {
+      } catch {
         // ignore
       }
     }
@@ -358,7 +358,7 @@ async function callOpencodeCLI(
       const preferredLocal = lines.find((l) => /^opencode\//i.test(l))
       const preferredProvider = lines.find((l) => /github-?copilot|gpt|o3|claude|gemini/i.test(l))
       modelToUse = (preferredLocal as string) || (preferredProvider as string) || lines[0] || model
-    } catch (e) {
+    } catch {
       // if listing models fails, fall back to the given model
       modelToUse = model
     }
@@ -391,7 +391,8 @@ async function callOpencodeCLI(
       text: combined,
       workspacePath: sessionDir
     })
-    const opencodeRunnerWrapper = async (args: string[], options?: any) => {
+    const opencodeRunnerWrapper = async (args: string[], _options?: any) => {
+      void _options
       const out = await runCLI('opencode', args, '', sessionDir, {
         onStdout: (chunk) => {
           emitted = true
@@ -412,7 +413,7 @@ async function callOpencodeCLI(
           accumulated += chunk
           if (chunk) onChunk?.(chunk)
         }
-      } catch (e) {
+      } catch {
         // If streaming fails, fall back to non-streaming invocation
         const result = await runProviderInvocation(invocation, {
           cwd: sessionDir,
@@ -452,7 +453,7 @@ async function callOpencodeCLI(
       if (maybe && typeof maybe === 'object') {
         text = JSON.stringify(maybe)
       }
-    } catch (e) {
+    } catch {
       // ignore, keep empty text
     }
   }
@@ -501,11 +502,11 @@ async function opencodeSessionExists(sessionName: string, sessionDir?: string): 
         ) {
           return true
         }
-      } catch (err) {
+      } catch {
         // Not JSON; fall back to string search
       }
       if (raw.includes(sessionName)) return true
-    } catch (err) {
+    } catch {
       // Ignore probe failures, try next strategy
     }
   }
@@ -667,7 +668,8 @@ export async function callLLM(
           text: combined,
           workspacePath: sessionDir
         })
-        const runnerWrapper = async (args: string[], options?: any) => {
+        const runnerWrapper = async (args: string[], _options?: any) => {
+          void _options
           // default wrapper uses runCLI to execute a command and return stdout
           const out = await runCLI('opencode', args, '', sessionDir, {
             onStdout: (chunk) => {
@@ -687,7 +689,7 @@ export async function callLLM(
               acc += chunk
               if (chunk) emitChunk(chunk)
             }
-          } catch (e) {
+          } catch {
             const invocationResult = await runProviderInvocation(invocation, {
               cwd: sessionDir,
               opencodeCommandRunner: runnerWrapper

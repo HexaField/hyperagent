@@ -944,19 +944,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     session.proxy(req, res, next)
   }
 
-  const getProjectOr404 = (projectId: string | undefined, res: Response) => {
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId is required' })
-      return null
-    }
-    const project = persistence.projects.getById(projectId)
-    if (!project) {
-      res.status(404).json({ error: 'Unknown project' })
-      return null
-    }
-    return project
-  }
-
   const listProjectPullRequestsHandler: RequestHandler = (req, res) => {
     const projectId = req.params.projectId
     if (!projectId) {

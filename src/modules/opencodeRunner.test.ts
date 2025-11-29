@@ -36,7 +36,12 @@ describe('createOpencodeRunner', () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'opencode-runner-ws-'))
     const metadataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opencode-runner-meta-'))
     const child = new FakeChild()
-    const spawnMock = vi.fn((..._args: any[]) => child as unknown as ChildProcessWithoutNullStreams).mockName('spawn')
+    const spawnMock = vi
+      .fn((..._args: any[]) => {
+        void _args
+        return child as unknown as ChildProcessWithoutNullStreams
+      })
+      .mockName('spawn')
     const spawnFn = spawnMock as unknown as typeof realSpawn
 
     const runner = createOpencodeRunner({ metadataDir, logsDir: path.join(metadataDir, 'logs'), spawnFn })
@@ -65,7 +70,12 @@ describe('createOpencodeRunner', () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'opencode-runner-ws-'))
     const metadataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opencode-runner-meta-'))
     const child = new FakeChild()
-    const spawnMock = vi.fn((..._args: any[]) => child as unknown as ChildProcessWithoutNullStreams).mockName('spawn')
+    const spawnMock = vi
+      .fn((..._args: any[]) => {
+        void _args
+        return child as unknown as ChildProcessWithoutNullStreams
+      })
+      .mockName('spawn')
     const spawnFn = spawnMock as unknown as typeof realSpawn
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => undefined as any)
 

@@ -7,6 +7,7 @@ import { CanvasNavigatorContext, type CanvasNavigatorController } from '../../co
 import WorkspacePage from '../WorkspacePage'
 
 const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  void init
   const url = typeof input === 'string' ? input : input.toString()
   const jsonResponse = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {

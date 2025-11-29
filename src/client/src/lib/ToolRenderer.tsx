@@ -20,20 +20,8 @@ function renderJson(s: string) {
   }
 }
 
-function ToolLabel(props: { toolName: string; title?: string }): JSX.Element {
-  const title = props.title ?? ''
-  const toolName: string = props.toolName
-  return (
-    <div>
-      <div class="font-medium mb-1">{toolName || 'Tool'}</div>
-      {title ? <div class="mb-1">{title}</div> : null}
-    </div>
-  )
-}
-
 export default function ToolRenderer(props: { part: any }): JSX.Element {
   const part = props.part
-  const title = part.title ?? part.state?.title ?? ''
   const toolName: string = (part.tool ?? part.toolName ?? part.name ?? '').toString()
   const text: string | null = typeof part.text === 'string' ? part.text : null
   const output: string | null =

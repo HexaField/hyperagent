@@ -768,12 +768,10 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       (isMobileVariant
         ? 'flex h-full min-h-0 flex-col'
         : 'flex flex-col gap-4 rounded-2xl border border-[var(--border)] p-5')
-    const hasMessages = () => messages().length > 0
     const transcriptContainerClass = isMobileVariant ? 'relative flex h-full min-h-0 flex-col' : 'relative'
     const transcriptScrollerClass = isMobileVariant
       ? 'flex-1 min-h-0 space-y-3 overflow-y-auto'
       : 'max-h-[520px] space-y-3 overflow-y-auto pr-1'
-    const articleClass = 'rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-4 text-sm'
 
     const scrollToBottomButton = (positionClass: string) => (
       <button

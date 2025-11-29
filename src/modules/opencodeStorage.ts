@@ -280,6 +280,7 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
 
   function stripMetaPath(meta: SessionMeta): OpencodeSessionSummary {
     const { metaPath: _metaPath, ...rest } = meta
+    void _metaPath
     return rest
   }
 

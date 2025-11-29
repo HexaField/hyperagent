@@ -18,14 +18,6 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
   const [settingsOpen, setSettingsOpen] = createSignal(false)
   const storageKey = () => `single-view:${props.storageKey || 'default'}`
 
-  const sharedSingleWidgetStyles = `
-    .single-widget-root, .single-widget-root > * { box-sizing: border-box !important; max-width: 100% !important; overflow-wrap: anywhere !important; word-break: break-word !important; }
-    .single-widget-root img, .single-widget-root iframe, .single-widget-root code, .single-widget-root pre { max-width: 100% !important; height: auto !important; }
-    .single-widget-root pre { white-space: pre-wrap !important; }
-    /* Ensure flex children can shrink to avoid overflow */
-    .single-widget-root .flex, .single-widget-root .flex-1, .single-widget-root [class*="min-w-"] { min-width: 0 !important; }
-  `
-
   const selectedWidget = createMemo(() => {
     const list = widgetList()
     if (!list.length) return null

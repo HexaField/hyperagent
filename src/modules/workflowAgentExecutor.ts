@@ -122,6 +122,7 @@ async function ensureOpencodeConfig(sessionDir: string): Promise<void> {
  * config creation for backward compatibility.
  */
 export async function ensureProviderConfig(sessionDir: string, providerId?: string): Promise<void> {
+  void providerId
   // For now we only support the opencode provider's config file.
   await ensureOpencodeConfig(sessionDir)
 }

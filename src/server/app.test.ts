@@ -311,7 +311,9 @@ async function createIntegrationHarness(options?: {
       static OPEN = 1
       static CLOSED = 3
       readyState = FakeWebSocket.OPEN
-      send(_data?: unknown) {}
+      send(_data?: unknown) {
+        void _data
+      }
       close(): void {
         if (this.readyState === FakeWebSocket.CLOSED) return
         this.readyState = FakeWebSocket.CLOSED
