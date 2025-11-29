@@ -14,10 +14,8 @@ export default defineConfig({
     ],
     setupFiles: ['./vitest.setup.ts']
   },
-  server: {
-    deps: {
-      external: ['ws']
-    }
+  optimizeDeps: {
+    exclude: ['ws']
   },
   ssr: {
     external: ['ws']

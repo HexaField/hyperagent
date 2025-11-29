@@ -4,7 +4,7 @@ import path from 'path'
 import { defineConfig } from 'vite'
 import solid from 'vite-plugin-solid'
 
-dotenv.config({ path: path.resolve(__dirname, '../.env') })
+dotenv.config({ path: path.resolve(__dirname, '../../.env') })
 
 const DEV_PORT = Number(process.env.VITE_DEV_PORT || 5555)
 const API_TARGET = process.env.VITE_API_TARGET || 'https://localhost:5556'
@@ -12,9 +12,9 @@ const HOST = process.env.VITE_DEV_HOST || undefined
 const defaultCertPath =
   process.env.VITE_TLS_CERT_PATH ||
   process.env.UI_TLS_CERT_PATH ||
-  path.resolve(__dirname, '../certs/hyperagent.cert.pem')
+  path.resolve(__dirname, '../../certs/hyperagent.cert.pem')
 const defaultKeyPath =
-  process.env.VITE_TLS_KEY_PATH || process.env.UI_TLS_KEY_PATH || path.resolve(__dirname, '../certs/hyperagent.key.pem')
+  process.env.VITE_TLS_KEY_PATH || process.env.UI_TLS_KEY_PATH || path.resolve(__dirname, '../../certs/hyperagent.key.pem')
 
 const readTlsAsset = (filePath: string, label: 'certificate' | 'key') => {
   try {
