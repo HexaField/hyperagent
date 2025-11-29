@@ -408,8 +408,8 @@ async function createIntegrationHarness(options?: {
     controllerFactory,
     fakeCodeServer,
     close: async () => {
-      await new Promise<void>((resolve) => httpsServer.close(() => resolve()))
       await appServer.shutdown()
+      await new Promise<void>((resolve) => httpsServer.close(() => resolve()))
       await radicleModule.cleanup()
       await terminalModule.cleanup()
       await fakeCodeServer.close()

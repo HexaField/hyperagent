@@ -25,6 +25,15 @@ import {
 import { attachJsonStackMiddleware } from './middleware/jsonErrorStack'
 import { resolveTlsMaterials, type TlsConfig } from './tls'
 import { loadWebSocketModule, type WebSocketBindings } from './ws'
+import {
+  createCodeServerService,
+  createReviewSchedulerService,
+  createTerminalService,
+  createWorkflowRuntimeService,
+  startManagedServices,
+  stopManagedServices,
+  type ManagedService
+} from './services'
 import { runVerifierWorkerLoop, type AgentStreamEvent } from '../../../src/modules/agent'
 import {
   createCodeServerController,
@@ -320,9 +329,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       agentExecutor: workflowAgentExecutor,
       runnerGateway: workflowRunnerGateway
     })
-  if (manageWorkerLifecycle) {
-    workflowRuntime.startWorker()
-  }
   const reviewCallbackBaseUrl = process.env.REVIEW_CALLBACK_BASE_URL ?? `https://host.docker.internal:${defaultPort}`
   const reviewRunnerToken = process.env.REVIEW_RUNNER_TOKEN ?? process.env.REVIEW_CALLBACK_TOKEN ?? null
   const reviewRunnerGateway = createDockerReviewRunnerGateway({
@@ -353,7 +359,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     runnerGateway: reviewRunnerGateway,
     pollIntervalMs: options.reviewPollIntervalMs
   })
-  reviewScheduler.startWorker()
   persistence.codeServerSessions.resetAllRunning()
 
   const app = express()
@@ -1367,6 +1372,15 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     resolveUserIdFromHeaders
   })
 
+  const managedServices: ManagedService[] = [
+    createWorkflowRuntimeService({ runtime: workflowRuntime, manageLifecycle: manageWorkerLifecycle }),
+    createReviewSchedulerService(reviewScheduler),
+    createTerminalService(workspaceTerminalModule),
+    createCodeServerService({ shutdownAllCodeServers })
+  ]
+
+  await startManagedServices(managedServices)
+
   installProcessErrorHandlers()
 
   app.get(
@@ -1444,12 +1458,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   }
 
   const shutdownApp = async () => {
-    await shutdownAllCodeServers()
-    await workspaceTerminalModule.shutdown()
-    if (manageWorkerLifecycle) {
-      await workflowRuntime.stopWorker()
-    }
-    await reviewScheduler.stopWorker()
+    await stopManagedServices(managedServices)
     if (managePersistenceLifecycle) {
       persistence.db.close()
     }
