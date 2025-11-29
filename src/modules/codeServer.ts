@@ -176,7 +176,7 @@ export const codeServerSessionsPersistence: PersistenceModule<CodeServerSessions
     db.exec(`
       CREATE TABLE IF NOT EXISTS code_server_sessions (
         id TEXT PRIMARY KEY,
-          project_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
         branch TEXT NOT NULL,
         workspace_path TEXT NOT NULL,
         url TEXT NOT NULL,

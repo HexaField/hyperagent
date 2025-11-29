@@ -127,14 +127,6 @@ export async function ensureProviderConfig(sessionDir: string, providerId?: stri
 }
 
 async function detectLogsPath(sessionDir: string): Promise<string | undefined> {
-  const legacy = path.join(sessionDir, '.hyperagent.json')
-  try {
-    await fs.access(legacy)
-    return legacy
-  } catch {
-    // fall through to directory scan
-  }
-
   const dir = path.join(sessionDir, '.hyperagent')
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true })

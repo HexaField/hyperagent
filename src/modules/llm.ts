@@ -59,7 +59,6 @@ const ollamaSessions = new Map<string, ChatMessage[]>()
 const cliLastResponses = new Map<string, string>()
 
 // Persistent session storage now lives inside a caller-provided directory (e.g. a sourceDir).
-// We support legacy global path for backward compatibility if no directory supplied.
 const META_FOLDER = '.hyperagent'
 
 function sanitizeSessionId(sessionId: string): string {
@@ -83,10 +82,6 @@ function metaFile(sessionId: string, baseDir?: string) {
   return path.join(dir, `${sanitizeSessionId(sessionId)}.json`)
 }
 
-function legacyMetaFile(sessionId: string, baseDir?: string) {
-  const root = resolveSessionRoot(sessionId, baseDir)
-  return path.join(root, '.hyperagent.json')
-}
 type LogEntry = {
   entryId: string
   provider: Provider | 'agent'
@@ -111,19 +106,6 @@ function loadSessionMeta(sessionId: string, baseDir?: string): SessionMeta {
       return parsed
     } catch (e) {
       console.log('Failed to parse session meta json; recreating', e)
-    }
-  } else {
-    const legacy = legacyMetaFile(sessionId, baseDir)
-    if (fs.existsSync(legacy)) {
-      try {
-        const raw = fs.readFileSync(legacy, 'utf-8')
-        const parsed = JSON.parse(raw)
-        parsed.log = Array.isArray(parsed.log) ? parsed.log : []
-        saveSessionMeta(parsed, baseDir)
-        return parsed
-      } catch (e) {
-        console.log('Failed to parse legacy session meta json; recreating', e)
-      }
     }
   }
   const blank: SessionMeta = {

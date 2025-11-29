@@ -237,7 +237,6 @@ export default function WorkspacePage() {
 }
 
 const widgetInstanceStorageKey = (workspaceId: string) => `workspace:${workspaceId}:widgets`
-const legacyExtraWidgetStorageKey = (workspaceId: string) => `workspace:${workspaceId}:extra-widgets`
 
 function offsetPosition(base: { x: number; y: number }, offsetIndex: number) {
   const step = 40
@@ -274,24 +273,6 @@ function parseWidgetInstanceList(value: unknown): WidgetInstance[] {
     .filter((entry): entry is WidgetInstance => Boolean(entry))
 }
 
-function loadLegacyExtraWidgets(workspaceId: string): WidgetInstance[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(legacyExtraWidgetStorageKey(workspaceId))
-    if (!raw) return []
-    const parsed = parseWidgetInstanceList(JSON.parse(raw))
-    return parsed
-  } catch {
-    return []
-  } finally {
-    try {
-      window.localStorage.removeItem(legacyExtraWidgetStorageKey(workspaceId))
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
 function loadWorkspaceWidgetInstances(workspaceId: string): WidgetInstance[] {
   if (typeof window === 'undefined') return createDefaultWidgetInstances()
   try {
@@ -299,12 +280,6 @@ function loadWorkspaceWidgetInstances(workspaceId: string): WidgetInstance[] {
     if (raw) {
       const parsed = parseWidgetInstanceList(JSON.parse(raw))
       if (parsed.length) return parsed
-    }
-    const legacyExtras = loadLegacyExtraWidgets(workspaceId)
-    if (legacyExtras.length) {
-      const combined = [...createDefaultWidgetInstances(), ...legacyExtras]
-      window.localStorage.setItem(widgetInstanceStorageKey(workspaceId), JSON.stringify(combined))
-      return combined
     }
   } catch {
     // ignore and fall back below

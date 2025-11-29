@@ -417,7 +417,6 @@ export const radicleRegistrationsPersistence: PersistenceModule<RadicleRegistrat
 }
 
 function createRadicleRegistrationsRepository(db: PersistenceContext['db']): RadicleRegistrationsRepository {
-  normalizeExistingRadicleRegistrations(db)
   return {
     upsert: (input) => {
       const now = new Date().toISOString()
@@ -479,34 +478,4 @@ function resolveRealpath(target: string): string | null {
   } catch {
     return null
   }
-}
-
-function normalizeExistingRadicleRegistrations(db: PersistenceContext['db']): void {
-  let rows: any[] = []
-  try {
-    rows = db.prepare('SELECT * FROM radicle_registrations ORDER BY registered_at DESC').all()
-  } catch {
-    return
-  }
-  if (!rows.length) return
-  const latestByPath = new Map<string, any>()
-  rows.forEach((row) => {
-    const canonicalPath = canonicalizeRepositoryPath(row.repository_path)
-    if (latestByPath.has(canonicalPath)) return
-    latestByPath.set(canonicalPath, {
-      ...row,
-      repository_path: canonicalPath
-    })
-  })
-  const insertStatement = db.prepare(`
-    INSERT INTO radicle_registrations (repository_path, name, description, visibility, default_branch, registered_at)
-    VALUES (@repository_path, @name, @description, @visibility, @default_branch, @registered_at)
-  `)
-  const reset = db.transaction(() => {
-    db.prepare('DELETE FROM radicle_registrations').run()
-    latestByPath.forEach((row) => {
-      insertStatement.run(row)
-    })
-  })
-  reset()
 }

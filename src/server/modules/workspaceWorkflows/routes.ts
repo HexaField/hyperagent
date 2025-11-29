@@ -271,9 +271,7 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
         '--unified=200',
         '--',
         '.',
-        ':(exclude).hyperagent.json',
         ':(exclude).hyperagent/**',
-        ':(exclude)**/.hyperagent.json',
         ':(exclude)**/.hyperagent/**'
       ]
       const diffText = await runGitCommand(diffArgs, project.repositoryPath)
