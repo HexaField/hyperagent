@@ -1,17 +1,9 @@
 import { useSearchParams } from '@solidjs/router'
 import { Accessor, Component, JSX, createContext, createEffect, createMemo, createResource, useContext } from 'solid-js'
+import type { ProjectListResponse, WorkspaceRecord } from '../../../../interfaces/core/projects'
 import { fetchJson } from '../../shared/api/httpClient'
-import type { GitInfo } from '../../types/git'
 
-export type WorkspaceRecord = {
-  id: string
-  name: string
-  description?: string | null
-  repositoryPath: string
-  defaultBranch: string
-  createdAt: string
-  git?: GitInfo | null
-}
+export type { WorkspaceRecord }
 
 type WorkspaceSelectionValue = {
   workspaces: Accessor<WorkspaceRecord[] | undefined>
@@ -25,7 +17,7 @@ type WorkspaceSelectionValue = {
 const WorkspaceSelectionContext = createContext<WorkspaceSelectionValue>()
 
 async function fetchWorkspaces() {
-  const payload = await fetchJson<{ projects: WorkspaceRecord[] }>('/api/projects')
+  const payload = await fetchJson<ProjectListResponse>('/api/projects')
   return payload.projects
 }
 

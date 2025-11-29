@@ -1,15 +1,7 @@
+import type { TerminalSessionListResponse, TerminalSessionRecord, TerminalSessionResponse } from '../../../../interfaces/core/terminal'
 import { fetchJson } from './httpClient'
 
-export type TerminalSession = {
-  id: string
-  userId: string
-  projectId: string | null
-  shellCommand: string
-  initialCwd: string | null
-  status: 'active' | 'closed' | 'error'
-  createdAt: string
-  closedAt: string | null
-}
+export type TerminalSession = TerminalSessionRecord
 
 export type CreateTerminalSessionInput = {
   cwd?: string
@@ -19,12 +11,12 @@ export type CreateTerminalSessionInput = {
 
 export async function listTerminalSessions(projectId?: string | null): Promise<TerminalSession[]> {
   const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
-  const payload = await fetchJson<{ sessions: TerminalSession[] }>(`/api/terminal/sessions${query}`)
+  const payload = await fetchJson<TerminalSessionListResponse>(`/api/terminal/sessions${query}`)
   return payload.sessions
 }
 
 export async function createTerminalSession(input: CreateTerminalSessionInput = {}): Promise<TerminalSession> {
-  const payload = await fetchJson<{ session: TerminalSession }>('/api/terminal/sessions', {
+  const payload = await fetchJson<TerminalSessionResponse>('/api/terminal/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input)

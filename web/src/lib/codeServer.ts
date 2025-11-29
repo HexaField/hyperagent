@@ -1,19 +1,9 @@
+import type { CodeServerSessionListResponse, CodeServerSessionRecord } from '../../../interfaces/core/codeServer'
 import { fetchJson } from '../shared/api/httpClient'
 
-export type CodeServerSession = {
-  id: string
-  projectId: string
-  branch: string
-  workspacePath: string
-  url: string
-  authToken: string
-  processId: number | null
-  status: 'running' | 'stopped'
-  startedAt: string
-  stoppedAt: string | null
-}
+export type { CodeServerSessionRecord as CodeServerSession } from '../../../interfaces/core/codeServer'
 
-export async function listCodeServerSessions(): Promise<CodeServerSession[]> {
-  const payload = await fetchJson<{ sessions: CodeServerSession[] }>('/api/code-server/sessions')
+export async function listCodeServerSessions(): Promise<CodeServerSessionRecord[]> {
+  const payload = await fetchJson<CodeServerSessionListResponse>('/api/code-server/sessions')
   return payload.sessions
 }

@@ -1,4 +1,13 @@
 import { Router, type RequestHandler } from 'express'
+import type {
+  CodingAgentProvider,
+  CodingAgentProviderListResponse,
+  CodingAgentRunListResponse,
+  CodingAgentRunRecord,
+  CodingAgentSessionDetail,
+  CodingAgentSessionListResponse,
+  CodingAgentSessionSummary
+} from '../../../../interfaces/core/codingAgent'
 import type { CodingAgentCommandRunner } from '../../../../src/modules/opencodeCommandRunner'
 import type { CodingAgentRunner, CodingAgentStorage } from '../../../../src/modules/provider'
 import { runProviderInvocation } from '../../../../src/modules/providerRunner'
@@ -18,18 +27,6 @@ export type WorkspaceSessionsDeps = {
   codingAgentStorage: CodingAgentStorage
   codingAgentCommandRunner: CodingAgentCommandRunner
   ensureWorkspaceDirectory: (dirPath: string) => Promise<void>
-}
-
-type CodingAgentProviderModelDescription = {
-  id: string
-  label: string
-}
-
-type CodingAgentProviderDescription = {
-  id: string
-  label: string
-  defaultModelId: string
-  models: CodingAgentProviderModelDescription[]
 }
 
 export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
@@ -117,7 +114,7 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
     }
   }
 
-  const describeDefaultCodingAgentProvider = async (): Promise<CodingAgentProviderDescription> => {
+  const describeDefaultCodingAgentProvider = async (): Promise<CodingAgentProvider> => {
     const modelIds = await listCodingAgentModelIds()
     const defaultModelId = modelIds[0] ?? DEFAULT_CODING_AGENT_MODEL
     return {
@@ -128,9 +125,9 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
     }
   }
 
-  const listCodingAgentProviders = async (): Promise<CodingAgentProviderDescription[]> => {
+  const listCodingAgentProviders = async (): Promise<CodingAgentProvider[]> => {
     const adapters = listProviders()
-    const descriptions: CodingAgentProviderDescription[] = []
+    const descriptions: CodingAgentProvider[] = []
     for (const adapter of adapters) {
       if (adapter.id === CODING_AGENT_PROVIDER_ID) {
         descriptions.push(await describeDefaultCodingAgentProvider())
@@ -144,7 +141,8 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
   const listCodingAgentProvidersHandler: RequestHandler = async (_req, res) => {
     try {
       const providers = await listCodingAgentProviders()
-      res.json({ providers })
+      const response: CodingAgentProviderListResponse = { providers }
+      res.json(response)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to list coding agent providers'
       res.status(500).json({ error: message })
@@ -159,16 +157,16 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
         codingAgentStorage.listSessions({ workspacePath }),
         codingAgentRunner.listRuns()
       ])
-      type SessionSummary = (typeof sessionList)[number]
       type RunnerRun = (typeof runList)[number]
       const runIndex = new Map<string, RunnerRun>(runList.map((run) => [run.sessionId, run]))
-      const payload = sessionList.map((session: SessionSummary) => {
+      const payload: CodingAgentSessionSummary[] = sessionList.map((session) => {
         const run = runIndex.get(session.id)
         const providerId = run?.providerId ?? session.providerId ?? null
         const modelId = run?.model ?? session.modelId ?? null
         return { ...session, providerId, modelId }
       })
-      res.json({ sessions: payload })
+      const response: CodingAgentSessionListResponse = { sessions: payload }
+      res.json(response)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to list coding agent sessions'
       res.status(500).json({ error: message })
@@ -182,7 +180,7 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       return
     }
     try {
-      const detail = await codingAgentStorage.getSession(sessionId)
+      const detail = (await codingAgentStorage.getSession(sessionId)) as CodingAgentSessionDetail | null
       if (!detail) {
         res.status(404).json({ error: 'Unknown session' })
         return
@@ -207,11 +205,12 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
   const listCodingAgentRunsHandler: RequestHandler = async (_req, res) => {
     try {
       const runs = await codingAgentRunner.listRuns()
-      const payload = runs.map((run) => ({
+      const payload: CodingAgentRunRecord[] = runs.map((run) => ({
         ...run,
         providerId: run.providerId ?? CODING_AGENT_PROVIDER_ID
       }))
-      res.json({ runs: payload })
+      const response: CodingAgentRunListResponse = { runs: payload }
+      res.json(response)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to list coding agent runs'
       res.status(500).json({ error: message })
@@ -296,7 +295,7 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       return
     }
     try {
-      const existing = await codingAgentStorage.getSession(sessionId)
+      const existing = (await codingAgentStorage.getSession(sessionId)) as CodingAgentSessionDetail | null
       if (!existing) {
         res.status(404).json({ error: 'Unknown session' })
         return
@@ -360,7 +359,7 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
         res.status(500).json({ error: message })
         return
       }
-      const updated = await codingAgentStorage.getSession(sessionId)
+      const updated = (await codingAgentStorage.getSession(sessionId)) as CodingAgentSessionDetail | null
       const detail = updated ?? existing
       res.status(201).json({
         ...detail,

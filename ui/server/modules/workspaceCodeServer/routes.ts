@@ -1,4 +1,6 @@
 import { Router, type RequestHandler } from 'express'
+import type { CodeServerSessionListResponse } from '../../../../interfaces/core/codeServer'
+import type { DevspaceSession } from '../../../../interfaces/widgets/workspaceCodeServer'
 import type { Persistence, ProjectRecord } from '../../../../src/modules/database'
 
 type WrapAsync = (handler: RequestHandler) => RequestHandler
@@ -50,17 +52,21 @@ export const createWorkspaceCodeServerRouter = (deps: WorkspaceCodeServerDeps) =
       res.status(500).json({ error: 'Failed to launch code-server for project' })
       return
     }
-    res.json({
+    const response: DevspaceSession = {
       projectId: project.id,
       sessionId: session.id,
       codeServerUrl: session.publicUrl,
       workspacePath: session.dir,
       branch: session.branch
-    })
+    }
+    res.json(response)
   }
 
   const listCodeSessionsHandler: RequestHandler = (_req, res) => {
-    res.json({ sessions: persistence.codeServerSessions.listActive() })
+    const response: CodeServerSessionListResponse = {
+      sessions: persistence.codeServerSessions.listActive()
+    }
+    res.json(response)
   }
 
   router.post('/api/projects/:projectId/devspace', wrapAsync(projectDevspaceHandler))

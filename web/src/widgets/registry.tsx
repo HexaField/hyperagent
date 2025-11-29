@@ -1,7 +1,7 @@
 import { lazy, type JSX } from 'solid-js'
 import type { WidgetTemplateId } from '../constants/widgetTemplates'
 import type { CanvasNavigatorController } from '../core/state/CanvasNavigatorContext'
-import type { WorkspaceRecord } from '../core/state/WorkspaceSelectionContext'
+import type { WorkspaceRecord } from '../../../interfaces/core/projects'
 
 const WorkspaceSummaryView = lazy(async () => {
   const module = await import('./workspaceSummary')

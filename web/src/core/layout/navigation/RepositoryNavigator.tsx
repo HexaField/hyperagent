@@ -1,49 +1,14 @@
 import { useSearchParams } from '@solidjs/router'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onMount } from 'solid-js'
+import type { GitInfo } from '../../../../../interfaces/core/git'
+import type { ProjectListResponse, WorkspaceRecord } from '../../../../../interfaces/core/projects'
+import type { DirectoryListing, RadicleRepositoryEntry } from '../../../../../interfaces/widgets/workspaceSummary'
 import { buildSessionWorkflowPayload } from '../../../lib/sessions'
 import { fetchJson } from '../../../shared/api/httpClient'
-import type { GitInfo } from '../../../types/git'
 import { useWorkspaceSelection } from '../../state/WorkspaceSelectionContext'
 
 const BROWSER_PAGE_SIZE = 10
 const BROWSER_STATE_STORAGE_KEY = 'hyperagent:repoBrowser'
-
-export type Project = {
-  id: string
-  name: string
-  description?: string | null
-  repositoryPath: string
-  defaultBranch: string
-  createdAt: string
-  git?: GitInfo | null
-}
-
-type RadicleRepositoryEntry = {
-  project: Project
-  radicle: {
-    repositoryPath: string
-    radicleProjectId: string | null
-    remoteUrl: string | null
-    defaultBranch: string | null
-    registered: boolean
-  } | null
-  git: GitInfo | null
-  error?: string | null
-}
-
-type DirectoryEntry = {
-  name: string
-  path: string
-  isGitRepository: boolean
-  radicleRegistered: boolean
-  radicleRegistrationReason: string | null
-}
-
-type DirectoryListing = {
-  path: string
-  parent: string | null
-  entries: DirectoryEntry[]
-}
 
 type WorkflowCreationResponse = {
   workflow: {
@@ -86,7 +51,7 @@ export default function RepositoryNavigator() {
   const [expandedProjects, setExpandedProjects] = createSignal(new Set<string>())
   const [expandedRadRepos, setExpandedRadRepos] = createSignal(new Set<string>())
   const [newRepoModalOpen, setNewRepoModalOpen] = createSignal(false)
-  const [sessionProject, setSessionProject] = createSignal<Project | null>(null)
+  const [sessionProject, setSessionProject] = createSignal<WorkspaceRecord | null>(null)
   const [sessionName, setSessionName] = createSignal('')
   const [sessionDetails, setSessionDetails] = createSignal('')
   const [sessionStatus, setSessionStatus] = createSignal<string | null>(null)
@@ -96,7 +61,7 @@ export default function RepositoryNavigator() {
   let lastKnownBrowserPath: string | undefined
 
   const [projects, { refetch: refetchProjects }] = createResource(async () => {
-    const payload = await fetchJson<{ projects: Project[] }>('/api/projects')
+    const payload = await fetchJson<ProjectListResponse>('/api/projects')
     return payload.projects
   })
 
@@ -131,7 +96,7 @@ export default function RepositoryNavigator() {
       return
     }
     try {
-      await fetchJson<Project>('/api/projects', {
+      await fetchJson<WorkspaceRecord>('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -231,21 +196,21 @@ export default function RepositoryNavigator() {
     setStatus(null)
   }
 
-  const openSessionModal = (project: Project) => {
+  const openSessionModal = (project: WorkspaceRecord) => {
     setSessionProject(project)
     setSessionName(`${project.name} session`)
     setSessionDetails('')
     setSessionStatus(null)
   }
 
-  const isSyntheticProject = (project: Project) => project.id.startsWith('rad-only-')
+  const isSyntheticProject = (project: WorkspaceRecord) => project.id.startsWith('rad-only-')
 
   const convertRadicleRepository = async (entry: RadicleRepositoryEntry) => {
     const repoPath = entry.project.repositoryPath
     setRadicleConversionPath(repoPath)
     setRadicleConversionStatus(null)
     try {
-      await fetchJson<Project>('/api/projects', {
+      await fetchJson<WorkspaceRecord>('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

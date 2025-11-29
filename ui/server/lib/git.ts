@@ -1,18 +1,6 @@
-export type GitFileChange = {
-  path: string
-  displayPath: string
-  stagedStatus: string
-  worktreeStatus: string
-  renameFrom?: string | null
-  renameTo?: string | null
-  isUntracked: boolean
-}
+import type { GitFileChange, GitFileStashEntry } from '../../../interfaces/core/git'
 
-export type GitFileStashEntry = {
-  name: string
-  filePath: string
-  message: string
-}
+export type { GitFileChange, GitFileStashEntry } from '../../../interfaces/core/git'
 
 export const FILE_STASH_PREFIX = 'hyperagent:file:'
 

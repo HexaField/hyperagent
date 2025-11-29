@@ -1,24 +1,27 @@
+import type {
+  CodingAgentProvider,
+  CodingAgentProviderListResponse,
+  CodingAgentRunListResponse,
+  CodingAgentRunRecord,
+  CodingAgentSessionDetail,
+  CodingAgentSessionListResponse,
+  CodingAgentSessionSummary
+} from '../../../interfaces/core/codingAgent'
 import { fetchJson } from '../shared/api/httpClient'
 
-export type CodingAgentProviderModel = {
-  id: string
-  label: string
-}
-
-export type CodingAgentProvider = {
-  id: string
-  label: string
-  defaultModelId: string
-  models: CodingAgentProviderModel[]
-}
-
-type CodingAgentProvidersResponse = {
-  providers?: CodingAgentProvider[]
-}
+export type {
+  CodingAgentMessage,
+  CodingAgentMessagePart,
+  CodingAgentProvider,
+  CodingAgentProviderModel,
+  CodingAgentRunRecord,
+  CodingAgentSessionDetail,
+  CodingAgentSessionSummary
+} from '../../../interfaces/core/codingAgent'
 
 export async function fetchCodingAgentProviders(): Promise<CodingAgentProvider[]> {
   try {
-    const payload = await fetchJson<CodingAgentProvidersResponse>('/api/coding-agent/providers')
+    const payload = await fetchJson<CodingAgentProviderListResponse>('/api/coding-agent/providers')
     const providers = Array.isArray(payload?.providers) ? payload.providers : []
     return providers
   } catch (error) {
@@ -27,58 +30,11 @@ export async function fetchCodingAgentProviders(): Promise<CodingAgentProvider[]
   }
 }
 
-export type CodingAgentSessionSummary = {
-  id: string
-  title: string | null
-  workspacePath: string
-  projectId: string | null
-  createdAt: string
-  updatedAt: string
-  providerId?: string | null
-  modelId?: string | null
-  summary: {
-    additions: number
-    deletions: number
-    files: number
-  }
-}
-
-export type CodingAgentMessage = {
-  id: string
-  role: string
-  createdAt: string
-  completedAt: string | null
-  modelId: string | null
-  providerId: string | null
-  text: string
-}
-
-export type CodingAgentSessionDetail = {
-  session: CodingAgentSessionSummary
-  messages: CodingAgentMessage[]
-}
-
-export type CodingAgentRunRecord = {
-  sessionId: string
-  pid: number
-  workspacePath: string
-  prompt: string
-  title: string | null
-  model: string | null
-  providerId: string | null
-  logFile: string
-  startedAt: string
-  updatedAt: string
-  status: string
-  exitCode: number | null
-  signal: string | null
-}
-
 export async function fetchCodingAgentSessions(params?: {
   workspacePath?: string
 }): Promise<CodingAgentSessionSummary[]> {
   const query = params?.workspacePath ? `?workspacePath=${encodeURIComponent(params.workspacePath)}` : ''
-  const payload = await fetchJson<{ sessions: CodingAgentSessionSummary[] }>(`/api/coding-agent/sessions${query}`)
+  const payload = await fetchJson<CodingAgentSessionListResponse>(`/api/coding-agent/sessions${query}`)
   return payload.sessions
 }
 
@@ -112,7 +68,7 @@ export async function killCodingAgentSession(sessionId: string): Promise<boolean
 }
 
 export async function fetchCodingAgentRuns(): Promise<CodingAgentRunRecord[]> {
-  const payload = await fetchJson<{ runs: CodingAgentRunRecord[] }>(`/api/coding-agent/runs`)
+  const payload = await fetchJson<CodingAgentRunListResponse>(`/api/coding-agent/runs`)
   return payload.runs
 }
 

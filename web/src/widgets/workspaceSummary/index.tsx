@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createMemo, createSignal } from 'solid-js'
 import DiffViewer from '../../components/DiffViewer'
-import type { WorkspaceRecord } from '../../core/state/WorkspaceSelectionContext'
+import type { GitFileChange, GitInfo } from '../../../../interfaces/core/git'
+import type { WorkspaceRecord } from '../../../../interfaces/core/projects'
 import {
   checkoutGitRef,
   commitGitChanges,
@@ -15,7 +16,6 @@ import {
 } from '../../lib/git'
 import { fetchJson } from '../../shared/api/httpClient'
 import { formatTimestamp } from '../../shared/utils/datetime'
-import type { GitFileChange, GitInfo } from '../../types/git'
 
 export type WorkspaceSummaryProps = {
   workspace: WorkspaceRecord

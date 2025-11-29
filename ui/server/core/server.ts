@@ -41,7 +41,8 @@ import { createAgentWorkflowExecutor } from '../../../src/modules/workflowAgentE
 import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
-import { parseGitStashList, type GitFileChange, type GitFileStashEntry } from '../lib/git'
+import type { GitFileChange, GitFileStashEntry, GitInfo } from '../../../interfaces/core/git'
+import { parseGitStashList } from '../lib/git'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
 import { createWorkspaceSessionsRouter } from '../modules/workspaceSessions/routes'
 import { createWorkspaceSummaryRouter } from '../modules/workspaceSummary/routes'
@@ -92,27 +93,6 @@ export type CodeServerSession = {
 type RunLoop = typeof runVerifierWorkerLoop
 
 type ControllerFactory = (options: CodeServerOptions) => CodeServerController
-
-type GitMetadata = {
-  repositoryPath: string
-  branch: string | null
-  commit: {
-    hash: string | null
-    message: string | null
-    timestamp: string | null
-  } | null
-  remotes: Array<{ name: string; url: string; ahead?: number; behind?: number }>
-  status?: {
-    isClean: boolean
-    changedFiles: number
-    summary: string | null
-  }
-  diffStat?: string | null
-  diffText?: string | null
-  changes?: GitFileChange[]
-  stashes?: GitFileStashEntry[]
-  branches?: string[]
-}
 
 export const parseGitStatusOutput = (output: string | null): GitFileChange[] => {
   if (!output) return []
@@ -571,7 +551,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     })
   }
 
-  const readGitMetadata = async (repoPath: string): Promise<GitMetadata | null> => {
+  const readGitMetadata = async (repoPath: string): Promise<GitInfo | null> => {
     const resolved = path.resolve(repoPath)
     try {
       await fs.stat(resolved)

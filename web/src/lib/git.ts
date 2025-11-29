@@ -1,9 +1,7 @@
+import type { GitInfo, GitStateResponse } from '../../../interfaces/core/git'
 import { fetchJson } from '../shared/api/httpClient'
-import type { GitInfo } from '../types/git'
 
-type GitResponse = {
-  git: GitInfo | null
-}
+type GitResponse = GitStateResponse
 
 async function postGitAction(
   projectId: string,
