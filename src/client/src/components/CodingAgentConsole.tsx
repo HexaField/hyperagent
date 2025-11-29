@@ -22,6 +22,7 @@ const SESSION_OVERRIDES_SUFFIX = ':session-settings'
 const STATE_EVENT = 'coding-agent-console:state'
 const SEARCH_PARAM_SESSION = 'codingAgentSession'
 const DEFAULT_WORKSPACE_KEY = '__default__'
+const SESSION_PARAM_DELIMITER = '|'
 type CodingAgentProviderConfig = CodingAgentProvider
 type CodingAgentProviderId = CodingAgentProviderConfig['id']
 const FALLBACK_PROVIDER: CodingAgentProviderConfig = {
@@ -115,8 +116,8 @@ function readPersistedState(workspaceKey: string): PersistedState {
   if (typeof window === 'undefined') return state
   try {
     const params = new URLSearchParams(window.location.search)
-    const sessionParam = params.get(SEARCH_PARAM_SESSION)
-    if (sessionParam) state.selectedSessionId = sessionParam
+    const parsed = parseSessionSearchParam(params.get(SEARCH_PARAM_SESSION))
+    if (parsed && parsed.workspaceKey === workspaceKey) state.selectedSessionId = parsed.sessionId
   } catch {}
   return state
 }
@@ -141,6 +142,23 @@ function persistState(workspaceKey: string, patch: Partial<PersistedState>) {
   try {
     window.dispatchEvent(new CustomEvent(STATE_EVENT, { detail }))
   } catch {}
+}
+
+function formatSessionSearchParam(workspaceKey: string, sessionId: string | null): string | undefined {
+  if (!sessionId) return undefined
+  return `${workspaceKey}${SESSION_PARAM_DELIMITER}${sessionId}`
+}
+
+function parseSessionSearchParam(value: string | null): { workspaceKey: string; sessionId: string } | null {
+  if (!value) return null
+  const delimiterIndex = value.indexOf(SESSION_PARAM_DELIMITER)
+  if (delimiterIndex === -1) {
+    return { workspaceKey: DEFAULT_WORKSPACE_KEY, sessionId: value }
+  }
+  const workspaceKey = value.slice(0, delimiterIndex)
+  const sessionId = value.slice(delimiterIndex + 1)
+  if (!workspaceKey || !sessionId) return null
+  return { workspaceKey, sessionId }
 }
 
 function updateSearchParam(name: string, value: string | null | undefined) {
@@ -488,7 +506,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     lastPersistedSessionKey = key
     lastPersistedSessionId = normalized
     persistState(key, { selectedSessionId: normalized })
-    updateSearchParam(SEARCH_PARAM_SESSION, normalized ?? undefined)
+    updateSearchParam(SEARCH_PARAM_SESSION, formatSessionSearchParam(key, normalized))
   })
 
   onMount(() => {

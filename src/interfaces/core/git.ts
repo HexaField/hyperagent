@@ -38,6 +38,7 @@ export type GitInfo = {
   branch: string | null
   commit: GitCommitInfo | null
   remotes: GitRemoteInfo[]
+  defaultRemote?: string | null
   status?: GitStatusInfo | null
   diffStat?: string | null
   diffText?: string | null

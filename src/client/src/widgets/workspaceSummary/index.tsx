@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal } from 'solid-js'
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js'
 import type { GitFileChange, GitInfo } from '../../../../interfaces/core/git'
 import type { WorkspaceRecord } from '../../../../interfaces/core/projects'
 import DiffViewer from '../../components/DiffViewer'
@@ -6,6 +6,7 @@ import {
   checkoutGitRef,
   commitGitChanges,
   discardGitPath,
+  fetchGitRemote,
   generateCommitMessage,
   pullGitRemote,
   pushGitRemote,
@@ -19,10 +20,11 @@ import { formatTimestamp } from '../../shared/utils/datetime'
 
 export type WorkspaceSummaryProps = {
   workspace: WorkspaceRecord
-  onOpenNavigator: () => void
 }
 
 type GitDisplayChange = GitFileChange & { key: string; view: 'working' | 'staged' }
+
+const GIT_REFRESH_INTERVAL_MS = 30000
 
 export function WorkspaceSummary(props: WorkspaceSummaryProps) {
   const workspace = () => props.workspace
@@ -79,15 +81,20 @@ export function WorkspaceSummary(props: WorkspaceSummaryProps) {
   const stagedChanges = () => changeGroups().staged
   const workingChanges = () => changeGroups().unstaged
   const isItemPending = (key: string) => pendingItem() === key
-  const isRemoteActionPending = (remoteName: string, mode: 'pull' | 'push') =>
+  const isRemoteActionPending = (remoteName: string, mode: 'pull' | 'push' | 'fetch') =>
     pendingAction() === `${mode}:${remoteName}`
 
-  const handleRemoteSync = async (remoteName: string, mode: 'pull' | 'push') => {
+  const handleRemoteSync = async (remoteName: string, mode: 'pull' | 'push' | 'fetch') => {
     const branch = remoteBranchTarget()
-    const executor = () =>
-      mode === 'pull'
-        ? pullGitRemote(workspace().id, remoteName, branch)
-        : pushGitRemote(workspace().id, remoteName, branch)
+    const executor = () => {
+      if (mode === 'pull') {
+        return pullGitRemote(workspace().id, remoteName, branch)
+      }
+      if (mode === 'push') {
+        return pushGitRemote(workspace().id, remoteName, branch)
+      }
+      return fetchGitRemote(workspace().id, remoteName, branch)
+    }
     await runGitAction(`${mode}:${remoteName}`, executor)
   }
 
@@ -112,19 +119,30 @@ export function WorkspaceSummary(props: WorkspaceSummaryProps) {
   }
 
   const refreshGitInfo = async () => {
+    if (isRefreshing()) return
     setIsRefreshing(true)
-    setGitError(null)
     try {
       const payload = await fetchJson<{ project: WorkspaceRecord }>(`/api/projects/${workspace().id}`)
       const next = payload.project.git ?? null
       setGitState(next)
       setCheckoutTarget(next?.branch ?? workspace().defaultBranch)
     } catch (error) {
-      setGitError(error instanceof Error ? error.message : 'Failed to refresh git state')
+      console.error('Failed to refresh git state', error)
     } finally {
       setIsRefreshing(false)
     }
   }
+
+  createEffect(() => {
+    if (typeof window === 'undefined') return
+    const projectId = workspace().id
+    if (!projectId) return
+    void refreshGitInfo()
+    const timer = window.setInterval(() => {
+      void refreshGitInfo()
+    }, GIT_REFRESH_INTERVAL_MS)
+    onCleanup(() => window.clearInterval(timer))
+  })
 
   const stageAll = () => {
     const paths = Array.from(new Set(workingChanges().map((change) => change.path)))
@@ -326,23 +344,6 @@ export function WorkspaceSummary(props: WorkspaceSummaryProps) {
                 : `${status()?.changedFiles ?? 0} pending change${(status()?.changedFiles ?? 0) === 1 ? '' : 's'}`}
             </p>
           </div>
-          <div class="flex flex-wrap items-center gap-2 text-xs">
-            <button
-              class="rounded-lg border border-[var(--border)] px-3 py-1"
-              type="button"
-              disabled={isRefreshing()}
-              onClick={() => void refreshGitInfo()}
-            >
-              {isRefreshing() ? 'Refreshing…' : 'Refresh'}
-            </button>
-            <button
-              class="rounded-lg border border-[var(--border)] px-3 py-1"
-              type="button"
-              onClick={props.onOpenNavigator}
-            >
-              Manage
-            </button>
-          </div>
         </div>
         <Show when={gitError()}>{(message) => <p class="mt-2 text-xs text-red-400">{message()}</p>}</Show>
         <form
@@ -509,7 +510,15 @@ export function WorkspaceSummary(props: WorkspaceSummaryProps) {
                         </div>
                         <p class="text-sm text-[var(--text)] truncate">{remote.url}</p>
                       </div>
-                      <div class="flex gap-2 text-xs">
+                      <div class="flex flex-wrap gap-2 text-xs">
+                        <button
+                          class="rounded-lg border border-[var(--border)] px-3 py-1"
+                          type="button"
+                          disabled={isRemoteActionPending(remote.name, 'fetch')}
+                          onClick={() => void handleRemoteSync(remote.name, 'fetch')}
+                        >
+                          {isRemoteActionPending(remote.name, 'fetch') ? 'Fetching…' : 'Fetch'}
+                        </button>
                         <Show when={showPull}>
                           <button
                             class="rounded-lg border border-[var(--border)] px-3 py-1"
@@ -541,16 +550,6 @@ export function WorkspaceSummary(props: WorkspaceSummaryProps) {
             </Show>
           </div>
         </Show>
-      </div>
-
-      <div class="mt-auto flex flex-wrap gap-3">
-        <button
-          class="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white"
-          type="button"
-          onClick={props.onOpenNavigator}
-        >
-          Manage workspaces
-        </button>
       </div>
     </div>
   )

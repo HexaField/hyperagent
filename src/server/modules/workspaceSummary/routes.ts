@@ -750,6 +750,25 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
     }
   }
 
+  const gitFetchHandler: RequestHandler = async (req, res) => {
+    const project = getProjectOr404(req.params.projectId, res)
+    if (!project) return
+    const remote = typeof req.body?.remote === 'string' ? req.body.remote.trim() : ''
+    const branchInput = typeof req.body?.branch === 'string' ? req.body.branch.trim() : ''
+    if (!remote) {
+      res.status(400).json({ error: 'remote is required' })
+      return
+    }
+    const args = branchInput ? ['fetch', remote, branchInput] : ['fetch', remote]
+    try {
+      await runGitCommand(args, project.repositoryPath)
+      await respondWithUpdatedGit(res, project.repositoryPath)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : 'Failed to fetch remote'
+      res.status(500).json({ error: text })
+    }
+  }
+
   const gitPullHandler: RequestHandler = async (req, res) => {
     const project = getProjectOr404(req.params.projectId, res)
     if (!project) return
@@ -804,6 +823,7 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
   router.post('/api/projects/:projectId/git/checkout', wrapAsync(gitCheckoutHandler))
   router.post('/api/projects/:projectId/git/stash', wrapAsync(gitStashHandler))
   router.post('/api/projects/:projectId/git/unstash', wrapAsync(gitUnstashHandler))
+  router.post('/api/projects/:projectId/git/fetch', wrapAsync(gitFetchHandler))
   router.post('/api/projects/:projectId/git/pull', wrapAsync(gitPullHandler))
   router.post('/api/projects/:projectId/git/push', wrapAsync(gitPushHandler))
 

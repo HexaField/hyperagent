@@ -1,6 +1,17 @@
 import type { RouteSectionProps } from '@solidjs/router'
 import { Route, Router } from '@solidjs/router'
-import { For, Show, createEffect, createResource, createSignal, onCleanup, onMount, type JSX } from 'solid-js'
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  onCleanup,
+  onMount,
+  type Accessor,
+  type JSX
+} from 'solid-js'
 import ThemeToggle from './components/ThemeToggle'
 import { WIDGET_TEMPLATES, type WidgetAddEventDetail } from './constants/widgetTemplates'
 import SingleWidgetView from './core/layout/SingleWidgetView'
@@ -10,6 +21,7 @@ import { WorkspaceSelectionProvider } from './core/state/WorkspaceSelectionConte
 import { type SingleWidgetViewDetail } from './core/state/singleWidgetView'
 import WorkspacePage from './pages/WorkspacePage'
 import { fetchJson } from './shared/api/httpClient'
+import { WORKSPACE_NAVIGATOR_CLOSE_EVENT, WORKSPACE_NAVIGATOR_OPEN_EVENT } from './core/events/workspaceNavigator'
 
 type RadicleStatus = {
   reachable: boolean
@@ -19,20 +31,51 @@ type RadicleStatus = {
   message?: string | null
 }
 
+const NAVIGATOR_MOBILE_QUERY = '(max-width: 768px)'
+
 const AppShell = (props: RouteSectionProps) => {
   const [navigatorOpen, setNavigatorOpen] = createSignal(false)
+  const [navigatorMobileViewport, setNavigatorMobileViewport] = createSignal(false)
+  const openNavigator = () => setNavigatorOpen(true)
+  const closeNavigator = () => setNavigatorOpen(false)
   const navigatorController = {
     isOpen: navigatorOpen,
-    open: () => setNavigatorOpen(true),
-    close: () => setNavigatorOpen(false),
+    open: openNavigator,
+    close: closeNavigator,
     toggle: () => setNavigatorOpen((value) => !value)
   }
+
+  onMount(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia(NAVIGATOR_MOBILE_QUERY)
+    const updateViewport = () => setNavigatorMobileViewport(mq.matches)
+    updateViewport()
+    const handleOpen = () => openNavigator()
+    const handleClose = () => closeNavigator()
+    const handleMediaChange = (event: MediaQueryListEvent) => setNavigatorMobileViewport(event.matches)
+    window.addEventListener(WORKSPACE_NAVIGATOR_OPEN_EVENT, handleOpen)
+    window.addEventListener(WORKSPACE_NAVIGATOR_CLOSE_EVENT, handleClose)
+    if (typeof mq.addEventListener === 'function') mq.addEventListener('change', handleMediaChange)
+    else mq.addListener(handleMediaChange)
+    onCleanup(() => {
+      window.removeEventListener(WORKSPACE_NAVIGATOR_OPEN_EVENT, handleOpen)
+      window.removeEventListener(WORKSPACE_NAVIGATOR_CLOSE_EVENT, handleClose)
+      if (typeof mq.removeEventListener === 'function') mq.removeEventListener('change', handleMediaChange)
+      else mq.removeListener(handleMediaChange)
+    })
+  })
+
   return (
     <CanvasNavigatorContext.Provider value={navigatorController}>
       <main class="relative flex min-h-screen w-full flex-col bg-[var(--bg-app)]">
         <section class="relative flex-1 overflow-auto">{props.children}</section>
-        <CanvasChrome />
+        <CanvasChrome mobileNavigator={navigatorMobileViewport} />
       </main>
+      <MobileWorkspaceNavigator
+        isOpen={navigatorOpen}
+        isMobileViewport={navigatorMobileViewport}
+        onClose={closeNavigator}
+      />
     </CanvasNavigatorContext.Provider>
   )
 }
@@ -103,7 +146,7 @@ export default function App() {
   )
 }
 
-function CanvasChrome() {
+function CanvasChrome(props: { mobileNavigator: Accessor<boolean> }) {
   const navigator = useCanvasNavigator()
   const [widgetMenuOpen, setWidgetMenuOpen] = createSignal(false)
   const [singleViewActive, setSingleViewActive] = createSignal(
@@ -165,52 +208,9 @@ function CanvasChrome() {
             <span class="text-lg">☰</span>
             Workspace
           </button>
-          <Show when={navigator.isOpen()}>
+          <Show when={navigator.isOpen() && !props.mobileNavigator()}>
             <ChromePanel title="Workspace" onNavigate={() => navigator.close()} widthClass="w-[36rem]">
-              <div class="flex flex-col gap-3">
-                <div class="flex items-center justify-between gap-3">
-                  <div class="text-sm">
-                    <p class="text-xs text-[var(--text-muted)]">View mode</p>
-                  </div>
-                  <div class="flex gap-2">
-                    <button
-                      type="button"
-                      class="rounded-xl border border-[var(--border)] px-3 py-1 text-sm"
-                      onClick={() => {
-                        if (typeof window === 'undefined') return
-                        try {
-                          const params = new URLSearchParams(window.location.search)
-                          const workspaceId = params.get('workspaceId')
-                          if (workspaceId) window.localStorage.setItem(`workspace:${workspaceId}:view`, 'canvas')
-                        } catch {}
-                        window.dispatchEvent(new CustomEvent('workspace:view-change', { detail: { mode: 'canvas' } }))
-                        navigator.close()
-                      }}
-                    >
-                      Canvas
-                    </button>
-                    <button
-                      type="button"
-                      class="rounded-xl border border-[var(--border)] bg-blue-600 px-3 py-1 text-sm font-semibold text-white"
-                      onClick={() => {
-                        if (typeof window === 'undefined') return
-                        try {
-                          const params = new URLSearchParams(window.location.search)
-                          const workspaceId = params.get('workspaceId')
-                          if (workspaceId) window.localStorage.setItem(`workspace:${workspaceId}:view`, 'single')
-                        } catch {}
-                        window.dispatchEvent(new CustomEvent('workspace:view-change', { detail: { mode: 'single' } }))
-                        navigator.close()
-                      }}
-                    >
-                      Single widget
-                    </button>
-                  </div>
-                </div>
-                <div class="max-h-[70vh] overflow-y-auto pr-1">
-                  <RepositoryNavigator />
-                </div>
-              </div>
+              <WorkspaceNavigatorContent variant="desktop" />
             </ChromePanel>
           </Show>
         </div>
@@ -237,6 +237,114 @@ function CanvasChrome() {
         </div>
       </div>
     </Show>
+  )
+}
+
+type MobileWorkspaceNavigatorProps = {
+  isOpen: Accessor<boolean>
+  isMobileViewport: Accessor<boolean>
+  onClose: () => void
+}
+
+function MobileWorkspaceNavigator(props: MobileWorkspaceNavigatorProps) {
+  const shouldShow = createMemo(() => props.isMobileViewport() && props.isOpen())
+  let previousOverflow: string | null = null
+
+  createEffect(() => {
+    if (typeof document === 'undefined') return
+    if (shouldShow()) {
+      previousOverflow = document.documentElement.style.overflow
+      document.documentElement.style.overflow = 'hidden'
+    } else if (previousOverflow !== null) {
+      document.documentElement.style.overflow = previousOverflow
+      previousOverflow = null
+    }
+  })
+
+  onCleanup(() => {
+    if (typeof document === 'undefined') return
+    if (previousOverflow !== null) {
+      document.documentElement.style.overflow = previousOverflow
+      previousOverflow = null
+    }
+  })
+
+  return (
+    <Show when={shouldShow()}>
+      <div class="fixed inset-0 z-[60] flex flex-col bg-[var(--bg-app)] text-[var(--text)]">
+        <div class="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+          <div>
+            <p class="text-xs uppercase tracking-[0.35em] text-[var(--text-muted)]">Workspace</p>
+            <p class="text-sm text-[var(--text)]">Manage repositories</p>
+          </div>
+          <button
+            type="button"
+            class="rounded-full border border-[var(--border)] px-4 py-1 text-sm"
+            onClick={props.onClose}
+          >
+            Close
+          </button>
+        </div>
+        <div class="flex flex-1 flex-col gap-4 overflow-hidden px-3 py-4">
+          <WorkspaceNavigatorContent variant="mobile" />
+        </div>
+      </div>
+    </Show>
+  )
+}
+
+type WorkspaceNavigatorContentProps = {
+  variant?: 'desktop' | 'mobile'
+}
+
+function WorkspaceNavigatorContent(props: WorkspaceNavigatorContentProps) {
+  const navigator = useCanvasNavigator()
+  const setPreferredViewMode = (mode: 'canvas' | 'single') => {
+    if (typeof window === 'undefined') return
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const workspaceId = params.get('workspaceId')
+      if (workspaceId) window.localStorage.setItem(`workspace:${workspaceId}:view`, mode)
+    } catch {}
+    window.dispatchEvent(new CustomEvent('workspace:view-change', { detail: { mode } }))
+    navigator.close()
+  }
+
+  const scrollClass = () =>
+    props.variant === 'mobile' ? 'flex-1 overflow-y-auto pr-1' : 'max-h-[70vh] overflow-y-auto pr-1'
+
+  const containerClass = () => (props.variant === 'mobile' ? 'flex min-h-0 flex-1 flex-col gap-3' : 'flex flex-col gap-3')
+  const showViewControls = () => props.variant !== 'mobile'
+
+  return (
+    <div class={containerClass()}>
+      <Show when={showViewControls()}>
+        <div class="flex items-center justify-between gap-3">
+          <div class="text-sm">
+            <p class="text-xs text-[var(--text-muted)]">View mode</p>
+          </div>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              class="rounded-xl border border-[var(--border)] px-3 py-1 text-sm"
+              onClick={() => setPreferredViewMode('canvas')}
+            >
+              Canvas
+            </button>
+            <button
+              type="button"
+              class="rounded-xl border border-[var(--border)] bg-blue-600 px-3 py-1 text-sm font-semibold text-white"
+              onClick={() => setPreferredViewMode('single')}
+            >
+              Single widget
+            </button>
+          </div>
+        </div>
+      </Show>
+      <div class={scrollClass()}>
+        <RepositoryNavigator />
+      </div>
+    </div>
   )
 }
 

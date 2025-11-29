@@ -1015,6 +1015,18 @@ describe('createServerApp', () => {
       execFileSync('git', ['commit', '-am', 'remote-change'], { cwd: remoteCloneDir, stdio: 'ignore' })
       execFileSync('git', ['push', 'origin', 'main'], { cwd: remoteCloneDir, stdio: 'ignore' })
 
+      const fetchResponse = await fetch(`${harness.baseUrl}/api/projects/${projectId}/git/fetch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ remote: 'origin', branch: 'main' })
+      })
+      expect(fetchResponse.status).toBe(200)
+      const fetchPayload = await fetchResponse.json()
+      const originRemote = fetchPayload.git?.remotes?.find((entry: any) => entry.name === 'origin')
+      expect(originRemote?.behind ?? 0).toBeGreaterThan(0)
+      const readmeAfterFetch = await fs.readFile(path.join(canonicalRepoDir, 'README.md'), 'utf8')
+      expect(readmeAfterFetch.includes('remote edit')).toBe(false)
+
       const pullResponse = await fetch(`${harness.baseUrl}/api/projects/${projectId}/git/pull`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -53,9 +53,7 @@ const definitionMap: Record<WidgetTemplateId, WidgetDefinition> = {
     initialPosition: { x: -300, y: -140 },
     initialSize: { width: 480, height: 400 },
     startOpen: true,
-    render: ({ workspace, navigator }) => (
-      <WorkspaceSummaryView workspace={workspace} onOpenNavigator={navigator.open} />
-    )
+    render: ({ workspace }) => <WorkspaceSummaryView workspace={workspace} />
   },
   'workspace-workflows': {
     id: 'workspace-workflows',

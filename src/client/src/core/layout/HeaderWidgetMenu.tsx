@@ -1,5 +1,6 @@
 import { For, Show, createSignal, type JSX } from 'solid-js'
 import { WIDGET_TEMPLATES } from '../../constants/widgetTemplates'
+import { dispatchWorkspaceNavigatorOpen } from '../events/workspaceNavigator'
 import { useWorkspaceSelection } from '../state/WorkspaceSelectionContext'
 
 export type HeaderWidgetMenuProps = {
@@ -28,6 +29,18 @@ export default function HeaderWidgetMenu(props: HeaderWidgetMenuProps) {
 
   return (
     <div class="flex flex-col gap-3">
+      <button
+        type="button"
+        class="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-card)] px-3 py-2 text-left text-sm font-semibold transition hover:bg-[var(--bg-muted)]"
+        onClick={() => {
+          dispatchWorkspaceNavigatorOpen()
+          props.onClose()
+        }}
+      >
+        <p>Manage workspaces</p>
+        <p class="text-xs font-normal text-[var(--text-muted)]">Register repositories and switch</p>
+      </button>
+
       <MenuSection
         title="Workspaces"
         open={workspaceSectionOpen()}
