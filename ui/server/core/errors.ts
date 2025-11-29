@@ -1,19 +1,14 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
+import { createLogger, toErrorMeta } from './logging'
+
+const errorLogger = createLogger('ui/server/core/errors')
 
 export const logFullError = (error: unknown, context?: { method?: string; url?: string; label?: string }) => {
   try {
-    const when = new Date().toISOString()
-    const header =
-      `[ERROR] ${when}` +
-      (context?.method && context?.url ? ` ${context.method} ${context.url}` : '') +
-      (context?.label ? ` (${context.label})` : '')
-    if (error instanceof Error) {
-      console.error(header)
-      console.error(error.stack ?? error.message)
-    } else {
-      console.error(header)
-      console.error(String(error))
-    }
+    errorLogger.error(context?.label ?? 'Unhandled error', {
+      ...context,
+      error: toErrorMeta(error)
+    })
   } catch {
     // ignore logging failures
   }

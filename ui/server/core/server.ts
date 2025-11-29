@@ -34,6 +34,7 @@ import {
   stopManagedServices,
   type ManagedService
 } from './services'
+import { createLogger, toErrorMeta } from './logging'
 import { runVerifierWorkerLoop, type AgentStreamEvent } from '../../../src/modules/agent'
 import {
   createCodeServerController,
@@ -41,7 +42,7 @@ import {
   type CodeServerOptions
 } from '../../../src/modules/codeServer'
 import { createPersistence, type Persistence, type ProjectRecord } from '../../../src/modules/database'
-import { listBranchCommits, listGitBranches } from '../../../src/modules/git'
+import { listGitBranches } from '../../../src/modules/git'
 import type { Provider } from '../../../src/modules/llm'
 import type {
   CodingAgentCommandOptions,
@@ -66,7 +67,7 @@ import { createAgentWorkflowExecutor } from '../../../src/modules/workflowAgentE
 import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
-import { FILE_STASH_PREFIX, parseGitStashList, type GitFileChange, type GitFileStashEntry } from '../lib/git'
+import { parseGitStashList, type GitFileChange, type GitFileStashEntry } from '../lib/git'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
 import { createWorkspaceSessionsRouter } from '../modules/workspaceSessions/routes'
 import { createWorkspaceSummaryRouter } from '../modules/workspaceSummary/routes'
@@ -189,7 +190,12 @@ export type ServerInstance = {
   }
 }
 
+const serverLogger = createLogger('ui/server/core/server', { service: 'ui-server' })
+
 export async function createServerApp(options: CreateServerOptions = {}): Promise<ServerInstance> {
+  const lifecycleLogger = serverLogger.child({ scope: 'lifecycle' })
+  const agentLogger = serverLogger.child({ scope: 'agent-run' })
+  const codeServerLogger = serverLogger.child({ scope: 'code-server' })
   const wsModule = options.webSockets ?? (await loadWebSocketModule())
   const WebSocketCtor = wsModule.WebSocket
   const WebSocketServerCtor = wsModule.WebSocketServer
@@ -770,7 +776,11 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       })
       return session
     } catch (error) {
-      console.warn('Unable to launch code-server session', options.sessionId, error)
+      codeServerLogger.warn('Unable to launch code-server session', {
+        sessionId: options.sessionId,
+        projectId: options.project.id,
+        error: toErrorMeta(error)
+      })
       return null
     }
   }
@@ -875,7 +885,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       ? await ensureProjectCodeServer(project)
       : await startCodeServerForSession(sessionId, sessionDir)
 
-    console.log('session ready', sessionId)
+    agentLogger.info('Session ready', {
+      sessionId,
+      projectId: project?.id ?? null,
+      workspaceDir: sessionDir,
+      codeServerSessionId: codeServerSession?.id ?? null
+    })
     emit({
       type: 'session',
       payload: {
@@ -897,7 +912,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       const modelToUse = typeof model === 'string' && model.length ? model : undefined
       const normalizedMaxRounds = typeof maxRounds === 'number' ? maxRounds : undefined
 
-      console.log('running loop', sessionId)
+      agentLogger.info('Agent loop started', {
+        sessionId,
+        projectId: project?.id ?? null,
+        provider: providerToUse ?? null,
+        model: modelToUse ?? null
+      })
       const result = await runLoop({
         userInstructions: prompt,
         provider: providerToUse,
@@ -906,7 +926,10 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         sessionDir: sessionDir ?? undefined,
         onStream: streamHandler
       })
-      console.log('runLoop completed', sessionId)
+      agentLogger.info('Agent loop completed', {
+        sessionId,
+        projectId: project?.id ?? null
+      })
       emit({ type: 'result', payload: result })
     } catch (error: unknown) {
       logFullError(error, { method: req.method, url: req.originalUrl, label: 'agentRunHandler' })
@@ -923,9 +946,9 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       }
     } finally {
       if (!closed) {
-        console.log('emitting end frame', sessionId)
+        agentLogger.debug('Emitting end frame', { sessionId })
         emit({ type: 'end' })
-        console.log('ending response', sessionId)
+        agentLogger.debug('Ending response', { sessionId })
         res.end()
       }
       if (sessionId && shouldShutdownCodeServer) {
@@ -1452,7 +1475,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     const server = createHttpsServer({ key: tlsMaterials.key, cert: tlsMaterials.cert }, app)
     server.on('upgrade', handleUpgrade)
     server.listen(port, () => {
-      console.log(`UI server listening on https://localhost:${port}`)
+      lifecycleLogger.info('UI server listening', { port })
     })
     return server
   }
