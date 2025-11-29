@@ -23,9 +23,7 @@ export type WorkspaceTerminalModule = {
   shutdown: () => Promise<void>
 }
 
-export const createWorkspaceTerminalModule = (
-  deps: WorkspaceTerminalModuleDeps
-): WorkspaceTerminalModule => {
+export const createWorkspaceTerminalModule = (deps: WorkspaceTerminalModuleDeps): WorkspaceTerminalModule => {
   const {
     wrapAsync,
     terminalModule,

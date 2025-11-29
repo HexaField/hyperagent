@@ -9,32 +9,6 @@ import { createServer as createHttpsServer, type Server as HttpsServer } from 'n
 import { createServer as createNetServer, type AddressInfo, type Socket } from 'node:net'
 import os from 'os'
 import path from 'path'
-import { installProcessErrorHandlers, logFullError, wrapAsync } from './errors'
-import {
-  CODE_SERVER_HOST,
-  DEFAULT_PORT,
-  GRAPH_BRANCH_LIMIT,
-  GRAPH_COMMITS_PER_BRANCH,
-  WORKFLOW_AGENT_MAX_ROUNDS,
-  WORKFLOW_AGENT_MODEL,
-  WORKFLOW_AGENT_PROVIDER,
-  buildExternalUrl,
-  mergeFrameAncestorsDirective,
-  normalizePublicOrigin
-} from './config'
-import { attachJsonStackMiddleware } from './middleware/jsonErrorStack'
-import { resolveTlsMaterials, type TlsConfig } from './tls'
-import { loadWebSocketModule, type WebSocketBindings } from './ws'
-import {
-  createCodeServerService,
-  createReviewSchedulerService,
-  createTerminalService,
-  createWorkflowRuntimeService,
-  startManagedServices,
-  stopManagedServices,
-  type ManagedService
-} from './services'
-import { createLogger, toErrorMeta } from './logging'
 import { runVerifierWorkerLoop, type AgentStreamEvent } from '../../../src/modules/agent'
 import {
   createCodeServerController,
@@ -73,8 +47,32 @@ import { createWorkspaceSessionsRouter } from '../modules/workspaceSessions/rout
 import { createWorkspaceSummaryRouter } from '../modules/workspaceSummary/routes'
 import { createWorkspaceTerminalModule } from '../modules/workspaceTerminal/module'
 import { createWorkspaceWorkflowsRouter } from '../modules/workspaceWorkflows/routes'
-
-
+import {
+  CODE_SERVER_HOST,
+  DEFAULT_PORT,
+  GRAPH_BRANCH_LIMIT,
+  GRAPH_COMMITS_PER_BRANCH,
+  WORKFLOW_AGENT_MAX_ROUNDS,
+  WORKFLOW_AGENT_MODEL,
+  WORKFLOW_AGENT_PROVIDER,
+  buildExternalUrl,
+  mergeFrameAncestorsDirective,
+  normalizePublicOrigin
+} from './config'
+import { installProcessErrorHandlers, logFullError, wrapAsync } from './errors'
+import { createLogger, toErrorMeta } from './logging'
+import { attachJsonStackMiddleware } from './middleware/jsonErrorStack'
+import {
+  createCodeServerService,
+  createReviewSchedulerService,
+  createTerminalService,
+  createWorkflowRuntimeService,
+  startManagedServices,
+  stopManagedServices,
+  type ManagedService
+} from './services'
+import { resolveTlsMaterials, type TlsConfig } from './tls'
+import { loadWebSocketModule, type WebSocketBindings } from './ws'
 
 export type ProxyWithUpgrade = RequestHandler & {
   upgrade?: (req: IncomingMessage, socket: Socket, head: Buffer) => void
@@ -702,7 +700,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       branches: branchList
     }
   }
-
 
   type CodeServerWorkspaceOptions = {
     sessionId: string

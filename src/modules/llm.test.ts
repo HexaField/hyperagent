@@ -10,10 +10,7 @@ vi.mock('./providers', () => ({
 
 const { runProviderInvocationMock, runProviderInvocationStreamMock } = vi.hoisted(() => ({
   runProviderInvocationMock: vi.fn(async () => ({ stdout: '{"answer":"fallback","status":"ok"}' })),
-  runProviderInvocationStreamMock: vi.fn<
-    [invocation: any, opts?: any],
-    AsyncGenerator<string, void, unknown>
-  >(() =>
+  runProviderInvocationStreamMock: vi.fn<[invocation: any, opts?: any], AsyncGenerator<string, void, unknown>>(() =>
     (async function* (): AsyncGenerator<string, void, unknown> {
       return
     })()

@@ -1,5 +1,5 @@
-import type { WorkflowRuntime } from '../../../src/modules/workflows'
 import type { ReviewScheduler } from '../../../src/modules/review/scheduler'
+import type { WorkflowRuntime } from '../../../src/modules/workflows'
 import type { WorkspaceTerminalModule } from '../modules/workspaceTerminal/module'
 
 export type ManagedService = {
@@ -50,9 +50,7 @@ export const createReviewSchedulerService = (scheduler: ReviewScheduler): Manage
   }
 }
 
-export const createCodeServerService = (deps: {
-  shutdownAllCodeServers: () => Promise<void>
-}): ManagedService => {
+export const createCodeServerService = (deps: { shutdownAllCodeServers: () => Promise<void> }): ManagedService => {
   return {
     name: 'codeServerSessions',
     start: async () => {

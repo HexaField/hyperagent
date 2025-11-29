@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { NextFunction, Request, Response } from 'express'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { installProcessErrorHandlers, wrapAsync } from '../errors'
 
 const baseReq = { method: 'GET', originalUrl: '/test' } as Request

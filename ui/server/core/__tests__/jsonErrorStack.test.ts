@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Request, Response } from 'express'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { attachJsonStackMiddleware } from '../middleware/jsonErrorStack'
 
 describe('json error stack middleware', () => {
