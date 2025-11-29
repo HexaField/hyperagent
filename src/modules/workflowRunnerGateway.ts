@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process'
-import { once } from 'node:events'
 
 export type WorkflowRunnerGateway = {
   enqueue: (payload: WorkflowRunnerPayload) => Promise<void>
@@ -46,7 +45,7 @@ async function invokeDockerCurl(
     runnerInstanceId: payload.runnerInstanceId
   })
 
-  const args = ['run', '--rm', image, '-sS', '-X', 'POST', callbackUrl, '-H', 'Content-Type: application/json']
+  const args = ['run', '--rm', image, '-sS', '--fail-with-body', '-X', 'POST', callbackUrl, '-H', 'Content-Type: application/json']
   if (options.callbackToken) {
     args.push('-H', `X-Workflow-Runner-Token: ${options.callbackToken}`)
   }
@@ -61,16 +60,29 @@ function buildCallbackUrl(baseUrl: string, workflowId: string, stepId: string): 
 }
 
 async function runDockerCommand(binary: string, args: string[], timeoutMs: number): Promise<void> {
-  const child = spawn(binary, args, { stdio: 'ignore' })
-  const timeout = setTimeout(() => {
-    child.kill('SIGKILL')
-  }, timeoutMs)
-  try {
-    const [code] = (await once(child, 'close')) as [number | null]
-    if (code !== 0) {
-      throw new Error(`docker ${args.join(' ')} failed with exit code ${code}`)
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(binary, args, { stdio: 'ignore' })
+    const timeout = setTimeout(() => {
+      child.kill('SIGKILL')
+      reject(new Error(`docker ${args.join(' ')} timed out after ${timeoutMs}ms`))
+    }, timeoutMs)
+
+    const cleanup = () => {
+      clearTimeout(timeout)
     }
-  } finally {
-    clearTimeout(timeout)
-  }
+
+    child.once('error', (error) => {
+      cleanup()
+      reject(error)
+    })
+
+    child.once('close', (code) => {
+      cleanup()
+      if (code !== 0) {
+        reject(new Error(`docker ${args.join(' ')} failed with exit code ${code}`))
+        return
+      }
+      resolve()
+    })
+  })
 }

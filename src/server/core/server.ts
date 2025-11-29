@@ -174,6 +174,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   const lifecycleLogger = serverLogger.child({ scope: 'lifecycle' })
   const agentLogger = serverLogger.child({ scope: 'agent-run' })
   const codeServerLogger = serverLogger.child({ scope: 'code-server' })
+  const runnerAuthLogger = serverLogger.child({ scope: 'runner-auth' })
   const wsModule = options.webSockets ?? (await loadWebSocketModule())
   const WebSocketCtor = wsModule.WebSocket
   const WebSocketServerCtor = wsModule.WebSocketServer
@@ -463,13 +464,31 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   const validateReviewRunnerToken = (req: Request): boolean => {
     if (!reviewRunnerToken) return true
     const value = pickUserIdValue(req.headers['x-review-runner-token'])
-    return value === reviewRunnerToken
+    const valid = value === reviewRunnerToken
+    if (!valid) {
+      runnerAuthLogger.warn('Review runner token rejected', {
+        kind: 'review',
+        event: 'runner_token_invalid',
+        remoteAddress: req.ip ?? req.socket.remoteAddress ?? null,
+        path: req.originalUrl
+      })
+    }
+    return valid
   }
 
   const validateWorkflowRunnerToken = (req: Request): boolean => {
     if (!workflowRunnerToken) return true
     const value = pickUserIdValue(req.headers['x-workflow-runner-token'])
-    return value === workflowRunnerToken
+    const valid = value === workflowRunnerToken
+    if (!valid) {
+      runnerAuthLogger.warn('Workflow runner token rejected', {
+        kind: 'workflow',
+        event: 'runner_token_invalid',
+        remoteAddress: req.ip ?? req.socket.remoteAddress ?? null,
+        path: req.originalUrl
+      })
+    }
+    return valid
   }
 
   function ensureEphemeralProject(sessionId: string, sessionDir: string): ProjectRecord {

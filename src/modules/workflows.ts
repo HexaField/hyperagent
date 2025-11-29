@@ -46,6 +46,8 @@ export type WorkflowStepRecord = {
   data: Record<string, unknown>
   result: Record<string, unknown> | null
   runnerInstanceId: string | null
+  runnerAttempts: number
+  readyAt: Timestamp | null
   updatedAt: Timestamp
 }
 
@@ -69,7 +71,12 @@ export type WorkflowStepsRepository = {
   listByWorkflow: (workflowId: string) => WorkflowStepRecord[]
   findReady: (limit?: number) => WorkflowStepRecord[]
   claim: (stepId: string) => boolean
-  update: (stepId: string, patch: Partial<Pick<WorkflowStepRecord, 'status' | 'result' | 'runnerInstanceId'>>) => void
+  update: (
+    stepId: string,
+    patch: Partial<
+      Pick<WorkflowStepRecord, 'status' | 'result' | 'runnerInstanceId' | 'runnerAttempts' | 'readyAt'>
+    >
+  ) => void
   getById: (stepId: string) => WorkflowStepRecord | null
 }
 
@@ -134,6 +141,10 @@ export type WorkflowRuntimeOptions = {
     email: string
   }
   runnerGateway: WorkflowRunnerGateway
+  runnerRetry?: {
+    maxAttempts?: number
+    backoffMs?: (attempt: number) => number
+  }
 }
 
 export type WorkflowRuntime = {
@@ -148,6 +159,38 @@ export type WorkflowRuntime = {
   runStepById: (input: { workflowId: string; stepId: string; runnerInstanceId: string }) => Promise<void>
 }
 
+function ensurePlannerDependencies(tasks: PlannerTask[]): void {
+  const taskIds = new Set<string>()
+  for (const task of tasks) {
+    if (!task.id || typeof task.id !== 'string') {
+      throw new Error('Planner tasks must include a stable id')
+    }
+    if (taskIds.has(task.id)) {
+      throw new Error(`Duplicate planner task id detected: ${task.id}`)
+    }
+    taskIds.add(task.id)
+  }
+
+  for (const task of tasks) {
+    const deps = task.dependsOn ?? []
+    for (const dep of deps) {
+      if (!taskIds.has(dep)) {
+        throw new Error(`Planner task ${task.id} depends on unknown task ${dep}`)
+      }
+    }
+  }
+}
+
+function computeRetryDelayMs(attempt: number): number {
+  const base = 2_000
+  const max = 60_000
+  const exponent = Math.max(attempt - 1, 0)
+  const delay = base * Math.pow(2, exponent)
+  return Math.min(delay, max)
+}
+
+const DEFAULT_MAX_ENQUEUE_ATTEMPTS = 5
+
 export function createWorkflowRuntime(options: WorkflowRuntimeOptions): WorkflowRuntime {
   const persistence = options.persistence
   const agentExecutor = options.agentExecutor ?? createDefaultExecutor()
@@ -158,6 +201,10 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
     email: 'workflow@hyperagent.local'
   }
   const runnerGateway = options.runnerGateway
+  const runnerRetry = {
+    maxAttempts: options.runnerRetry?.maxAttempts ?? DEFAULT_MAX_ENQUEUE_ATTEMPTS,
+    backoffMs: options.runnerRetry?.backoffMs ?? computeRetryDelayMs
+  }
 
   let workerRunning = false
   let workerPromise: Promise<void> | null = null
@@ -186,7 +233,9 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
       data: plannerRun.data ?? {}
     }
     const workflow = persistence.workflows.insert(workflowPayload)
+    ensurePlannerDependencies(plannerRun.tasks)
     const steps: WorkflowStepInput[] = plannerRun.tasks.map((task, index) => ({
+      id: task.id,
       taskId: task.id,
       sequence: index + 1,
       dependsOn: task.dependsOn ?? [],
@@ -225,7 +274,11 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
 
   async function runWorkerLoop() {
     while (workerRunning) {
-      await processReadySteps(persistence.workflowSteps)
+      try {
+        await processReadySteps(persistence.workflowSteps)
+      } catch (error) {
+        console.error('[workflow]', { action: 'worker_loop_error', error })
+      }
       await delay(pollInterval)
     }
   }
@@ -247,11 +300,48 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
     if (!latest) return
     if (latest.runnerInstanceId) return
     const runnerInstanceId = `wf-runner-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    persistence.workflowSteps.update(step.id, { runnerInstanceId })
+    persistence.workflowSteps.update(step.id, { runnerInstanceId, readyAt: null })
     try {
       await runnerGateway.enqueue({ workflowId: latest.workflowId, stepId: latest.id, runnerInstanceId })
+      console.info('[workflow]', {
+        action: 'enqueue_step',
+        workflowId: latest.workflowId,
+        stepId: latest.id,
+        runnerInstanceId
+      })
     } catch (error) {
-      persistence.workflowSteps.update(step.id, { runnerInstanceId: null })
+      const nextAttempt = (latest.runnerAttempts ?? 0) + 1
+      if (nextAttempt >= runnerRetry.maxAttempts) {
+        persistence.workflowSteps.update(step.id, {
+          status: 'failed',
+          runnerInstanceId: null,
+          runnerAttempts: nextAttempt,
+          readyAt: null,
+          result: {
+            error: 'Failed to enqueue workflow runner',
+            attempts: nextAttempt,
+            detail: error instanceof Error ? error.message : String(error)
+          }
+        })
+        refreshWorkflowStatus(latest.workflowId, persistence.workflowSteps, persistence.workflows)
+      } else {
+        const retryAt = new Date(Date.now() + runnerRetry.backoffMs(nextAttempt)).toISOString()
+        persistence.workflowSteps.update(step.id, {
+          status: 'pending',
+          runnerInstanceId: null,
+          runnerAttempts: nextAttempt,
+          readyAt: retryAt
+        })
+      }
+      console.warn('[workflow]', {
+        action: 'enqueue_step_failed',
+        workflowId: latest.workflowId,
+        stepId: latest.id,
+        runnerInstanceId,
+        attempts: nextAttempt,
+        maxAttempts: runnerRetry.maxAttempts,
+        error: error instanceof Error ? error.message : String(error)
+      })
       throw error
     }
   }
@@ -274,6 +364,12 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
     if (step.runnerInstanceId !== runnerInstanceId) {
       throw new Error('Workflow runner token mismatch')
     }
+    console.info('[workflow]', {
+      action: 'execute_step',
+      workflowId: step.workflowId,
+      stepId: step.id,
+      runnerInstanceId
+    })
     await executeStep(step)
   }
 
@@ -493,6 +589,8 @@ export const workflowsPersistence: PersistenceModule<WorkflowsBindings> = {
         data TEXT NOT NULL,
         result TEXT,
         runner_instance_id TEXT,
+        runner_attempts INTEGER NOT NULL DEFAULT 0,
+        ready_at TEXT,
         updated_at TEXT NOT NULL
       );
     `)
@@ -500,6 +598,14 @@ export const workflowsPersistence: PersistenceModule<WorkflowsBindings> = {
     const hasRunnerInstanceId = workflowStepColumns.some((column) => column.name === 'runner_instance_id')
     if (!hasRunnerInstanceId) {
       db.exec('ALTER TABLE workflow_steps ADD COLUMN runner_instance_id TEXT')
+    }
+    const hasRunnerAttempts = workflowStepColumns.some((column) => column.name === 'runner_attempts')
+    if (!hasRunnerAttempts) {
+      db.exec('ALTER TABLE workflow_steps ADD COLUMN runner_attempts INTEGER NOT NULL DEFAULT 0')
+    }
+    const hasReadyAt = workflowStepColumns.some((column) => column.name === 'ready_at')
+    if (!hasReadyAt) {
+      db.exec('ALTER TABLE workflow_steps ADD COLUMN ready_at TEXT')
     }
   },
   createBindings: ({ db }: PersistenceContext) => ({
@@ -552,23 +658,25 @@ function createWorkflowsRepository(db: Database.Database): WorkflowsRepository {
 function createWorkflowStepsRepository(db: Database.Database): WorkflowStepsRepository {
   return {
     insertMany: (workflowId, steps) => {
-      const insert = db.prepare(
-        `INSERT INTO workflow_steps (id, workflow_id, task_id, status, sequence, depends_on, data, result, runner_instance_id, updated_at)
-         VALUES (@id, @workflowId, @taskId, @status, @sequence, @dependsOn, @data, NULL, NULL, @updatedAt)`
-      )
+        const insert = db.prepare(
+         `INSERT INTO workflow_steps (id, workflow_id, task_id, status, sequence, depends_on, data, result, runner_instance_id, runner_attempts, ready_at, updated_at)
+          VALUES (@id, @workflowId, @taskId, @status, @sequence, @dependsOn, @data, NULL, NULL, @runnerAttempts, @readyAt, @updatedAt)`
+        )
       const now = new Date().toISOString()
       const records: WorkflowStepRecord[] = []
       const tx = db.transaction((batch: WorkflowStepInput[]) => {
         for (const step of batch) {
           const id = step.id ?? crypto.randomUUID()
-          insert.run({
+            insert.run({
             id,
             workflowId,
             taskId: step.taskId ?? null,
             status: 'pending',
             sequence: step.sequence,
             dependsOn: JSON.stringify(step.dependsOn ?? []),
-            data: JSON.stringify(step.data ?? {}),
+              data: JSON.stringify(step.data ?? {}),
+              runnerAttempts: 0,
+              readyAt: now,
             updatedAt: now
           })
           const row = db.prepare('SELECT * FROM workflow_steps WHERE id = ?').get(id)
@@ -585,15 +693,16 @@ function createWorkflowStepsRepository(db: Database.Database): WorkflowStepsRepo
       return rows.map(mapWorkflowStep)
     },
     findReady: (limit = 10) => {
+      const now = new Date().toISOString()
       const rows = db
         .prepare(
           `SELECT ws.*, w.status as workflow_status
            FROM workflow_steps ws
            JOIN workflows w ON ws.workflow_id = w.id
-           WHERE ws.status = 'pending'
+           WHERE ws.status = 'pending' AND (ws.ready_at IS NULL OR ws.ready_at <= ?)
            ORDER BY ws.sequence ASC`
         )
-        .all()
+        .all(now)
       const steps = (rows as Array<Record<string, unknown> & { workflow_status: WorkflowStatus }>)
         .filter((row) => row.workflow_status === 'running')
         .map(mapWorkflowStep)
@@ -621,7 +730,7 @@ function createWorkflowStepsRepository(db: Database.Database): WorkflowStepsRepo
       const res = db
         .prepare(
           `UPDATE workflow_steps
-           SET status = 'running', runner_instance_id = NULL, updated_at = ?
+           SET status = 'running', runner_instance_id = NULL, ready_at = NULL, updated_at = ?
            WHERE id = ? AND status = 'pending'`
         )
         .run(new Date().toISOString(), stepId)
@@ -635,11 +744,14 @@ function createWorkflowStepsRepository(db: Database.Database): WorkflowStepsRepo
         patch.result === undefined ? current.result : patch.result ? JSON.stringify(patch.result) : null
       const nextRunnerInstanceId =
         patch.runnerInstanceId === undefined ? (current.runner_instance_id ?? null) : patch.runnerInstanceId
+      const nextRunnerAttempts =
+        patch.runnerAttempts === undefined ? current.runner_attempts ?? 0 : patch.runnerAttempts
+      const nextReadyAt = patch.readyAt === undefined ? (current.ready_at ?? null) : patch.readyAt
       db.prepare(
         `UPDATE workflow_steps
-         SET status = ?, result = ?, runner_instance_id = ?, updated_at = ?
+         SET status = ?, result = ?, runner_instance_id = ?, runner_attempts = ?, ready_at = ?, updated_at = ?
          WHERE id = ?`
-      ).run(nextStatus, nextResult, nextRunnerInstanceId, new Date().toISOString(), stepId)
+      ).run(nextStatus, nextResult, nextRunnerInstanceId, nextRunnerAttempts, nextReadyAt, new Date().toISOString(), stepId)
     },
     getById: (stepId) => {
       const row = db.prepare('SELECT * FROM workflow_steps WHERE id = ?').get(stepId)
@@ -672,6 +784,8 @@ function mapWorkflowStep(row: any): WorkflowStepRecord {
     data: parseJsonField<Record<string, unknown>>(row.data, {}),
     result: row.result ? parseJsonField<Record<string, unknown>>(row.result, {}) : null,
     runnerInstanceId: row.runner_instance_id ?? null,
+    runnerAttempts: typeof row.runner_attempts === 'number' ? row.runner_attempts : 0,
+    readyAt: row.ready_at ?? null,
     updatedAt: row.updated_at
   }
 }
