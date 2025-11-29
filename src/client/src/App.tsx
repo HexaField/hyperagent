@@ -3,19 +3,13 @@ import { Route, Router } from '@solidjs/router'
 import { For, Show, createEffect, createResource, createSignal, onCleanup, onMount, type JSX } from 'solid-js'
 import ThemeToggle from './components/ThemeToggle'
 import { WIDGET_TEMPLATES, type WidgetAddEventDetail } from './constants/widgetTemplates'
-import type { CanvasWidgetConfig } from './core/layout/CanvasWorkspace'
 import SingleWidgetView from './core/layout/SingleWidgetView'
 import RepositoryNavigator from './core/layout/navigation/RepositoryNavigator'
 import { CanvasNavigatorContext, useCanvasNavigator } from './core/state/CanvasNavigatorContext'
 import { WorkspaceSelectionProvider } from './core/state/WorkspaceSelectionContext'
+import { type SingleWidgetViewDetail } from './core/state/singleWidgetView'
 import WorkspacePage from './pages/WorkspacePage'
 import { fetchJson } from './shared/api/httpClient'
-
-declare global {
-  interface Window {
-    __singleWidgetViewActive?: boolean
-  }
-}
 
 type RadicleStatus = {
   reachable: boolean
@@ -47,11 +41,7 @@ const AppShell = (props: RouteSectionProps) => {
 
 export default function App() {
   const [radicleStatus, { refetch: refetchRadicleStatus }] = createResource(fetchRadicleStatus)
-  const [singleState, setSingleState] = createSignal<{
-    storageKey: string
-    widgets: CanvasWidgetConfig[]
-    onRemoveWidget?: (id: string) => void
-  } | null>(null)
+  const [singleState, setSingleState] = createSignal<SingleWidgetViewDetail | null>(null)
 
   const isReady = () => {
     const status = radicleStatus()
@@ -60,16 +50,24 @@ export default function App() {
 
   onMount(() => {
     if (typeof window === 'undefined') return
-    window.__singleWidgetViewActive = Boolean(singleState())
-    const openHandler = (ev: Event) => {
-      const detail = (ev as CustomEvent).detail
-      if (!detail) return
-      setSingleState({ storageKey: detail.storageKey, widgets: detail.widgets, onRemoveWidget: detail.onRemoveWidget })
+    const applyDetail = (detail: SingleWidgetViewDetail) => {
+      setSingleState(detail)
       window.__singleWidgetViewActive = true
+      window.__pendingSingleWidgetView = null
     }
-    const closeHandler = () => {
+    const clearDetail = () => {
       setSingleState(null)
       window.__singleWidgetViewActive = false
+      window.__pendingSingleWidgetView = null
+    }
+    window.__singleWidgetViewActive = Boolean(singleState())
+    const openHandler = (ev: Event) => {
+      const detail = (ev as CustomEvent<SingleWidgetViewDetail>).detail
+      if (!detail) return
+      applyDetail(detail)
+    }
+    const closeHandler = () => {
+      clearDetail()
     }
     window.addEventListener('workspace:open-single-view', openHandler)
     window.addEventListener('workspace:close-single-view', closeHandler)
@@ -77,6 +75,10 @@ export default function App() {
       window.removeEventListener('workspace:open-single-view', openHandler)
       window.removeEventListener('workspace:close-single-view', closeHandler)
     })
+    const pending = window.__pendingSingleWidgetView
+    if (pending) {
+      applyDetail(pending)
+    }
   })
 
   return (
