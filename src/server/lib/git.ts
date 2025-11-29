@@ -1,4 +1,4 @@
-import type { GitFileChange, GitFileStashEntry } from '../../interfaces/core/git'
+import type { GitFileStashEntry } from '../../interfaces/core/git'
 
 export type { GitFileChange, GitFileStashEntry } from '../../interfaces/core/git'
 

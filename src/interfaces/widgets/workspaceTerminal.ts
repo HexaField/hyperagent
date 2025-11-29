@@ -1,8 +1,4 @@
-import type {
-  TerminalSessionListResponse,
-  TerminalSessionRecord,
-  TerminalSessionResponse
-} from '../core/terminal'
+import type { TerminalSessionListResponse, TerminalSessionRecord, TerminalSessionResponse } from '../core/terminal'
 
 export type WorkspaceTerminalSession = TerminalSessionRecord
 export type WorkspaceTerminalSessionResponse = TerminalSessionResponse

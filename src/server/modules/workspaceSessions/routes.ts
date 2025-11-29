@@ -1,4 +1,8 @@
 import { Router, type RequestHandler } from 'express'
+import type { CodingAgentCommandRunner } from '../../../../src/modules/opencodeCommandRunner'
+import type { CodingAgentRunner, CodingAgentStorage } from '../../../../src/modules/provider'
+import { runProviderInvocation } from '../../../../src/modules/providerRunner'
+import { getProviderAdapter, listProviders } from '../../../../src/modules/providers'
 import type {
   CodingAgentProvider,
   CodingAgentProviderListResponse,
@@ -8,10 +12,6 @@ import type {
   CodingAgentSessionListResponse,
   CodingAgentSessionSummary
 } from '../../../interfaces/core/codingAgent'
-import type { CodingAgentCommandRunner } from '../../../../src/modules/opencodeCommandRunner'
-import type { CodingAgentRunner, CodingAgentStorage } from '../../../../src/modules/provider'
-import { runProviderInvocation } from '../../../../src/modules/providerRunner'
-import { getProviderAdapter, listProviders } from '../../../../src/modules/providers'
 import {
   CODING_AGENT_PROVIDER_ID,
   DEFAULT_CODING_AGENT_MODEL,

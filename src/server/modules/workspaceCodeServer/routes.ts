@@ -1,7 +1,7 @@
 import { Router, type RequestHandler } from 'express'
+import type { Persistence, ProjectRecord } from '../../../../src/modules/database'
 import type { CodeServerSessionListResponse } from '../../../interfaces/core/codeServer'
 import type { DevspaceSession } from '../../../interfaces/widgets/workspaceCodeServer'
-import type { Persistence, ProjectRecord } from '../../../../src/modules/database'
 
 type WrapAsync = (handler: RequestHandler) => RequestHandler
 

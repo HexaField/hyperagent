@@ -14,7 +14,9 @@ const defaultCertPath =
   process.env.UI_TLS_CERT_PATH ||
   path.resolve(__dirname, '../../certs/hyperagent.cert.pem')
 const defaultKeyPath =
-  process.env.VITE_TLS_KEY_PATH || process.env.UI_TLS_KEY_PATH || path.resolve(__dirname, '../../certs/hyperagent.key.pem')
+  process.env.VITE_TLS_KEY_PATH ||
+  process.env.UI_TLS_KEY_PATH ||
+  path.resolve(__dirname, '../../certs/hyperagent.key.pem')
 
 const readTlsAsset = (filePath: string, label: 'certificate' | 'key') => {
   try {

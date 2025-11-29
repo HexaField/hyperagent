@@ -1133,9 +1133,7 @@ const SESSION_STATE_META: Record<SessionState, { label: string; badgeClass: stri
 function reconcileMessages(prev: CodingAgentMessage[], incoming: CodingAgentMessage[]): CodingAgentMessage[] {
   if (!incoming || incoming.length === 0) return []
   if (!prev || prev.length === 0) return incoming
-  const prevEntries = new Map(
-    prev.map((message) => [message.id, { message, signature: messageSignature(message) }])
-  )
+  const prevEntries = new Map(prev.map((message) => [message.id, { message, signature: messageSignature(message) }]))
   let changed = prev.length !== incoming.length
   const next = incoming.map((message) => {
     const prevEntry = prevEntries.get(message.id)

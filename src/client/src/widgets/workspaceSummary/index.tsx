@@ -1,7 +1,7 @@
 import { For, Show, createEffect, createMemo, createSignal } from 'solid-js'
-import DiffViewer from '../../components/DiffViewer'
 import type { GitFileChange, GitInfo } from '../../../../interfaces/core/git'
 import type { WorkspaceRecord } from '../../../../interfaces/core/projects'
+import DiffViewer from '../../components/DiffViewer'
 import {
   checkoutGitRef,
   commitGitChanges,
