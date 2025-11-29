@@ -3,7 +3,7 @@ import { cleanup, render, screen } from '@solidjs/testing-library'
 import type { MockInstance } from 'vitest'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CanvasNavigatorContext, type CanvasNavigatorController } from '../../core/state/CanvasNavigatorContext'
-import type { WorkspaceRecord } from '../../../../src/interfaces/core/projects'
+import type { WorkspaceRecord } from '../../../../interfaces/core/projects'
 import WorkspacePage from '../WorkspacePage'
 
 const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

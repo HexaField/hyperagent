@@ -1,4 +1,4 @@
-import type { TerminalSessionListResponse, TerminalSessionRecord, TerminalSessionResponse } from '../../../../src/interfaces/core/terminal'
+import type { TerminalSessionListResponse, TerminalSessionRecord, TerminalSessionResponse } from '../../../../interfaces/core/terminal'
 import { fetchJson } from './httpClient'
 
 export type TerminalSession = TerminalSessionRecord

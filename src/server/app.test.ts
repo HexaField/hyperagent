@@ -291,7 +291,7 @@ async function createIntegrationHarness(options?: {
   publicOrigin?: string
   opencodeStorage?: OpencodeStorage
   opencodeRunner?: OpencodeRunner
-  opencodeCommandRunner?: CreateServerOptions['opencodeCommandRunner']
+  opencodeCommandRunner?: CreateServerOptions['codingAgentCommandRunner']
   webSockets?: {
     WebSocket: typeof WebSocketType
     WebSocketServer: typeof WebSocketServerType

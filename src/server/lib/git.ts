@@ -1,6 +1,6 @@
-import type { GitFileChange, GitFileStashEntry } from '../../../src/interfaces/core/git'
+import type { GitFileChange, GitFileStashEntry } from '../../interfaces/core/git'
 
-export type { GitFileChange, GitFileStashEntry } from '../../../src/interfaces/core/git'
+export type { GitFileChange, GitFileStashEntry } from '../../interfaces/core/git'
 
 export const FILE_STASH_PREFIX = 'hyperagent:file:'
 

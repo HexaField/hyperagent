@@ -6,7 +6,7 @@ import type {
   CodingAgentSessionDetail,
   CodingAgentSessionListResponse,
   CodingAgentSessionSummary
-} from '../../../src/interfaces/core/codingAgent'
+} from '../../../interfaces/core/codingAgent'
 import { fetchJson } from '../shared/api/httpClient'
 
 export type {
@@ -17,7 +17,7 @@ export type {
   CodingAgentRunRecord,
   CodingAgentSessionDetail,
   CodingAgentSessionSummary
-} from '../../../src/interfaces/core/codingAgent'
+} from '../../../interfaces/core/codingAgent'
 
 export async function fetchCodingAgentProviders(): Promise<CodingAgentProvider[]> {
   try {

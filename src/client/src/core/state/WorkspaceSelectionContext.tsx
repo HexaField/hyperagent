@@ -1,6 +1,6 @@
 import { useSearchParams } from '@solidjs/router'
 import { Accessor, Component, JSX, createContext, createEffect, createMemo, createResource, useContext } from 'solid-js'
-import type { ProjectListResponse, WorkspaceRecord } from '../../../../src/interfaces/core/projects'
+import type { ProjectListResponse, WorkspaceRecord } from '../../../../interfaces/core/projects'
 import { fetchJson } from '../../shared/api/httpClient'
 
 export type { WorkspaceRecord }

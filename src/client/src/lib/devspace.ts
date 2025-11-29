@@ -1,7 +1,7 @@
-import type { DevspaceSession } from '../../../src/interfaces/widgets/workspaceCodeServer'
+import type { DevspaceSession } from '../../../interfaces/widgets/workspaceCodeServer'
 import { fetchJson } from '../shared/api/httpClient'
 
-export type { DevspaceSession } from '../../../src/interfaces/widgets/workspaceCodeServer'
+export type { DevspaceSession } from '../../../interfaces/widgets/workspaceCodeServer'
 
 export async function ensureWorkspaceDevspace(projectId: string): Promise<DevspaceSession> {
   const trimmed = projectId?.trim()

@@ -7,7 +7,7 @@ import type {
   CodingAgentSessionDetail,
   CodingAgentSessionListResponse,
   CodingAgentSessionSummary
-} from '../../../../src/interfaces/core/codingAgent'
+} from '../../../interfaces/core/codingAgent'
 import type { CodingAgentCommandRunner } from '../../../../src/modules/opencodeCommandRunner'
 import type { CodingAgentRunner, CodingAgentStorage } from '../../../../src/modules/provider'
 import { runProviderInvocation } from '../../../../src/modules/providerRunner'

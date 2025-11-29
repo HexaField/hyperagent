@@ -1,4 +1,4 @@
-import type { GitInfo, GitStateResponse } from '../../../src/interfaces/core/git'
+import type { GitInfo, GitStateResponse } from '../../../interfaces/core/git'
 import { fetchJson } from '../shared/api/httpClient'
 
 type GitResponse = GitStateResponse

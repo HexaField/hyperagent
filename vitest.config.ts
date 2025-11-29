@@ -8,7 +8,10 @@ export default defineConfig({
     passWithNoTests: true,
     exclude: ['node_modules/**', 'dist/**', 'external/**', '**/.{tmp,temp}/**', '**/.tmp/**', '**/.tests/**'],
     environment: 'node',
-    environmentMatchGlobs: [['web/**', 'jsdom']],
+    environmentMatchGlobs: [
+      ['web/**', 'jsdom'],
+      ['src/client/**', 'jsdom']
+    ],
     setupFiles: ['./vitest.setup.ts']
   },
   server: {

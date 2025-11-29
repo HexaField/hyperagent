@@ -2,7 +2,7 @@ import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from
 import { WIDGET_TEMPLATES, type WidgetAddEventDetail, type WidgetTemplateId } from '../constants/widgetTemplates'
 import CanvasWorkspace, { type CanvasWidgetConfig } from '../core/layout/CanvasWorkspace'
 import { useCanvasNavigator, type CanvasNavigatorController } from '../core/state/CanvasNavigatorContext'
-import type { WorkspaceRecord } from '../../../src/interfaces/core/projects'
+import type { WorkspaceRecord } from '../../../interfaces/core/projects'
 import { useWorkspaceSelection } from '../core/state/WorkspaceSelectionContext'
 import { getWidgetDefinition } from '../widgets/registry'
 

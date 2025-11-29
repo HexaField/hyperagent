@@ -41,7 +41,7 @@ import { createAgentWorkflowExecutor } from '../../../src/modules/workflowAgentE
 import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
-import type { GitFileChange, GitFileStashEntry, GitInfo } from '../../../src/interfaces/core/git'
+import type { GitFileChange, GitFileStashEntry, GitInfo } from '../../interfaces/core/git'
 import { parseGitStashList } from '../lib/git'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
 import { createWorkspaceSessionsRouter } from '../modules/workspaceSessions/routes'
