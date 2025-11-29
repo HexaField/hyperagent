@@ -1,0 +1,64 @@
+import type { TerminalSessionListResponse, TerminalSessionRecord, TerminalSessionResponse } from '../../../../src/interfaces/core/terminal'
+import { fetchJson } from './httpClient'
+
+export type TerminalSession = TerminalSessionRecord
+
+export type CreateTerminalSessionInput = {
+  cwd?: string
+  shell?: string
+  projectId?: string | null
+}
+
+export async function listTerminalSessions(projectId?: string | null): Promise<TerminalSession[]> {
+  const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''
+  const payload = await fetchJson<TerminalSessionListResponse>(`/api/terminal/sessions${query}`)
+  return payload.sessions
+}
+
+export async function createTerminalSession(input: CreateTerminalSessionInput = {}): Promise<TerminalSession> {
+  const payload = await fetchJson<TerminalSessionResponse>('/api/terminal/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input)
+  })
+  return payload.session
+}
+
+export async function closeTerminalSession(sessionId: string): Promise<void> {
+  const response = await fetch(`/api/terminal/sessions/${sessionId}`, { method: 'DELETE' })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || 'Failed to close terminal session')
+  }
+}
+
+export function createTerminalWebSocket(sessionId: string): WebSocket {
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  const url = `${protocol}://${window.location.host}/ws/terminal/${sessionId}`
+  // Instrumentation: log WS lifecycle for easier debugging across proxies/load balancers
+  try {
+    console.info(`[WS] terminal.connect start session=${sessionId} protocol=${window.location.protocol} url=${url}`)
+  } catch {
+    // no-op in environments where console isn't available
+  }
+  const ws = new WebSocket(url)
+  try {
+    ws.addEventListener('open', () => {
+      console.info(`[WS] terminal.open session=${sessionId} url=${url}`)
+    })
+    ws.addEventListener('message', (event) => {
+      const data = event.data
+      const snippet = typeof data === 'string' ? data.substring(0, 200) : ''
+      console.info(`[WS] terminal.message session=${sessionId} data=${snippet}`)
+    })
+    ws.addEventListener('close', (ev) => {
+      console.info(`[WS] terminal.close session=${sessionId} code=${ev.code} reason=${ev.reason}`)
+    })
+    ws.addEventListener('error', (ev) => {
+      console.info(`[WS] terminal.error session=${sessionId} event=${ev}`)
+    })
+  } catch {
+    // ignore instrumentation failures
+  }
+  return ws
+}

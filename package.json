@@ -4,10 +4,7 @@
   "description": "A self recursive AI agent framework and collaboration workspace",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
     "format": "prettier --write .",
-    "dev": "NODE_ENV=development ts-node-dev --respawn --transpile-only src/index.ts --watch src",
     "lint": "eslint . --ext .ts",
     "check-errors": "tsc --noEmit",
     "test": "vitest run",
@@ -20,8 +17,8 @@
     "storybook:build": "storybook build -c .storybook",
     "storybook:test": "test-storybook -c .storybook",
     "certs:generate": "node scripts/generate-certs.js",
-    "ui:server": "ts-node-dev --respawn --transpile-only --project ui/server/tsconfig.json ui/server/index.ts",
-    "ui:web": "vite --config web/vite.config.ts",
+    "ui:server": "ts-node-dev --respawn --transpile-only --project src/server/tsconfig.json src/server/index.ts",
+    "ui:web": "vite --config src/client/vite.config.ts",
     "ui:dev": "concurrently -k -n server,web -c green,cyan \"npm:ui:server\" \"npm:ui:web\""
   },
   "author": "",
