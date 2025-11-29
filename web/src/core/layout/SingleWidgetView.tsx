@@ -1,6 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import ThemeToggle from '../../components/ThemeToggle'
 import { WIDGET_TEMPLATES } from '../../constants/widgetTemplates'
-import ThemeToggle from '../ThemeToggle'
 import type { CanvasWidgetConfig } from './CanvasWorkspace'
 
 export type SingleWidgetViewProps = {
@@ -171,27 +171,27 @@ export default function SingleWidgetView(props: SingleWidgetViewProps) {
                   onClick={() => setWidgetMenuOpen(false)}
                 />
                 <div class="fixed left-0 right-0 top-12 z-50 max-w-none border-t border-b border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-lg">
-                  <For each={WIDGET_TEMPLATES}>{(template) => (
-                    <button
-                      type="button"
-                      class="w-full rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--bg-muted)]"
-                      onClick={() => {
-                        openSingleWidgetByTemplate(template.id)
-                        setWidgetMenuOpen(false)
-                      }}
-                    >
-                      {template.label}
-                    </button>
-                  )}</For>
+                  <For each={WIDGET_TEMPLATES}>
+                    {(template) => (
+                      <button
+                        type="button"
+                        class="w-full rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--bg-muted)]"
+                        onClick={() => {
+                          openSingleWidgetByTemplate(template.id)
+                          setWidgetMenuOpen(false)
+                        }}
+                      >
+                        {template.label}
+                      </button>
+                    )}
+                  </For>
                 </div>
               </>
             </Show>
           </div>
         </div>
 
-        <div class="flex-1 text-center text-sm font-semibold">
-          {selectedWidget() ? selectedWidget()!.title : ''}
-        </div>
+        <div class="flex-1 text-center text-sm font-semibold">{selectedWidget() ? selectedWidget()!.title : ''}</div>
 
         <div class="flex w-1/4 items-center justify-end gap-2">
           <div class="relative">

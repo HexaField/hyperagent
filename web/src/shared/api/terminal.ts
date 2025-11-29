@@ -1,4 +1,4 @@
-import { fetchJson } from './http'
+import { fetchJson } from './httpClient'
 
 export type TerminalSession = {
   id: string

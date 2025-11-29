@@ -1,8 +1,8 @@
 import { Route, Router } from '@solidjs/router'
 import { cleanup, fireEvent, render, screen, waitFor } from '@solidjs/testing-library'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { WorkspaceSelectionProvider } from '../../../contexts/WorkspaceSelectionContext'
-import { fetchJson } from '../../../lib/http'
+import { fetchJson } from '../../../../shared/api/httpClient'
+import { WorkspaceSelectionProvider } from '../../../state/WorkspaceSelectionContext'
 import RepositoryNavigator from '../RepositoryNavigator'
 
 type ProjectPayload = {
@@ -21,7 +21,7 @@ type RadicleEntryPayload = {
   git: Record<string, unknown> | null
 }
 
-vi.mock('../../../lib/http', () => ({
+vi.mock('../../../../shared/api/httpClient', () => ({
   fetchJson: vi.fn()
 }))
 

@@ -1,5 +1,5 @@
 import { Show, createSignal } from 'solid-js'
-import { fetchJson } from '../lib/http'
+import { fetchJson } from '../shared/api/httpClient'
 
 type WorkflowLaunchModalProps = {
   projectId: string

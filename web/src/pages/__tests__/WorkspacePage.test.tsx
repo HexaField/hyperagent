@@ -2,8 +2,8 @@ import { Route, Router } from '@solidjs/router'
 import { cleanup, render, screen } from '@solidjs/testing-library'
 import type { MockInstance } from 'vitest'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CanvasNavigatorContext, type CanvasNavigatorController } from '../../contexts/CanvasNavigatorContext'
-import type { WorkspaceRecord } from '../../contexts/WorkspaceSelectionContext'
+import { CanvasNavigatorContext, type CanvasNavigatorController } from '../../core/state/CanvasNavigatorContext'
+import type { WorkspaceRecord } from '../../core/state/WorkspaceSelectionContext'
 import WorkspacePage from '../WorkspacePage'
 
 const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -70,7 +70,7 @@ const selectionMock = {
   refetchWorkspaces: vi.fn(async () => selectionState.workspaces)
 }
 
-vi.mock('../../contexts/WorkspaceSelectionContext', () => ({
+vi.mock('../../core/state/WorkspaceSelectionContext', () => ({
   useWorkspaceSelection: () => selectionMock
 }))
 
@@ -163,7 +163,7 @@ describe('WorkspacePage', () => {
     expect(openSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('renders the active workspace summary when one is selected', () => {
+  it('renders the active workspace summary when one is selected', async () => {
     const workspace: WorkspaceRecord = {
       id: 'w1',
       name: 'Test Workspace',
@@ -174,9 +174,11 @@ describe('WorkspacePage', () => {
     }
     setSelectionState({ workspaces: [workspace], currentWorkspace: workspace, isLoading: false })
     renderPage()
-    expect(screen.getByText(workspace.name)).toBeTruthy()
-    expect(screen.getAllByText(workspace.repositoryPath).length).toBeGreaterThan(0)
-    screen.getByRole('button', { name: /manage workspaces/i }).click()
+    await screen.findByText(workspace.name)
+    const pathInstances = await screen.findAllByText(workspace.repositoryPath)
+    expect(pathInstances.length).toBeGreaterThan(0)
+    const manageButton = await screen.findByRole('button', { name: /manage workspaces/i })
+    manageButton.click()
     expect(openSpy).toHaveBeenCalledTimes(1)
   })
 })

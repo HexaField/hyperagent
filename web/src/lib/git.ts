@@ -1,5 +1,5 @@
+import { fetchJson } from '../shared/api/httpClient'
 import type { GitInfo } from '../types/git'
-import { fetchJson } from './http'
 
 type GitResponse = {
   git: GitInfo | null

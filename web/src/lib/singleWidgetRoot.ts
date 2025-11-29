@@ -1,5 +1,5 @@
 import { createSignal } from 'solid-js'
-import type { CanvasWidgetConfig } from '../components/layout/CanvasWorkspace'
+import type { CanvasWidgetConfig } from '../core/layout/CanvasWorkspace'
 
 export type SingleViewState = {
   storageKey: string

@@ -1,9 +1,9 @@
 import { render, screen, waitFor } from '@solidjs/testing-library'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fetchJson } from '../../lib/http'
+import { fetchJson } from '../../shared/api/httpClient'
 import WorkflowDetailView from '../WorkflowDetailView'
 
-vi.mock('../../lib/http', () => ({
+vi.mock('../../shared/api/httpClient', () => ({
   fetchJson: vi.fn()
 }))
 

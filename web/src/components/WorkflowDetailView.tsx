@@ -1,6 +1,6 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal } from 'solid-js'
-import { fetchJson } from '../lib/http'
+import { fetchJson } from '../shared/api/httpClient'
 import DiffViewer from './DiffViewer'
 
 type WorkflowRecord = {

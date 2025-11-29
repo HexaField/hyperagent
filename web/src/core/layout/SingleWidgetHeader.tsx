@@ -1,6 +1,6 @@
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js'
+import ThemeToggle from '../../components/ThemeToggle'
 import { WIDGET_TEMPLATES } from '../../constants/widgetTemplates'
-import ThemeToggle from '../ThemeToggle'
 
 export type SingleWidgetHeaderProps = {
   title?: () => string

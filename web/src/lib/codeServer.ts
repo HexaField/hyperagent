@@ -1,4 +1,4 @@
-import { fetchJson } from './http'
+import { fetchJson } from '../shared/api/httpClient'
 
 export type CodeServerSession = {
   id: string

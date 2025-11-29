@@ -1,7 +1,7 @@
 import { useSearchParams } from '@solidjs/router'
 import { Accessor, Component, JSX, createContext, createEffect, createMemo, createResource, useContext } from 'solid-js'
-import { fetchJson } from '../shared/api/httpClient'
-import type { GitInfo } from '../types/git'
+import { fetchJson } from '../../shared/api/httpClient'
+import type { GitInfo } from '../../types/git'
 
 export type WorkspaceRecord = {
   id: string

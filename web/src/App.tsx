@@ -1,15 +1,15 @@
 import type { RouteSectionProps } from '@solidjs/router'
 import { Route, Router } from '@solidjs/router'
 import { For, Show, createEffect, createResource, createSignal, onCleanup, onMount, type JSX } from 'solid-js'
-import type { CanvasWidgetConfig } from './components/layout/CanvasWorkspace'
-import SingleWidgetView from './components/layout/SingleWidgetView'
-import RepositoryNavigator from './components/navigation/RepositoryNavigator'
 import ThemeToggle from './components/ThemeToggle'
 import { WIDGET_TEMPLATES, type WidgetAddEventDetail } from './constants/widgetTemplates'
-import { CanvasNavigatorContext, useCanvasNavigator } from './contexts/CanvasNavigatorContext'
-import { WorkspaceSelectionProvider } from './contexts/WorkspaceSelectionContext'
-import { fetchJson } from './lib/http'
+import type { CanvasWidgetConfig } from './core/layout/CanvasWorkspace'
+import SingleWidgetView from './core/layout/SingleWidgetView'
+import RepositoryNavigator from './core/layout/navigation/RepositoryNavigator'
+import { CanvasNavigatorContext, useCanvasNavigator } from './core/state/CanvasNavigatorContext'
+import { WorkspaceSelectionProvider } from './core/state/WorkspaceSelectionContext'
 import WorkspacePage from './pages/WorkspacePage'
+import { fetchJson } from './shared/api/httpClient'
 
 declare global {
   interface Window {

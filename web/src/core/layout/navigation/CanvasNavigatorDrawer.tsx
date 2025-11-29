@@ -1,5 +1,5 @@
 import { Show } from 'solid-js'
-import { useCanvasNavigator } from '../../contexts/CanvasNavigatorContext'
+import { useCanvasNavigator } from '../../state/CanvasNavigatorContext'
 import RepositoryNavigator from './RepositoryNavigator'
 
 export default function CanvasNavigatorDrawer() {

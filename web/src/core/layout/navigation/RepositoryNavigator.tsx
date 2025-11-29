@@ -1,9 +1,9 @@
 import { useSearchParams } from '@solidjs/router'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onMount } from 'solid-js'
-import { useWorkspaceSelection } from '../../contexts/WorkspaceSelectionContext'
-import { fetchJson } from '../../lib/http'
-import { buildSessionWorkflowPayload } from '../../lib/sessions'
-import type { GitInfo } from '../../types/git'
+import { buildSessionWorkflowPayload } from '../../../lib/sessions'
+import { fetchJson } from '../../../shared/api/httpClient'
+import type { GitInfo } from '../../../types/git'
+import { useWorkspaceSelection } from '../../state/WorkspaceSelectionContext'
 
 const BROWSER_PAGE_SIZE = 10
 const BROWSER_STATE_STORAGE_KEY = 'hyperagent:repoBrowser'
