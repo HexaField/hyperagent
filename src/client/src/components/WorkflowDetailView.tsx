@@ -2,6 +2,9 @@ import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup } from 'solid-js'
 import { fetchJson } from '../shared/api/httpClient'
 import DiffViewer from './DiffViewer'
+import type { WorkflowLogEntry } from '../../../interfaces/workflows/logs'
+
+const MAX_LIVE_LOGS = 400
 
 type WorkflowRecord = {
   id: string
@@ -140,6 +143,11 @@ type WorkflowEventsPayload = {
   events: WorkflowRunnerEvent[]
 }
 
+type WorkflowLogsPayload = {
+  workflowId: string
+  entries: WorkflowLogEntry[]
+}
+
 type WorkspaceEntry = {
   name: string
   kind: 'file' | 'directory'
@@ -164,6 +172,7 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
   const [diffError, setDiffError] = createSignal<string | null>(null)
   const [provenanceOpen, setProvenanceOpen] = createSignal(false)
   const [provenanceError, setProvenanceError] = createSignal<string | null>(null)
+  const [logEntries, setLogEntries] = createSignal<WorkflowLogEntry[]>([])
 
   createEffect(() => {
     // reset local state when workflow changes
@@ -172,6 +181,7 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
     setDiffError(null)
     setProvenanceOpen(false)
     setProvenanceError(null)
+    setLogEntries([])
   })
 
   const [detail, { refetch: refetchDetail }] = createResource(
@@ -190,6 +200,25 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
     }
   )
 
+  const [logsSnapshot] = createResource(
+    () => props.workflowId,
+    async (workflowId) => {
+      if (!workflowId) return null
+      return await fetchJson<WorkflowLogsPayload>(`/api/workflows/${workflowId}/logs`)
+    }
+  )
+
+  createEffect(() => {
+    const snapshot = logsSnapshot()
+    if (!snapshot) return
+    if (!snapshot.entries) {
+      setLogEntries([])
+      return
+    }
+    const sliced = snapshot.entries?.length ? snapshot.entries.slice(-MAX_LIVE_LOGS) : []
+    setLogEntries(sliced)
+  })
+
   createEffect(() => {
     const workflowId = props.workflowId
     const summary = detail()
@@ -204,6 +233,41 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
       void refetchRunnerEvents()
     }, 2000)
     onCleanup(() => clearInterval(timer))
+  })
+
+  createEffect(() => {
+    const workflowId = props.workflowId
+    if (!workflowId) {
+      return
+    }
+    if (typeof window === 'undefined' || typeof window.EventSource === 'undefined') {
+      return
+    }
+    const source = new window.EventSource(`/api/workflows/${workflowId}/logs/stream`, {
+      withCredentials: true
+    })
+    const handleLog = (event: MessageEvent<string>) => {
+      try {
+        const entry = JSON.parse(event.data) as WorkflowLogEntry
+        setLogEntries((prev) => {
+          const next = [...prev, entry]
+          if (next.length > MAX_LIVE_LOGS) {
+            return next.slice(next.length - MAX_LIVE_LOGS)
+          }
+          return next
+        })
+      } catch {
+        // ignore malformed log events
+      }
+    }
+    source.addEventListener('log', handleLog as EventListener)
+    source.onerror = () => {
+      // rely on native EventSource retry logic
+    }
+    onCleanup(() => {
+      source.removeEventListener('log', handleLog as EventListener)
+      source.close()
+    })
   })
 
   const workflowRecord = () => detail()?.workflow ?? null
@@ -268,6 +332,11 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
     const stepId = selectedStepId()
     if (!stepId) return []
     return runnerEventList().filter((event) => event.stepId === stepId)
+  })
+  const selectedLogs = createMemo(() => {
+    const stepId = selectedStepId()
+    if (!stepId) return []
+    return logEntries().filter((entry) => entry.stepId === stepId)
   })
   const changedFiles = createMemo(() => selectedCommit()?.changedFiles ?? [])
 
@@ -527,6 +596,45 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                   )}
                 </For>
               </ul>
+            </Show>
+          </section>
+
+          <section class="flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
+            <header class="space-y-1">
+              <h2 class="text-lg font-semibold text-[var(--text)]">Live logs</h2>
+              <p class="text-xs text-[var(--text-muted)]">
+                Live agent and runner output will stream here while the step is executing.
+              </p>
+            </header>
+            <Show
+              when={selectedLogs().length > 0}
+              fallback={<p class="text-sm text-[var(--text-muted)]">Logs will appear when the runner container starts.</p>}
+            >
+              <div class="h-64 overflow-auto rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-3">
+                <ul class="flex flex-col gap-2 text-xs font-mono">
+                  <For each={selectedLogs()}>
+                    {(entry) => (
+                      <li class="space-y-1">
+                        <div class="flex flex-wrap items-center gap-2 text-[var(--text-muted)]">
+                          <span>{formatLogClock(entry.timestamp)}</span>
+                          <span
+                            class="rounded-full px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide"
+                            classList={{
+                              'bg-blue-500/20 text-blue-200': entry.source === 'agent',
+                              'bg-[var(--bg-card)] text-[var(--text-muted)]': entry.source === 'runner'
+                            }}
+                          >
+                            {describeLogBadge(entry)}
+                          </span>
+                        </div>
+                        <p class="whitespace-pre-wrap text-[var(--text)]">
+                          {entryMessage(entry)}
+                        </p>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </div>
             </Show>
           </section>
 
@@ -793,4 +901,32 @@ function formatTimestamp(value?: string | null): string {
     return String(value)
   }
   return date.toLocaleString()
+}
+
+function describeLogBadge(entry: WorkflowLogEntry): string {
+  if (entry.source === 'agent') {
+    const role = entry.role === 'worker' ? 'Worker' : 'Verifier'
+    return `${role} · R${entry.round}`
+  }
+  return `Runner · ${entry.stream}`
+}
+
+function entryMessage(entry: WorkflowLogEntry): string {
+  if (entry.source === 'agent') {
+    return entry.chunk
+  }
+  return entry.message
+}
+
+function formatLogClock(value?: string | null): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+  return date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
 }

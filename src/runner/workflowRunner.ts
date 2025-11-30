@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
-import { runVerifierWorkerLoop } from '../modules/agent'
+import { runVerifierWorkerLoop, type AgentStreamCallback } from '../modules/agent'
 import { createPersistence } from '../modules/database'
 import { detectGitAuthorFromCli } from '../modules/gitAuthor'
 import type { Provider } from '../modules/llm'
@@ -131,6 +131,38 @@ const runnerLogger = (event: string, metadata?: Record<string, unknown>) => {
     return
   }
   console.log(`[workflow-runner] ${event}`)
+}
+
+const AGENT_STREAM_PREFIX = '[agent-stream]'
+
+const createAgentStreamLogger = (
+  workflowId: string,
+  stepId: string,
+  runnerInstanceId: string
+): AgentStreamCallback => {
+  return (event) => {
+    try {
+      const payload = {
+        event: 'agent.stream',
+        workflowId,
+        stepId,
+        runnerInstanceId,
+        timestamp: new Date().toISOString(),
+        data: {
+          role: event.role,
+          round: event.round,
+          chunk: event.chunk,
+          provider: event.provider,
+          model: event.model,
+          attempt: event.attempt,
+          sessionId: event.sessionId ?? null
+        }
+      }
+      console.log(`${AGENT_STREAM_PREFIX} ${JSON.stringify(payload)}`)
+    } catch (error) {
+      runnerErrorLogger('agent_stream_log_failed', error, { workflowId, stepId })
+    }
+  }
 }
 
 const runnerErrorLogger = (event: string, error: unknown, metadata?: Record<string, unknown>) => {
@@ -304,7 +336,8 @@ async function main() {
               runLoop: runVerifierWorkerLoop,
               provider: agentOptions!.provider,
               model: agentOptions!.model,
-              maxRounds: agentOptions!.maxRounds
+              maxRounds: agentOptions!.maxRounds,
+              onStream: createAgentStreamLogger(workflowId, stepId, runnerInstanceId)
             }
           }),
     policy: workflowPolicy

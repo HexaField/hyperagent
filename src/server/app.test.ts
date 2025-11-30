@@ -1143,6 +1143,12 @@ describe('createServerApp', () => {
       const eventsPayload = await eventsResponse.json()
       expect(eventsPayload.workflowId).toBe(workflowId)
       expect(Array.isArray(eventsPayload.events)).toBe(true)
+
+      const logsResponse = await fetch(`${harness.baseUrl}/api/workflows/${workflowId}/logs`)
+      expect(logsResponse.status).toBe(200)
+      const logsPayload = await logsResponse.json()
+      expect(logsPayload.workflowId).toBe(workflowId)
+      expect(Array.isArray(logsPayload.entries)).toBe(true)
     } finally {
       await harness.close()
     }

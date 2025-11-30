@@ -49,6 +49,7 @@ import { createWorkspaceSessionsRouter } from '../modules/workspaceSessions/rout
 import { createWorkspaceSummaryRouter } from '../modules/workspaceSummary/routes'
 import { createWorkspaceTerminalModule } from '../modules/workspaceTerminal/module'
 import { createWorkspaceWorkflowsRouter } from '../modules/workspaceWorkflows/routes'
+import { createWorkflowLogStream } from '../modules/workspaceWorkflows/logStream'
 import {
   CODE_SERVER_HOST,
   DEFAULT_PORT,
@@ -319,6 +320,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   }
 
   const workflowPolicy = createWorkflowPolicyFromEnv(process.env)
+  const workflowLogStream = createWorkflowLogStream()
 
   const workflowCallbackBaseUrl =
     process.env.WORKFLOW_CALLBACK_BASE_URL ?? `https://host.docker.internal:${defaultPort}`
@@ -331,7 +333,16 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       callbackBaseUrl: workflowCallbackBaseUrl,
       callbackToken: workflowRunnerToken ?? undefined,
       timeoutMs: process.env.WORKFLOW_RUNNER_TIMEOUT ? Number(process.env.WORKFLOW_RUNNER_TIMEOUT) : undefined,
-      caCertPath: process.env.WORKFLOW_RUNNER_CA_PATH ?? defaultCertPath
+      caCertPath: process.env.WORKFLOW_RUNNER_CA_PATH ?? defaultCertPath,
+      onLog: (event) => {
+        workflowLogStream.ingestRunnerChunk({
+          workflowId: event.workflowId,
+          stepId: event.stepId,
+          runnerInstanceId: event.runnerInstanceId,
+          stream: event.stream,
+          line: event.line
+        })
+      }
     })
 
   const pullRequestModule = createPullRequestModule({
@@ -1384,7 +1395,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     workflowRuntime,
     persistence,
     runGitCommand,
-    validateWorkflowRunnerToken
+    validateWorkflowRunnerToken,
+    workflowLogStream
   })
 
   const workspaceCodeServerRouter = createWorkspaceCodeServerRouter({

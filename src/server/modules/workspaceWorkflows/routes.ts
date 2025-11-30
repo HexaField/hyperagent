@@ -1,8 +1,10 @@
-import { Router, type Request, type RequestHandler } from 'express'
+import { Router, type Request, type RequestHandler, type Response } from 'express'
 import fs from 'fs/promises'
 import path from 'path'
 import type { Persistence } from '../../../../src/modules/database'
 import type { PlannerRun, PlannerTask, WorkflowDetail, WorkflowRuntime } from '../../../../src/modules/workflows'
+import { createWorkflowLogStream, type WorkflowLogStream } from './logStream'
+import type { WorkflowLogsResponse } from '../../../interfaces/workflows/logs'
 
 type WrapAsync = (handler: RequestHandler) => RequestHandler
 
@@ -14,10 +16,18 @@ export type WorkspaceWorkflowsDeps = {
   persistence: WorkspaceWorkflowsPersistence
   runGitCommand: (args: string[], cwd: string) => Promise<string>
   validateWorkflowRunnerToken: (req: Request) => boolean
+  workflowLogStream?: WorkflowLogStream
 }
 
 export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => {
-  const { wrapAsync, workflowRuntime, persistence, runGitCommand, validateWorkflowRunnerToken } = deps
+  const {
+    wrapAsync,
+    workflowRuntime,
+    persistence,
+    runGitCommand,
+    validateWorkflowRunnerToken,
+    workflowLogStream = createWorkflowLogStream()
+  } = deps
   const router = Router()
 
   const logWorkflow = (message: string, metadata?: Record<string, unknown>) => {
@@ -257,6 +267,76 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
     res.json({ workflowId, events })
   }
 
+  const workflowLogsHandler: RequestHandler = (req, res) => {
+    const workflowId = req.params.workflowId
+    if (!workflowId) {
+      res.status(400).json({ error: 'workflowId is required' })
+      return
+    }
+    const detail = workflowRuntime.getWorkflowDetail(workflowId)
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown workflow' })
+      return
+    }
+    const payload: WorkflowLogsResponse = {
+      workflowId,
+      entries: workflowLogStream.getWorkflowLogs(workflowId)
+    }
+    logWorkflow('Workflow logs requested', {
+      workflowId,
+      entryCount: payload.entries.length
+    })
+    res.json(payload)
+  }
+
+  const sendSsePayload = (res: Response, event: string, data: unknown) => {
+    res.write(`event: ${event}\n`)
+    res.write(`data: ${JSON.stringify(data)}\n\n`)
+  }
+
+  const workflowLogsStreamHandler: RequestHandler = (req, res) => {
+    const workflowId = req.params.workflowId
+    if (!workflowId) {
+      res.status(400).json({ error: 'workflowId is required' })
+      return
+    }
+    const detail = workflowRuntime.getWorkflowDetail(workflowId)
+    if (!detail) {
+      res.status(404).json({ error: 'Unknown workflow' })
+      return
+    }
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    ;(res as any).flushHeaders?.()
+
+    const initial = workflowLogStream.getWorkflowLogs(workflowId)
+    initial.forEach((entry) => sendSsePayload(res, 'log', entry))
+
+    const subscriber = (entry: WorkflowLogsResponse['entries'][number]) => {
+      if (entry.workflowId !== workflowId) return
+      sendSsePayload(res, 'log', entry)
+    }
+
+    const unsubscribe = workflowLogStream.subscribe(workflowId, subscriber)
+    const heartbeat = setInterval(() => {
+      res.write(': heartbeat\n\n')
+    }, 15000)
+
+    const cleanup = () => {
+      clearInterval(heartbeat)
+      unsubscribe()
+      try {
+        res.end()
+      } catch {
+        // ignore
+      }
+    }
+
+    req.on('close', cleanup)
+    req.on('error', cleanup)
+  }
+
   const workflowRunnerCallbackHandler: RequestHandler = async (req, res) => {
     const workflowId = req.params.workflowId
     const stepId = req.params.stepId
@@ -421,6 +501,8 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
   router.post('/api/workflows/:workflowId/start', wrapAsync(startWorkflowHandler))
   router.get('/api/workflows/:workflowId', wrapAsync(workflowDetailHandler))
   router.get('/api/workflows/:workflowId/events', wrapAsync(workflowEventsHandler))
+  router.get('/api/workflows/:workflowId/logs', wrapAsync(workflowLogsHandler))
+  router.get('/api/workflows/:workflowId/logs/stream', workflowLogsStreamHandler)
   router.post('/api/workflows/:workflowId/steps/:stepId/callback', wrapAsync(workflowRunnerCallbackHandler))
   router.get('/api/workflows/:workflowId/steps/:stepId/diff', wrapAsync(workflowStepDiffHandler))
   router.get('/api/workflows/:workflowId/steps/:stepId/provenance', wrapAsync(workflowStepProvenanceHandler))

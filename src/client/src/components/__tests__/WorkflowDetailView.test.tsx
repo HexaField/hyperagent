@@ -24,6 +24,21 @@ describe('WorkflowDetailView', () => {
       message: 'refactor',
       diffText: 'diff --git a/file.ts b/file.ts\n@@ -0,0 +1 @@\n+hello'
     }
+    const logsPayload = {
+      workflowId: 'wf-1',
+      entries: [
+        {
+          id: 'log-1',
+          workflowId: 'wf-1',
+          stepId: 'step-1',
+          runnerInstanceId: 'runner-1',
+          source: 'runner' as const,
+          stream: 'stdout' as const,
+          message: 'Runner boot sequence',
+          timestamp: new Date().toISOString()
+        }
+      ]
+    }
     const eventsPayload = {
       workflowId: 'wf-1',
       events: [
@@ -64,6 +79,9 @@ describe('WorkflowDetailView', () => {
       if (input === '/api/workflows/wf-1/events') {
         return Promise.resolve(eventsPayload)
       }
+      if (input === '/api/workflows/wf-1/logs') {
+        return Promise.resolve(logsPayload)
+      }
       throw new Error(`Unexpected request: ${String(input)}`)
     })
 
@@ -83,6 +101,8 @@ describe('WorkflowDetailView', () => {
     await screen.findByText(/Pull request queued/i)
     await screen.findByText(/Callback delivery · failed/i)
     await screen.findByText(/Callback responded with 500/i)
+    await screen.findByText(/Live logs/i)
+    await screen.findByText('Runner boot sequence')
 
     // Wait for the diff to load and file to appear
     await waitFor(() => {

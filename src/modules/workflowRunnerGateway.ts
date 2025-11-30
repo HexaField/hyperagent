@@ -6,6 +6,14 @@ export type WorkflowRunnerGateway = {
   enqueue: (payload: WorkflowRunnerPayload) => Promise<void>
 }
 
+export type WorkflowRunnerLogEvent = {
+  workflowId: string
+  stepId: string
+  runnerInstanceId: string
+  stream: 'stdout' | 'stderr'
+  line: string
+}
+
 export type WorkflowRunnerPayload = {
   workflowId: string
   stepId: string
@@ -30,6 +38,7 @@ export type DockerWorkflowRunnerOptions = {
   extraEnv?: Record<string, string | undefined>
   passThroughEnv?: string[]
   mounts?: DockerRunnerMount[]
+  onLog?: (event: WorkflowRunnerLogEvent) => void
 }
 
 const DEFAULT_IMAGE = 'hyperagent-workflow-runner:latest'
@@ -54,7 +63,8 @@ export function createDockerWorkflowRunnerGateway(options: DockerWorkflowRunnerO
   const envPassthrough = [...new Set([...(options.passThroughEnv ?? []), ...DEFAULT_ENV_PASSTHROUGH])]
 
   return {
-    enqueue: (payload) => invokeDockerRunner(binary, image, timeoutMs, options, resolvedCaCertPath, envPassthrough, payload)
+    enqueue: (payload) =>
+      invokeDockerRunner(binary, image, timeoutMs, options, resolvedCaCertPath, envPassthrough, payload)
   }
 }
 
@@ -65,7 +75,8 @@ async function invokeDockerRunner(
   options: DockerWorkflowRunnerOptions,
   caCertConfig: CaCertConfig | null,
   envPassthrough: string[],
-  payload: WorkflowRunnerPayload
+  payload: WorkflowRunnerPayload,
+  onLog?: (event: WorkflowRunnerLogEvent) => void
 ): Promise<void> {
   const repositoryPath = ensureAbsolutePath(payload.repositoryPath, 'Workflow repository path')
   assertDirectoryAccessible(repositoryPath, 'Workflow repository path')
@@ -140,7 +151,7 @@ async function invokeDockerRunner(
 
   args.push(image)
 
-  await runDockerCommand(dockerBinary, args, timeoutMs)
+  await runDockerCommand(dockerBinary, args, timeoutMs, onLog, payload)
 }
 
 type CaCertConfig = {
@@ -243,16 +254,58 @@ function assertDirectoryAccessible(targetPath: string, description: string): voi
   }
 }
 
-async function runDockerCommand(binary: string, args: string[], timeoutMs: number): Promise<void> {
+type RunnerLogContext = Pick<WorkflowRunnerPayload, 'workflowId' | 'stepId' | 'runnerInstanceId'>
+
+async function runDockerCommand(
+  binary: string,
+  args: string[],
+  timeoutMs: number,
+  onLog?: (event: WorkflowRunnerLogEvent) => void,
+  context?: RunnerLogContext
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     const stdoutChunks: string[] = []
     const stderrChunks: string[] = []
+    let stdoutBuffer = ''
+    let stderrBuffer = ''
+
+    const emitLog = (stream: 'stdout' | 'stderr', line: string) => {
+      if (!onLog || !context) return
+      onLog({
+        workflowId: context.workflowId,
+        stepId: context.stepId,
+        runnerInstanceId: context.runnerInstanceId,
+        stream,
+        line
+      })
+    }
+
+    const processChunk = (
+      buffer: string,
+      chunk: Buffer,
+      stream: 'stdout' | 'stderr'
+    ): string => {
+      buffer += chunk.toString()
+      let newlineIndex = buffer.indexOf('\n')
+      while (newlineIndex >= 0) {
+        const line = buffer.slice(0, newlineIndex).replace(/\r$/, '')
+        if (line.length) {
+          emitLog(stream, line)
+        }
+        buffer = buffer.slice(newlineIndex + 1)
+        newlineIndex = buffer.indexOf('\n')
+      }
+      return buffer
+    }
+
     child.stdout?.on('data', (chunk) => {
       stdoutChunks.push(chunk.toString())
+      stdoutBuffer = processChunk(stdoutBuffer, chunk, 'stdout')
     })
     child.stderr?.on('data', (chunk) => {
       stderrChunks.push(chunk.toString())
+      stderrBuffer = processChunk(stderrBuffer, chunk, 'stderr')
     })
     const timeout = setTimeout(() => {
       child.kill('SIGKILL')
@@ -261,6 +314,14 @@ async function runDockerCommand(binary: string, args: string[], timeoutMs: numbe
 
     const cleanup = () => {
       clearTimeout(timeout)
+      if (stdoutBuffer.length) {
+        emitLog('stdout', stdoutBuffer.replace(/\r$/, ''))
+        stdoutBuffer = ''
+      }
+      if (stderrBuffer.length) {
+        emitLog('stderr', stderrBuffer.replace(/\r$/, ''))
+        stderrBuffer = ''
+      }
     }
 
     child.once('error', (error) => {
