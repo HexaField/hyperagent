@@ -103,78 +103,86 @@ def delete_agent(agent_id: str) -> Response:
 @app.websocket("/ws/chat")
 async def chat(websocket: WebSocket) -> None:
     await websocket.accept()
-    try:
-        raw = await websocket.receive_text()
-    except WebSocketDisconnect:
-        return
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        await _send_ws_error(websocket, "Invalid JSON")
-        await websocket.close()
-        return
-    required = {"agent_id", "user_message"}
-    if not required.issubset(payload.keys()):
-        await _send_ws_error(websocket, "Missing required fields")
-        await websocket.close()
-        return
-    agent_id = payload["agent_id"]
-    user_message = str(payload["user_message"]).strip()
-    options: Dict[str, Any] = payload.get("options") or {}
-    agent = agent_store.get_agent(agent_id)
-    if not agent:
-        await _send_ws_error(websocket, f"Agent {agent_id} not found")
-        await websocket.close()
-        return
-    try:
-        conversation_id = conversation_manager.ensure(payload.get("conversation_id"))
-        history = conversation_manager.history(conversation_id)
-        if user_message:
-            conversation_manager.append(conversation_id, "USER", user_message)
-        prompt = get_engine().build_prompt(agent, history, user_message)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Failed to prepare chat session")
-        await _send_ws_error(websocket, f"Backend error: {exc}")
-        await websocket.close()
-        return
-    assistant_chunks: list[str] = []
-    cancelled = False
     loop = asyncio.get_running_loop()
 
-    def send_event(event: Dict[str, Any]) -> None:
-        event.setdefault("conversation_id", conversation_id)
+    while True:
         try:
-            asyncio.run_coroutine_threadsafe(
-                websocket.send_text(json.dumps(event)),
-                loop,
-            ).result()
-        except WebSocketDisconnect as exc:
-            raise StreamCancelled from exc
-        except RuntimeError as exc:
-            raise StreamCancelled from exc
+            raw = await websocket.receive_text()
+        except WebSocketDisconnect:
+            break
 
-    def run_generation() -> None:
-        nonlocal cancelled
         try:
-            for token in get_engine().stream(
-                prompt=prompt,
-                temperature=_safe_float(options.get("temperature")),
-                max_new_tokens=_safe_int(options.get("max_new_tokens")),
-            ):
-                assistant_chunks.append(token)
-                send_event({"type": "token", "token": token})
-            send_event({"type": "done"})
-        except StreamCancelled:
-            cancelled = True
-        except Exception as exc:  # noqa: BLE001 - surface model errors
-            send_event({"type": "error", "message": str(exc)})
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            await _send_ws_error(websocket, "Invalid JSON")
+            await websocket.close()
+            return
 
-    await loop.run_in_executor(None, run_generation)
-    assistant_text = "".join(assistant_chunks).strip()
-    if assistant_text and not cancelled:
-        conversation_manager.append(conversation_id, "ASSISTANT", assistant_text)
-    if not cancelled:
-        await websocket.close()
+        required = {"agent_id", "user_message"}
+        if not required.issubset(payload.keys()):
+            await _send_ws_error(websocket, "Missing required fields")
+            await websocket.close()
+            return
+
+        agent_id = payload["agent_id"]
+        user_message = str(payload["user_message"]).strip()
+        options: Dict[str, Any] = payload.get("options") or {}
+        agent = agent_store.get_agent(agent_id)
+        if not agent:
+            await _send_ws_error(websocket, f"Agent {agent_id} not found")
+            await websocket.close()
+            return
+
+        try:
+            conversation_id = conversation_manager.ensure(payload.get("conversation_id"))
+            history = conversation_manager.history(conversation_id)
+            if user_message:
+                conversation_manager.append(conversation_id, "USER", user_message)
+            prompt = get_engine().build_prompt(agent, history, user_message)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to prepare chat session")
+            await _send_ws_error(websocket, f"Backend error: {exc}")
+            await websocket.close()
+            return
+
+        assistant_chunks: list[str] = []
+        cancelled = False
+
+        def send_event(event: Dict[str, Any]) -> None:
+            event.setdefault("conversation_id", conversation_id)
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    websocket.send_text(json.dumps(event)),
+                    loop,
+                ).result()
+            except WebSocketDisconnect as exc:
+                raise StreamCancelled from exc
+            except RuntimeError as exc:
+                raise StreamCancelled from exc
+
+        def run_generation() -> None:
+            nonlocal cancelled
+            try:
+                for token in get_engine().stream(
+                    prompt=prompt,
+                    temperature=_safe_float(options.get("temperature")),
+                    max_new_tokens=_safe_int(options.get("max_new_tokens")),
+                ):
+                    assistant_chunks.append(token)
+                    send_event({"type": "token", "token": token})
+                send_event({"type": "done"})
+            except StreamCancelled:
+                cancelled = True
+            except Exception as exc:  # noqa: BLE001 - surface model errors
+                send_event({"type": "error", "message": str(exc)})
+
+        await loop.run_in_executor(None, run_generation)
+        assistant_text = "".join(assistant_chunks).strip()
+        if assistant_text and not cancelled:
+            conversation_manager.append(conversation_id, "ASSISTANT", assistant_text)
+
+        if cancelled:
+            break
 
 
 def _safe_float(value: Any) -> Optional[float]:

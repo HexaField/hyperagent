@@ -55,6 +55,13 @@ export async function streamChat({
   let isClosed = false
   const pendingPayloads: string[] = []
   let isSettled = false
+  let latestConversationId = conversationId
+
+  const rememberConversationId = (value?: string): void => {
+    if (typeof value === 'string' && value.length > 0) {
+      latestConversationId = value
+    }
+  }
 
   const ensureSendReady = (payload: string): void => {
     if (isClosed) {
@@ -95,9 +102,13 @@ export async function streamChat({
       throw new Error('message is required')
     }
 
+    if (overrideConversationId) {
+      rememberConversationId(overrideConversationId)
+    }
+
     const payload = JSON.stringify({
       agent_id: overrideAgentId ?? agentId,
-      conversation_id: overrideConversationId ?? conversationId,
+      conversation_id: overrideConversationId ?? latestConversationId,
       user_message: message,
       options: overrideOptions ?? options
     })
@@ -144,6 +155,7 @@ export async function streamChat({
       try {
         const data = parseJson(event.data)
         const conversation = data.conversation_id ?? data.conversationId
+        rememberConversationId(conversation)
         if (data.type === 'token') {
           onEvent({ type: 'token', token: data.token ?? '', conversationId: conversation })
         } else if (data.type === 'done') {
