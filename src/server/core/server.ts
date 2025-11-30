@@ -16,6 +16,7 @@ import {
   type CodeServerOptions
 } from '../../../src/modules/codeServer'
 import { createPersistence, type Persistence, type ProjectRecord } from '../../../src/modules/database'
+import { detectGitAuthorFromCli } from '../../../src/modules/gitAuthor'
 import { listGitBranches } from '../../../src/modules/git'
 import type { Provider } from '../../../src/modules/llm'
 import type {
@@ -345,6 +346,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     options.workflowRuntime ??
     createWorkflowRuntime({
       persistence,
+      persistenceFilePath: persistence.db.name,
       pollIntervalMs: options.workflowPollIntervalMs,
       radicle: radicleModule,
       commitAuthor,
@@ -1544,33 +1546,3 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   }
 }
 
-function detectGitAuthorFromCli(): { name: string; email: string } | null {
-  const name = readGitConfigValue('user.name')
-  const email = readGitConfigValue('user.email')
-  if (name && email) {
-    return { name, email }
-  }
-  return null
-}
-
-function readGitConfigValue(key: string): string | null {
-  const attempts: string[][] = [
-    ['config', '--get', key],
-    ['config', '--global', '--get', key],
-    ['config', '--system', '--get', key]
-  ]
-  for (const args of attempts) {
-    try {
-      const result = spawnSync('git', args, { encoding: 'utf8' })
-      if (result.status === 0) {
-        const value = result.stdout.trim()
-        if (value.length) {
-          return value
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return null
-}

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET_BIN=${OPENCODE_BIN_PATH:-}
+
+if [[ -z "$TARGET_BIN" ]]; then
+  TARGET_BIN=$(command -v opencode || true)
+fi
+
+if [[ -z "$TARGET_BIN" ]]; then
+  echo "opencode CLI is not available inside the workflow runner container. Install opencode or set OPENCODE_BIN_PATH to the real binary." >&2
+  exit 1
+fi
+
+if [[ ! -x "$TARGET_BIN" ]]; then
+  echo "Configured opencode binary ($TARGET_BIN) is not executable inside the container." >&2
+  exit 1
+fi
+
+exec "$TARGET_BIN" "$@"

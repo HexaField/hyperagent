@@ -20,6 +20,27 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
   const { wrapAsync, workflowRuntime, persistence, runGitCommand, validateWorkflowRunnerToken } = deps
   const router = Router()
 
+  const logWorkflow = (message: string, metadata?: Record<string, unknown>) => {
+    if (metadata && Object.keys(metadata).length) {
+      console.log(`[workflows] ${message}`, metadata)
+      return
+    }
+    console.log(`[workflows] ${message}`)
+  }
+
+  const logWorkflowError = (message: string, error: unknown, metadata?: Record<string, unknown>) => {
+    const payload = {
+      ...(metadata ?? {}),
+      error:
+        error instanceof Error
+          ? { message: error.message, stack: error.stack }
+          : typeof error === 'string'
+            ? { message: error }
+            : error
+    }
+    console.error(`[workflows] ${message}`, payload)
+  }
+
   const normalizePlannerTasks = (raw: unknown): PlannerTask[] => {
     if (!Array.isArray(raw)) return []
     const tasks: PlannerTask[] = []
@@ -137,6 +158,7 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
       workflow,
       steps: persistence.workflowSteps.listByWorkflow(workflow.id)
     }))
+    logWorkflow('List workflows requested', { projectId, count: payload.length })
     res.json({ workflows: payload })
   }
 
@@ -162,12 +184,25 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
       tasks: normalizedTasks,
       data: isPlainObject(data) ? data : {}
     }
-    const workflow = workflowRuntime.createWorkflowFromPlan({ projectId, plannerRun })
-    if (autoStart) {
-      workflowRuntime.startWorkflow(workflow.id)
+    try {
+      logWorkflow('Creating workflow from plan', {
+        projectId,
+        kind: plannerRun.kind,
+        taskCount: plannerRun.tasks.length,
+        autoStart: Boolean(autoStart)
+      })
+      const workflow = workflowRuntime.createWorkflowFromPlan({ projectId, plannerRun })
+      if (autoStart) {
+        logWorkflow('Auto-starting workflow', { workflowId: workflow.id, projectId })
+        workflowRuntime.startWorkflow(workflow.id)
+      }
+      const detail = workflowRuntime.getWorkflowDetail(workflow.id)
+      logWorkflow('Workflow created', { workflowId: workflow.id, projectId })
+      res.status(201).json(detail ?? { workflow })
+    } catch (error) {
+      logWorkflowError('Failed to create workflow', error, { projectId })
+      res.status(500).json({ error: 'Failed to create workflow' })
     }
-    const detail = workflowRuntime.getWorkflowDetail(workflow.id)
-    res.status(201).json(detail ?? { workflow })
   }
 
   const startWorkflowHandler: RequestHandler = (req, res) => {
@@ -181,8 +216,14 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
       res.status(404).json({ error: 'Unknown workflow' })
       return
     }
-    workflowRuntime.startWorkflow(workflowId)
-    res.json({ workflowId, status: 'running' })
+    try {
+      logWorkflow('Starting workflow', { workflowId })
+      workflowRuntime.startWorkflow(workflowId)
+      res.json({ workflowId, status: 'running' })
+    } catch (error) {
+      logWorkflowError('Failed to start workflow', error, { workflowId })
+      res.status(500).json({ error: 'Failed to start workflow' })
+    }
   }
 
   const workflowDetailHandler: RequestHandler = (req, res) => {
@@ -196,6 +237,7 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
       res.status(404).json({ error: 'Unknown workflow' })
       return
     }
+    logWorkflow('Workflow detail requested', { workflowId })
     res.json(detail)
   }
 
@@ -211,6 +253,7 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
       return
     }
     const events = persistence.workflowRunnerEvents.listByWorkflow(workflowId, 200)
+    logWorkflow('Workflow events requested', { workflowId, eventCount: events.length })
     res.json({ workflowId, events })
   }
 
@@ -230,26 +273,16 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
       res.status(400).json({ error: 'runnerInstanceId is required' })
       return
     }
-    try {
-      await workflowRuntime.runStepById({ workflowId, stepId, runnerInstanceId })
-      res.json({ ok: true })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to execute workflow step'
-      const normalized = message.toLowerCase()
-      if (normalized.includes('unknown workflow step')) {
-        res.status(404).json({ error: message })
-        return
-      }
-      if (normalized.includes('not running') || normalized.includes('runner token')) {
-        res.status(409).json({ error: message })
-        return
-      }
-      if (normalized.includes('does not belong')) {
-        res.status(400).json({ error: message })
-        return
-      }
-      res.status(500).json({ error: message })
-    }
+    const runnerStatus = typeof req.body?.status === 'string' ? req.body.status : 'unknown'
+    const runnerError = typeof req.body?.error === 'string' ? req.body.error : undefined
+    logWorkflow('Runner callback received', {
+      workflowId,
+      stepId,
+      runnerInstanceId,
+      runnerStatus,
+      runnerError: runnerError ?? null
+    })
+    res.json({ ok: true })
   }
 
   const workflowStepDiffHandler: RequestHandler = async (req, res) => {
@@ -291,6 +324,7 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
         ':(exclude)**/.hyperagent/**'
       ]
       const diffText = await runGitCommand(diffArgs, project.repositoryPath)
+      logWorkflow('Workflow step diff generated', { workflowId, stepId, commit: commit.commitHash })
       res.json({
         workflowId,
         stepId,
@@ -300,6 +334,7 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
         diffText
       })
     } catch (error) {
+      logWorkflowError('Failed to read workflow step diff', error, { workflowId, stepId })
       res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to read diff' })
     }
   }
@@ -330,6 +365,7 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
       const raw = await fs.readFile(logsPath, 'utf8')
       const workspacePath = readWorkspacePathFromResult(step.result)
       const workspaceEntries = await collectWorkspaceEntries(workspacePath)
+      logWorkflow('Workflow step provenance served', { workflowId, stepId, logsPath })
       res.json({
         logsPath,
         workspacePath,
@@ -339,6 +375,7 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
         downloadUrl: `/api/workflows/${workflowId}/steps/${stepId}/provenance/download`
       })
     } catch (error) {
+      logWorkflowError('Failed to load workflow provenance', error, { workflowId, stepId })
       const message = error instanceof Error ? error.message : 'Failed to load provenance file'
       res.status(500).json({ error: message })
     }
@@ -370,8 +407,10 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
       const raw = await fs.readFile(logsPath)
       res.setHeader('Content-Type', 'application/json')
       res.setHeader('Content-Disposition', `attachment; filename="${path.basename(logsPath)}"`)
+      logWorkflow('Workflow step provenance download', { workflowId, stepId, logsPath })
       res.send(raw)
     } catch (error) {
+      logWorkflowError('Failed to download workflow provenance', error, { workflowId, stepId })
       const message = error instanceof Error ? error.message : 'Failed to load provenance file'
       res.status(500).json({ error: message })
     }

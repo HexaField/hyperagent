@@ -500,10 +500,16 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
               <ul class="flex flex-col gap-2">
                 <For each={selectedRunnerEvents()}>
                   {(event) => (
-                    <li class="rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-3 text-xs text-[var(--text)]">
+                    <li
+                      class="rounded-xl border p-3 text-xs"
+                      classList={{
+                        'border-[var(--border)] bg-[var(--bg-muted)] text-[var(--text)]': event.status !== 'failed',
+                        'border-red-500/50 bg-red-500/5 text-[var(--text)]': event.status === 'failed'
+                      }}
+                    >
                       <div class="flex flex-wrap items-center justify-between gap-2">
                         <p class="font-semibold">
-                          {event.type} · {event.status}
+                          {describeRunnerEvent(event)} · {event.status}
                         </p>
                         <span class="text-[var(--text-muted)]">{formatTimestamp(event.createdAt)}</span>
                       </div>
@@ -744,6 +750,21 @@ function runnerStatus(step: WorkflowStep): string | null {
   if (step.status !== 'running') return null
   if (!step.runnerInstanceId) return 'Waiting for Docker runner'
   return `Runner ${shortToken(step.runnerInstanceId)}`
+}
+
+function describeRunnerEvent(event: WorkflowRunnerEvent): string {
+  switch (event.type) {
+    case 'runner.enqueue':
+      return event.status === 'failed' ? 'Runner enqueue attempt' : 'Runner enqueued'
+    case 'runner.execute':
+      return 'Runner execution'
+    case 'runner.callback':
+      return 'Callback delivery'
+    default: {
+      const fallback = event.type.replace(/\./g, ' ').trim()
+      return fallback.length ? fallback.replace(/^./, (char) => char.toUpperCase()) : 'Runner event'
+    }
+  }
 }
 
 function shortToken(token: string): string {

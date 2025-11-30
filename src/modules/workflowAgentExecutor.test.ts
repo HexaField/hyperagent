@@ -99,6 +99,8 @@ function buildExecutorArgs(sessionDir: string): AgentExecutorArgs {
       },
       result: null,
       runnerInstanceId: null,
+      runnerAttempts: 0,
+      readyAt: null,
       updatedAt: now
     },
     workspace: {

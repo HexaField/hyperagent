@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET_BIN=${RADICLE_BIN_PATH:-${RADICLE_CLI_PATH:-}}
+
+if [[ -z "$TARGET_BIN" ]]; then
+	TARGET_BIN=$(command -v rad || true)
+fi
+
+if [[ -z "$TARGET_BIN" ]]; then
+	echo "radicle CLI is not available inside the workflow runner container. Install radicle or set RADICLE_BIN_PATH/RADICLE_CLI_PATH." >&2
+	exit 1
+fi
+
+if [[ ! -x "$TARGET_BIN" ]]; then
+	echo "Configured Radicle binary ($TARGET_BIN) is not executable inside the container." >&2
+	exit 1
+fi
+
+maybe_supports_push() {
+	if "$TARGET_BIN" push --help >/dev/null 2>&1; then
+		return 0
+	fi
+	return 1
+}
+
+if [[ "${1-}" == "push" ]]; then
+	if maybe_supports_push; then
+		exec "$TARGET_BIN" "$@"
+	fi
+	remote=${2-}
+	branch=${3-}
+	echo "[workflow-runner] rad CLI missing 'push'; falling back to 'rad sync --announce' (remote=${remote:-unset}, branch=${branch:-unset})" >&2
+	if "$TARGET_BIN" sync --announce; then
+		exit 0
+	fi
+	echo "[workflow-runner] rad sync fallback failed, continuing without error" >&2
+	exit 0
+fi
+
+exec "$TARGET_BIN" "$@"

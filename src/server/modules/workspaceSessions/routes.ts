@@ -33,6 +33,27 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
   const { wrapAsync, codingAgentRunner, codingAgentStorage, codingAgentCommandRunner, ensureWorkspaceDirectory } = deps
   const router = Router()
 
+  const logSessions = (message: string, metadata?: Record<string, unknown>) => {
+    if (metadata && Object.keys(metadata).length) {
+      console.log(`[coding-agent] ${message}`, metadata)
+      return
+    }
+    console.log(`[coding-agent] ${message}`)
+  }
+
+  const logSessionsError = (message: string, error: unknown, metadata?: Record<string, unknown>) => {
+    const payload = {
+      ...(metadata ?? {}),
+      error:
+        error instanceof Error
+          ? { message: error.message, stack: error.stack }
+          : typeof error === 'string'
+            ? { message: error }
+            : error
+    }
+    console.error(`[coding-agent] ${message}`, payload)
+  }
+
   const titleizeModelSegment = (segment: string): string => {
     return segment
       .split(/[-_]/)
@@ -251,6 +272,11 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
           return
         }
       }
+      logSessions('Starting coding agent run', {
+        workspacePath: normalizedWorkspace,
+        providerId,
+        model: resolvedModel
+      })
       const run = await codingAgentRunner.startRun({
         workspacePath: normalizedWorkspace,
         prompt: prompt.trim(),
@@ -258,8 +284,13 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
         model: resolvedModel,
         providerId
       })
+      logSessions('Coding agent run started', { workspacePath: normalizedWorkspace, sessionId: run.sessionId })
       res.status(202).json({ run })
     } catch (error) {
+      logSessionsError('Failed to start coding agent session', error, {
+        workspacePath: normalizedWorkspace,
+        providerId
+      })
       const message = error instanceof Error ? error.message : 'Failed to start coding agent session'
       res.status(500).json({ error: message })
     }
@@ -349,6 +380,12 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
         res.status(500).json({ error: `Provider ${resolvedProviderId} cannot build invocation` })
         return
       }
+      logSessions('Posting coding agent message', {
+        sessionId,
+        providerId: resolvedProviderId,
+        modelId: resolvedModelId,
+        role
+      })
       try {
         await runProviderInvocation(invocation, {
           cwd: existing.session.workspacePath,
@@ -356,6 +393,11 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
         })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Provider invocation failed'
+        logSessionsError('Provider invocation failed', err, {
+          sessionId,
+          providerId: resolvedProviderId,
+          modelId: resolvedModelId
+        })
         res.status(500).json({ error: message })
         return
       }
@@ -370,6 +412,7 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
         }
       })
     } catch (error) {
+      logSessionsError('Failed to post coding agent message', error, { sessionId })
       const message = error instanceof Error ? error.message : 'Failed to post coding agent message'
       res.status(500).json({ error: message })
     }

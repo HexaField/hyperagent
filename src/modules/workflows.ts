@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3'
+import Database from 'better-sqlite3'
 import fs from 'fs/promises'
 import crypto from 'crypto'
 import path from 'path'
@@ -168,6 +168,7 @@ type WorkflowPersistenceAdapter = {
   agentRuns: AgentRunsRepository
   workflowRunnerDeadLetters: WorkflowRunnerDeadLettersRepository
   workflowRunnerEvents: WorkflowRunnerEventsRepository
+  db?: Database.Database
 }
 
 export type PlannerTask = {
@@ -227,6 +228,7 @@ export type WorkflowRuntimeOptions = {
     backoffMs?: (attempt: number) => number
   }
   policy?: WorkflowPolicy
+  persistenceFilePath?: string
 }
 
 export type WorkflowRuntime = {
@@ -293,6 +295,19 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
     maxAttempts: options.runnerRetry?.maxAttempts ?? DEFAULT_MAX_ENQUEUE_ATTEMPTS,
     backoffMs: options.runnerRetry?.backoffMs ?? computeRetryDelayMs
   }
+  const persistenceFilePath = resolvePersistenceFilePath(options.persistenceFilePath, persistence)
+  const persistenceDb = (persistence as { db?: Database.Database }).db
+  const checkpointPersistence = () => {
+    if (!persistenceDb) return
+    try {
+      persistenceDb.pragma('wal_checkpoint(TRUNCATE)')
+    } catch (error) {
+      console.warn('[workflow]', {
+        action: 'persistence_checkpoint_failed',
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
 
   const recordRunnerEvent = (input: WorkflowRunnerEventInput) => {
     try {
@@ -312,6 +327,38 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
         status: input.status,
         error: error instanceof Error ? error.message : String(error)
       })
+    }
+  }
+
+  const readWorkflowDetailFromDisk = (
+    workflowId: string
+  ): { workflow: WorkflowRecord; steps: WorkflowStepRecord[] } | null => {
+    if (!persistenceFilePath) {
+      return null
+    }
+    let reader: Database.Database | null = null
+    try {
+      reader = new Database(persistenceFilePath, { readonly: true })
+      reader.pragma('journal_mode = WAL')
+      const workflowRow = reader.prepare('SELECT * FROM workflows WHERE id = ?').get(workflowId)
+      if (!workflowRow) {
+        return null
+      }
+      const workflow = mapWorkflow(workflowRow)
+      const stepRows = reader
+        .prepare('SELECT * FROM workflow_steps WHERE workflow_id = ? ORDER BY sequence ASC')
+        .all(workflowId)
+      const steps = stepRows.map(mapWorkflowStep)
+      return { workflow, steps }
+    } catch (error) {
+      console.warn('[workflow]', {
+        action: 'workflow_detail_disk_read_failed',
+        workflowId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return null
+    } finally {
+      reader?.close()
     }
   }
 
@@ -377,14 +424,50 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
   }
 
   const getWorkflowDetail = (workflowId: string): WorkflowDetail | null => {
-    const workflow = persistence.workflows.getById(workflowId)
-    if (!workflow) return null
-    const steps = persistence.workflowSteps.listByWorkflow(workflow.id)
-    const runs = persistence.agentRuns.listByWorkflow(workflow.id)
-    return { workflow, steps, runs }
+    checkpointPersistence()
+    let workflow: WorkflowRecord | null = null
+    let steps: WorkflowStepRecord[] | null = null
+    let runs: AgentRunRecord[] = []
+    try {
+      workflow = persistence.workflows.getById(workflowId)
+      steps = workflow ? persistence.workflowSteps.listByWorkflow(workflow.id) : null
+      runs = workflow ? persistence.agentRuns.listByWorkflow(workflow.id) : []
+    } catch (error) {
+      if (!isSqliteIoError(error)) {
+        throw error
+      }
+      console.warn('[workflow]', {
+        action: 'workflow_detail_read_retry',
+        workflowId,
+        error: error instanceof Error ? error.message : 'sqlite io error'
+      })
+      workflow = null
+      steps = null
+      runs = []
+    }
+    const hasDetail = workflow && steps
+    const diskDetail = readWorkflowDetailFromDisk(workflowId)
+    if (diskDetail) {
+      const currentUpdatedAt = hasDetail ? new Date(workflow!.updatedAt).getTime() : 0
+      const diskUpdatedAt = new Date(diskDetail.workflow.updatedAt).getTime()
+      if (!hasDetail || diskUpdatedAt > currentUpdatedAt) {
+        return {
+          workflow: diskDetail.workflow,
+          steps: diskDetail.steps,
+          runs
+        }
+      }
+    }
+    if (!hasDetail) {
+      return null
+    }
+    return { workflow: workflow!, steps: steps!, runs }
   }
 
-  const listWorkflows = (projectId?: string) => persistence.workflows.list(projectId)
+  const listWorkflows = (projectId?: string) => {
+    checkpointPersistence()
+    return persistence.workflows.list(projectId)
+  }
 
   const finalizeStepWithoutExecution = (
     step: WorkflowStepRecord,
@@ -397,6 +480,7 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
       runnerInstanceId: null,
       readyAt: null
     })
+    checkpointPersistence()
     if (workflowId) {
       refreshWorkflowStatus(workflowId, persistence.workflowSteps, persistence.workflows)
     }
@@ -429,11 +513,26 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
     const latest = persistence.workflowSteps.getById(step.id)
     if (!latest) return
     if (latest.runnerInstanceId) return
+    const workflow = persistence.workflows.getById(step.workflowId)
+    if (!workflow) {
+      throw new Error(`Workflow ${step.workflowId} not found for runner enqueue`)
+    }
+    const project = persistence.projects.getById(workflow.projectId)
+    if (!project) {
+      throw new Error(`Project ${workflow.projectId} not found for runner enqueue`)
+    }
     const runnerInstanceId = `wf-runner-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    persistence.workflowSteps.update(step.id, { runnerInstanceId, readyAt: null })
+    persistence.workflowSteps.update(step.id, { status: 'running', runnerInstanceId, readyAt: null })
+    checkpointPersistence()
     const enqueueLatencyMs = Math.max(Date.now() - new Date(step.updatedAt).getTime(), 0)
     try {
-      await runnerGateway.enqueue({ workflowId: latest.workflowId, stepId: latest.id, runnerInstanceId })
+      await runnerGateway.enqueue({
+        workflowId: latest.workflowId,
+        stepId: latest.id,
+        runnerInstanceId,
+        repositoryPath: project.repositoryPath,
+        persistencePath: persistenceFilePath
+      })
       console.info('[workflow]', {
         action: 'enqueue_step',
         workflowId: latest.workflowId,
@@ -464,6 +563,7 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
             detail: error instanceof Error ? error.message : String(error)
           }
         })
+        checkpointPersistence()
         persistence.workflowRunnerDeadLetters.insert({
           workflowId: latest.workflowId,
           stepId: latest.id,
@@ -480,6 +580,7 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
           runnerAttempts: nextAttempt,
           readyAt: retryAt
         })
+        checkpointPersistence()
       }
       console.warn('[workflow]', {
         action: 'enqueue_step_failed',
@@ -509,14 +610,45 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
 
   async function runStepById(input: { workflowId: string; stepId: string; runnerInstanceId: string }): Promise<void> {
     const { workflowId, stepId, runnerInstanceId } = input
-    const step = persistence.workflowSteps.getById(stepId)
+    let step = persistence.workflowSteps.getById(stepId)
     if (!step) {
       throw new Error('Unknown workflow step')
     }
     if (step.workflowId !== workflowId) {
       throw new Error('Workflow step does not belong to requested workflow')
     }
+    if (step.status !== 'running' || step.runnerInstanceId !== runnerInstanceId) {
+      const awaited = await waitForRunnerAssignment(stepId, runnerInstanceId)
+      if (awaited) {
+        step = awaited
+      }
+      if (
+        step &&
+        step.status === 'pending' &&
+        (!step.runnerInstanceId || step.runnerInstanceId === runnerInstanceId)
+      ) {
+        persistence.workflowSteps.update(step.id, { status: 'running', runnerInstanceId, readyAt: null })
+        checkpointPersistence()
+        const reassigned = persistence.workflowSteps.getById(step.id)
+        if (reassigned) {
+          console.warn('[workflow]', {
+            action: 'runner_assignment_self_heal',
+            workflowId,
+            stepId,
+            runnerInstanceId
+          })
+          step = reassigned
+        }
+      }
+    }
     if (step.status !== 'running') {
+      console.error('[workflow]', {
+        action: 'runner_invalid_step_status',
+        workflowId,
+        stepId,
+        status: step.status,
+        runnerInstanceId: step.runnerInstanceId
+      })
       throw new Error('Workflow step is not running')
     }
     if (!step.runnerInstanceId) {
@@ -543,6 +675,26 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
       attempts: step.runnerAttempts ?? 0
     })
     await executeStep(step)
+  }
+
+  async function waitForRunnerAssignment(stepId: string, runnerInstanceId: string): Promise<WorkflowStepRecord | null> {
+    const deadline = Date.now() + 2_000
+    while (Date.now() < deadline) {
+      const current = persistence.workflowSteps.getById(stepId)
+      if (!current) {
+        return null
+      }
+      if (current.status === 'running' && current.runnerInstanceId === runnerInstanceId) {
+        return current
+      }
+      const awaitingAssignment =
+        current.status === 'pending' && (!current.runnerInstanceId || current.runnerInstanceId === runnerInstanceId)
+      if (!awaitingAssignment) {
+        return current
+      }
+      await delay(50)
+    }
+    return persistence.workflowSteps.getById(stepId)
   }
 
   async function executeStep(step: WorkflowStepRecord): Promise<void> {
@@ -729,6 +881,7 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
         result: enrichedResult,
         runnerInstanceId: null
       })
+      checkpointPersistence()
       if (agentRun) {
         persistence.agentRuns.update(agentRun.id, {
           status: agentFailure.failed ? 'failed' : 'succeeded',
@@ -761,6 +914,7 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
         result: failureResult,
         runnerInstanceId: null
       })
+      checkpointPersistence()
       if (agentRun) {
         persistence.agentRuns.update(agentRun.id, {
           status: 'failed',
@@ -786,6 +940,35 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
     stopWorker,
     runStepById
   }
+}
+
+function resolvePersistenceFilePath(
+  provided: string | undefined,
+  persistence: WorkflowPersistenceAdapter
+): string {
+  if (provided && provided.trim().length) {
+    return normalizePersistencePath(provided.trim())
+  }
+  const maybeDb = (persistence as { db?: { name?: string } | undefined }).db
+  if (maybeDb && typeof maybeDb.name === 'string' && maybeDb.name.trim().length) {
+    return normalizePersistencePath(maybeDb.name.trim())
+  }
+  return ':memory:'
+}
+
+function normalizePersistencePath(candidate: string): string {
+  if (candidate === ':memory:') {
+    return ':memory:'
+  }
+  return path.resolve(candidate)
+}
+
+function isSqliteIoError(error: unknown): error is Database.SqliteError {
+  return (
+    error instanceof Database.SqliteError &&
+    typeof error.code === 'string' &&
+    error.code.startsWith('SQLITE_IOERR')
+  )
 }
 
 function detectAgentFailure(stepResult?: Record<string, unknown> | null): { failed: boolean } {

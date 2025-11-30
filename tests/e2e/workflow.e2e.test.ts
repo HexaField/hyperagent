@@ -10,7 +10,10 @@ import { createPersistence, type Persistence, type ProjectRecord } from '../../s
 import { createRadicleModule } from '../../src/modules/radicle'
 import type { CommitResult, RadicleModule } from '../../src/modules/radicle/types'
 import { createPullRequestModule } from '../../src/modules/review/pullRequest'
-import { createDockerWorkflowRunnerGateway } from '../../src/modules/workflowRunnerGateway'
+import {
+  createDockerWorkflowRunnerGateway,
+  type DockerRunnerMount
+} from '../../src/modules/workflowRunnerGateway'
 import {
   createWorkflowRuntime,
   type AgentExecutor,
@@ -135,12 +138,15 @@ describe('workflow e2e', () => {
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       ensureCommand('docker')
-      const radCli = await createRadCliSpy()
-      const radRemote = await createBareRemoteRepo()
+      let radCli: Awaited<ReturnType<typeof createRadCliSpy>> | null = null
+      let radRemotePath: string | null = null
 
       const harness = await createWorkflowHarness({
         radicleFactory: async (repoPath) => {
+          const radRemote = await createBareRemoteRepo(path.dirname(repoPath))
+          radRemotePath = radRemote.dir
           runGit(['remote', 'add', 'rad', radRemote.dir], repoPath)
+          radCli = await createRadCliSpy({ baseDir: repoPath })
           const module = createRadicleModule({
             defaultRemote: 'rad',
             radCliPath: radCli.binPath,
@@ -150,6 +156,11 @@ describe('workflow e2e', () => {
             module,
             cleanup: async () => {
               await module.cleanup()
+              await radRemote.cleanup()
+            },
+            runnerEnv: {
+              RADICLE_REMOTE: 'rad',
+              RADICLE_CLI_PATH: radCli.binPath
             }
           }
         }
@@ -170,15 +181,20 @@ describe('workflow e2e', () => {
         const stepResult = step?.result as StepResultShape | undefined
         const commitResult = stepResult?.commit
         expect(commitResult?.branch).toBeDefined()
-        expect(remoteHasBranch(radRemote.dir, commitResult?.branch ?? '')).toBe(true)
+        expect(radRemotePath).toBeTruthy()
+        expect(remoteHasBranch(radRemotePath ?? '', commitResult?.branch ?? '')).toBe(true)
 
+        if (!radCli) {
+          throw new Error('rad CLI spy not initialized')
+        }
         const radLog = await fs.readFile(radCli.logPath, 'utf8')
         expect(radLog.trim().length).toBeGreaterThan(0)
         expect(radLog).toMatch(/push rad /)
       } finally {
         await harness.teardown()
-        await radCli.cleanup()
-        await radRemote.cleanup()
+        if (radCli) {
+          await radCli.cleanup()
+        }
       }
     }
   )
@@ -212,7 +228,7 @@ describe('workflow e2e', () => {
         expect(harness.server.getFailureCount()).toBe(1)
         const events = harness.persistence.workflowRunnerEvents.listByWorkflow(workflow.id, 10)
         const hasFailure = events.some(
-          (event) => event.type === 'runner.enqueue' && event.status === 'failed'
+          (event) => event.type === 'runner.callback' && event.status === 'failed'
         )
         expect(hasFailure).toBe(true)
       } finally {
@@ -226,18 +242,12 @@ describe('workflow e2e', () => {
     { timeout: TEST_TIMEOUT_MS },
     async () => {
       ensureCommand('docker')
-      const skipAgent: AgentExecutor = async ({ workflow, step }) => ({
-        stepResult: {
-          summary: 'no code changes required',
-          agent: {
-            outcome: 'approved',
-            reason: 'requirements satisfied'
-          },
-          note: `noop-${workflow.id}-${step.id}`
-        },
-        skipCommit: true
+      const harness = await createWorkflowHarness({
+        runnerEnv: {
+          WORKFLOW_TEST_AGENT: 'deterministic',
+          WORKFLOW_TEST_AGENT_BEHAVIOR: 'skip-commit'
+        }
       })
-      const harness = await createWorkflowHarness({ agentExecutor: skipAgent })
       try {
         const { detail } = await runWorkflowAndAwait(harness, plannerRun, 1)
         const [step] = detail.steps
@@ -289,6 +299,8 @@ type StepResultShape = {
 type RadicleFactoryResult = {
   module: RadicleModule
   cleanup?: () => Promise<void>
+  runnerEnv?: Record<string, string>
+  runnerMounts?: DockerRunnerMount[]
 }
 
 type WorkflowHarnessOptions = {
@@ -297,19 +309,31 @@ type WorkflowHarnessOptions = {
   radicleFactory?: (repoPath: string) => Promise<RadicleFactoryResult>
   runnerImage?: string
   callbackOptions?: CallbackServerOptions
+  runnerEnv?: Record<string, string>
 }
 
 type CallbackServerOptions = {
   failInitialCallbacks?: number
 }
 
+type WorkflowRunnerToolchain = {
+  env: Record<string, string>
+  mounts: DockerRunnerMount[]
+  cleanup: () => Promise<void>
+}
+
 async function createWorkflowHarness(options: WorkflowHarnessOptions = {}): Promise<WorkflowHarness> {
-  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'workflow-e2e-'))
+  const tmpRoot = await makeWorkspaceTempDir('workflow-e2e-')
   const repoPath = path.join(tmpRoot, 'repo')
   await fs.mkdir(repoPath, { recursive: true })
   await initializeRepository(repoPath)
+  const originRemotePath = path.join(tmpRoot, 'origin.git')
+  await initializeBareRemote(originRemotePath)
+  runGit(['remote', 'add', 'origin', originRemotePath], repoPath)
+  runGit(['push', '-u', 'origin', 'main'], repoPath)
   const persistenceFile = path.join(tmpRoot, 'runtime.db')
   const persistence = createPersistence({ file: persistenceFile })
+  const persistenceRealPath = await fs.realpath(persistenceFile)
   persistence.radicleRegistrations.upsert({
     repositoryPath: repoPath,
     name: 'workflow-e2e',
@@ -330,11 +354,18 @@ async function createWorkflowHarness(options: WorkflowHarnessOptions = {}): Prom
       }
   const callbackToken = `workflow-runner-${Date.now()}`
   const server = await startCallbackServer(callbackToken, options.callbackOptions)
+  const runnerEnvOverrides = {
+    ...(radicleHandle.runnerEnv ?? {}),
+    ...(options.runnerEnv ?? {})
+  }
+  const runnerToolchain = await prepareWorkflowRunnerToolchain({ envOverrides: runnerEnvOverrides })
   const runnerGateway = createDockerWorkflowRunnerGateway({
     image: options.runnerImage ?? RUNNER_IMAGE,
     callbackBaseUrl: server.baseUrl,
     callbackToken,
-    timeoutMs: 300_000
+    timeoutMs: 300_000,
+    extraEnv: runnerToolchain.env,
+    mounts: [...(radicleHandle.runnerMounts ?? []), ...runnerToolchain.mounts]
   })
   const pullRequestModule = createPullRequestModule({
     projects: persistence.projects,
@@ -372,6 +403,7 @@ async function createWorkflowHarness(options: WorkflowHarnessOptions = {}): Prom
       workflowRunnerDeadLetters: persistence.workflowRunnerDeadLetters,
       workflowRunnerEvents: persistence.workflowRunnerEvents
     },
+    persistenceFilePath: persistenceRealPath,
     runnerGateway,
     agentExecutor,
     pollIntervalMs: 50,
@@ -383,6 +415,7 @@ async function createWorkflowHarness(options: WorkflowHarnessOptions = {}): Prom
     await runtime.stopWorker()
     await server.close()
     await radicleCleanup()
+    await runnerToolchain.cleanup()
     persistence.db.close()
     await fs.rm(tmpRoot, { recursive: true, force: true })
   }
@@ -407,6 +440,11 @@ async function initializeRepository(repoPath: string) {
   await fs.writeFile(path.join(repoPath, 'README.md'), '# Workflow E2E\n', 'utf8')
   runGit(['add', '.'], repoPath)
   runGit(['commit', '-m', 'initial commit'], repoPath)
+}
+
+async function initializeBareRemote(remotePath: string) {
+  await fs.mkdir(path.dirname(remotePath), { recursive: true })
+  runGit(['init', '--bare', remotePath], process.cwd())
 }
 
 function runGit(args: string[], cwd: string): string {
@@ -639,8 +677,141 @@ function createTestRadicleModule(repoPath: string): RadicleModule {
   }
 }
 
-async function createRadCliSpy() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rad-cli-spy-'))
+async function prepareWorkflowRunnerToolchain(options: { envOverrides?: Record<string, string> } = {}): Promise<WorkflowRunnerToolchain> {
+  const env: Record<string, string> = {
+    WORKFLOW_TEST_AGENT: process.env.WORKFLOW_E2E_AGENT_MODE?.trim() || 'deterministic',
+    RADICLE_REMOTE: process.env.WORKFLOW_E2E_RAD_REMOTE?.trim() || 'origin'
+  }
+  if (options.envOverrides) {
+    for (const [key, value] of Object.entries(options.envOverrides)) {
+      if (typeof value === 'string' && value.length) {
+        env[key] = value
+      }
+    }
+  }
+  const mounts: DockerRunnerMount[] = []
+  const cleanupTasks: Array<() => Promise<void>> = []
+
+  const radHomeBinding = await prepareRadHomeMount()
+  if (radHomeBinding) {
+    env.RAD_HOME = radHomeBinding.envValue
+    mounts.push(radHomeBinding.mount)
+    cleanupTasks.push(radHomeBinding.cleanup)
+  }
+
+  return {
+    env,
+    mounts,
+    cleanup: async () => {
+      for (const task of cleanupTasks.reverse()) {
+        try {
+          await task()
+        } catch {
+          // ignore cleanup errors to avoid masking test failures
+        }
+      }
+    }
+  }
+}
+
+type RadHomeMountBinding = {
+  envValue: string
+  mount: DockerRunnerMount
+  cleanup: () => Promise<void>
+}
+
+async function prepareRadHomeMount(): Promise<RadHomeMountBinding | null> {
+  const resolved = await resolveRadHomePath()
+  if (!resolved) {
+    return null
+  }
+  const mount: DockerRunnerMount = {
+    hostPath: resolved.path,
+    containerPath: resolved.path,
+    readOnly: false
+  }
+  return {
+    envValue: resolved.path,
+    mount,
+    cleanup: resolved.cleanup
+  }
+}
+
+type ResolvedRadHomePath = {
+  path: string
+  cleanup: () => Promise<void>
+}
+
+async function resolveRadHomePath(): Promise<ResolvedRadHomePath | null> {
+  const rawExistingRadHome = process.env.RAD_HOME?.trim()
+  if (rawExistingRadHome) {
+    const resolved = path.resolve(rawExistingRadHome)
+    await fs.mkdir(resolved, { recursive: true })
+    return {
+      path: resolved,
+      cleanup: async () => {
+        /* caller owns RAD_HOME, nothing to clean */
+      }
+    }
+  }
+
+  const fallbackRadHome = process.env.WORKFLOW_E2E_RAD_HOME?.trim()
+  if (fallbackRadHome) {
+    const resolved = path.resolve(fallbackRadHome)
+    await fs.mkdir(resolved, { recursive: true })
+    const previousRadHome = process.env.RAD_HOME
+    process.env.RAD_HOME = resolved
+    return {
+      path: resolved,
+      cleanup: async () => {
+        if (previousRadHome === undefined) {
+          delete process.env.RAD_HOME
+        } else {
+          process.env.RAD_HOME = previousRadHome
+        }
+      }
+    }
+  }
+
+  const radHomePath = await makeWorkspaceTempDir('workflow-rad-home-')
+  const previousRadHome = process.env.RAD_HOME
+  const hadRadHome = typeof previousRadHome === 'string' && previousRadHome.trim().length > 0
+  if (!hadRadHome) {
+    process.env.RAD_HOME = radHomePath
+  }
+  return {
+    path: radHomePath,
+    cleanup: async () => {
+      if (!hadRadHome) {
+        if (previousRadHome === undefined) {
+          delete process.env.RAD_HOME
+        } else {
+          process.env.RAD_HOME = previousRadHome
+        }
+      }
+      await fs.rm(radHomePath, { recursive: true, force: true })
+    }
+  }
+}
+
+async function makeWorkspaceTempDir(prefix: string): Promise<string> {
+  const baseDir = path.join(process.cwd(), '.tmp')
+  await fs.mkdir(baseDir, { recursive: true })
+  return fs.mkdtemp(path.join(baseDir, prefix))
+}
+
+type RadCliSpy = {
+  binPath: string
+  logPath: string
+  cleanup: () => Promise<void>
+}
+
+async function createRadCliSpy(options: { baseDir?: string } = {}): Promise<RadCliSpy> {
+  const rootDir = options.baseDir ? path.resolve(options.baseDir) : os.tmpdir()
+  if (options.baseDir) {
+    await fs.mkdir(rootDir, { recursive: true })
+  }
+  const dir = await fs.mkdtemp(path.join(rootDir, 'rad-cli-spy-'))
   const logPath = path.join(dir, 'rad.log')
   const binPath = path.join(dir, 'rad')
   const script = `#!/usr/bin/env bash
@@ -657,8 +828,10 @@ echo "$@" >> "${logPath}"
   }
 }
 
-async function createBareRemoteRepo() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rad-remote-'))
+async function createBareRemoteRepo(baseDir?: string) {
+  const root = baseDir ?? os.tmpdir()
+  await fs.mkdir(root, { recursive: true })
+  const dir = await fs.mkdtemp(path.join(root, 'rad-remote-'))
   runGit(['init', '--bare'], dir)
   return {
     dir,

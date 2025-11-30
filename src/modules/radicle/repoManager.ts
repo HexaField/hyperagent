@@ -193,7 +193,20 @@ export const createRadicleRepoManager = ({
 
   const pushBranch = async (branchName: string) => {
     const pushRemote = await getRemoteName()
-    await runGit(['push', pushRemote, branchName], resolvedRepo)
+    const remoteUrlValue = await remoteUrl(pushRemote)
+    const requiresRadHelper = isRadUrl(remoteUrlValue)
+    const radHelperAvailable = requiresRadHelper ? hasGitRemoteRadHelper() : true
+
+    if (!requiresRadHelper || radHelperAvailable) {
+      await runGit(['push', pushRemote, branchName], resolvedRepo)
+    } else {
+      console.warn('[radicle]', {
+        action: 'skip_git_push_missing_rad_helper',
+        remote: pushRemote,
+        remoteUrl: remoteUrlValue ?? null
+      })
+    }
+
     if (await shouldInvokeRadPush(pushRemote)) {
       await runRadCli(['push', pushRemote, branchName])
     }
@@ -232,4 +245,44 @@ const buildCommitMessage = (message: string, metadata?: Record<string, string>):
     .map(([key, value]) => `${key}: ${value}`)
     .join('\n')
   return `${message}\n\n${metaText}`
+}
+
+const isRadUrl = (url?: string | null): boolean => {
+  if (!url) return false
+  return url.startsWith('rad://') || url.startsWith('rad:')
+}
+
+const hasGitRemoteRadHelper = (() => {
+  let cached: boolean | null = null
+  return () => {
+    if (cached !== null) return cached
+    cached = commandExists('git-remote-rad')
+    return cached
+  }
+})()
+
+const commandExists = (binaryName: string): boolean => {
+  const pathEntries = process.env.PATH?.split(path.delimiter) ?? []
+  for (const entry of pathEntries) {
+    if (!entry) continue
+    const candidate = path.join(entry, binaryName)
+    try {
+      const stats = fs.statSync(candidate)
+      if ((stats.isFile() || stats.isSymbolicLink()) && isExecutable(candidate)) {
+        return true
+      }
+    } catch {
+      // ignore missing candidate
+    }
+  }
+  return false
+}
+
+const isExecutable = (filePath: string): boolean => {
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
 }

@@ -191,14 +191,8 @@ describe('workflow runtime docker runner integration', () => {
     }
   ) => {
     return createWorkflowRuntime({
-      persistence: {
-        projects: persistence.projects,
-        workflows: persistence.workflows,
-        workflowSteps: persistence.workflowSteps,
-        agentRuns: persistence.agentRuns,
-        workflowRunnerDeadLetters: persistence.workflowRunnerDeadLetters,
-        workflowRunnerEvents: persistence.workflowRunnerEvents
-      },
+      persistence,
+      persistenceFilePath: persistence.db.name,
       agentExecutor:
         agentExecutor ??
         (async () => ({
@@ -522,9 +516,12 @@ describe('workflow runtime docker runner integration', () => {
       expect(radicleStub.stats.finishMessages[0]).toBe('workflow: solo-task')
       const detail = runtime.getWorkflowDetail(workflow.id)
       const step = detail?.steps[0]
-      expect(step?.result?.commit?.commitHash).toBe(radicleStub.commitResult.commitHash)
-      const workspaceInfo = (step?.result as any)?.workspace
-      expect(workspaceInfo?.workspacePath).toBe(radicleStub.workspace.workspacePath)
+      const stepResult = (step?.result ?? {}) as {
+        commit?: { commitHash?: string }
+        workspace?: { workspacePath?: string }
+      }
+      expect(stepResult.commit?.commitHash).toBe(radicleStub.commitResult.commitHash)
+      expect(stepResult.workspace?.workspacePath).toBe(radicleStub.workspace.workspacePath)
     } finally {
       await runtime.stopWorker()
       await fs.rm(repoPath, { recursive: true, force: true })
@@ -689,7 +686,8 @@ describe('workflow runtime docker runner integration', () => {
       )
       const detail = runtime.getWorkflowDetail(workflow.id)
       const step = detail?.steps[0]
-      expect(step?.result?.pullRequest?.id).toBe(pullRequestRecord.id)
+      const stepResult = (step?.result ?? {}) as { pullRequest?: { id?: string } }
+      expect(stepResult.pullRequest?.id).toBe(pullRequestRecord.id)
     } finally {
       await runtime.stopWorker()
       await fs.rm(repoPath, { recursive: true, force: true })
@@ -769,7 +767,8 @@ describe('workflow runtime docker runner integration', () => {
       await runtime.runStepById(runnerCalls[0] as WorkflowRunnerPayload)
       const detail = runtime.getWorkflowDetail(workflow.id)
       const step = detail?.steps[0]
-      const logsPath = step?.result?.provenance?.logsPath as string | undefined
+      const provenance = (step?.result ?? {}) as { provenance?: { logsPath?: string } }
+      const logsPath = provenance.provenance?.logsPath
       expect(typeof logsPath).toBe('string')
       if (!logsPath) {
         throw new Error('logsPath missing')

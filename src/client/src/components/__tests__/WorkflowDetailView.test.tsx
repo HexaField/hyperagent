@@ -38,6 +38,18 @@ describe('WorkflowDetailView', () => {
           latencyMs: 42,
           metadata: null,
           createdAt: new Date().toISOString()
+        },
+        {
+          id: 'evt-2',
+          workflowId: 'wf-1',
+          stepId: 'step-1',
+          type: 'runner.callback',
+          status: 'failed',
+          runnerInstanceId: 'runner-1',
+          attempts: 1,
+          latencyMs: 5,
+          metadata: { error: 'Callback responded with 500' },
+          createdAt: new Date().toISOString()
         }
       ]
     }
@@ -69,6 +81,8 @@ describe('WorkflowDetailView', () => {
     await screen.findByText(/Branch & PR status/i)
     await screen.findByText(/Runner telemetry/i)
     await screen.findByText(/Pull request queued/i)
+    await screen.findByText(/Callback delivery · failed/i)
+    await screen.findByText(/Callback responded with 500/i)
 
     // Wait for the diff to load and file to appear
     await waitFor(() => {
