@@ -80,6 +80,7 @@ describe('WorkspaceNarratorWidget', () => {
     expect(screen.getByText('Conversation conv-777')).toBeDefined()
     const narratorHeadlines = screen.getAllByText('Narrator spoke')
     expect(narratorHeadlines.length).toBeGreaterThan(0)
+    expect(screen.queryByText('Narrator gated')).toBeNull()
     expect(screen.getByText(/events captured for this workspace/i)).toBeDefined()
     const composer = screen.getAllByPlaceholderText('Message narrator')[0] as HTMLTextAreaElement
     fireEvent.input(composer, { target: { value: 'Ship the changes' } })

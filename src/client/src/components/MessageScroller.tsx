@@ -591,9 +591,15 @@ export default function MessageScroller(props: MessageScrollerProps) {
     return elements
   }
 
-  function groupedMessages() {
+  type MessageGroup = {
+    role: string
+    messages: CodingAgentMessage[]
+    timestamp: string
+  }
+
+  function groupedMessages(): MessageGroup[] {
     const msgs = props.messages ?? []
-    const groups: { role: string; messages: CodingAgentMessage[]; timestamp: string }[] = []
+    const groups: MessageGroup[] = []
     for (const m of msgs) {
       if (!m) continue
       if (groups.length === 0 || groups[groups.length - 1].role !== m.role) {
@@ -613,7 +619,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
         {(group) => (
           <article class="rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-4">
             <header class="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
-              <span class="uppercase tracking-wide">{group.role}</span>
+              <span class="uppercase tracking-wide">{group.role || 'Message'}</span>
               <span>{new Date(group.timestamp).toLocaleString()}</span>
             </header>
             <div class="whitespace-pre-wrap text-[var(--text)] break-words text-sm">

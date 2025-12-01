@@ -8,12 +8,6 @@ import { fetchNarratorFeed, postNarratorMessage } from '../../lib/narratorFeed'
 const POLL_INTERVAL_MS = 5000
 const FAST_POLL_INTERVAL_MS = 1000
 const DEFAULT_LIMIT = 50
-const SOURCE_LABELS: Record<WorkspaceNarratorEvent['source'], string> = {
-  narrator: 'Narrator',
-  agent: 'Agent',
-  system: 'System',
-  user: 'You'
-}
 const TYPE_LABELS: Record<WorkspaceNarratorEvent['type'], string> = {
   narration: 'Narration',
   'agent-update': 'Agent update',
@@ -83,11 +77,11 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
   })
 
   const timelineMessages = createMemo<CodingAgentMessage[]>(() => {
-    const events = feed()?.events ?? []
+    const events = (feed()?.events ?? []).filter((event) => event.source === 'narrator' || event.source === 'user')
     const ordered = [...events].reverse()
     return ordered.map((event) => ({
       id: event.id,
-      role: formatRole(event),
+      role: event.source === 'user' ? 'You' : 'Narrator',
       createdAt: event.timestamp,
       completedAt: event.timestamp,
       modelId: null,
@@ -97,20 +91,10 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
     }))
   })
 
-  const conversationLabel = createMemo(() => {
-    const conversationId = feed()?.conversationId
-    if (conversationId) return `Conversation ${conversationId}`
-    const workspace = normalizedWorkspaceId()
-    return workspace ? `Workspace ${workspace}` : 'No workspace detected'
-  })
-
   const rawLogsUrl = createMemo(() => {
     const id = normalizedWorkspaceId()
     return id ? `/api/workspaces/${encodeURIComponent(id)}/narrator/raw` : '#'
   })
-
-  const summaryRef = createMemo(() => feed()?.summaryRef ?? null)
-  const messageCount = createMemo(() => timelineMessages().length)
 
   createEffect(() => {
     const workspaceKey = normalizedWorkspaceId()
@@ -264,16 +248,11 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
   )
 }
 
-function formatRole(event: WorkspaceNarratorEvent): string {
-  const source = SOURCE_LABELS[event.source] ?? 'System'
-  const type = TYPE_LABELS[event.type] ?? event.type
-  return `${source} • ${type}`
-}
-
 function formatEventBody(event: WorkspaceNarratorEvent): string {
   const icon = SEVERITY_ICONS[event.severity] ?? '•'
+  const typeLabel = TYPE_LABELS[event.type] ?? event.type
   const detail = event.detail ? `\n${event.detail}` : ''
-  return `${icon} ${event.headline}${detail}`
+  return `${icon} ${typeLabel}: ${event.headline}${detail}`
 }
 
 function buildMessageParts(event: WorkspaceNarratorEvent): CodingAgentMessagePart[] {

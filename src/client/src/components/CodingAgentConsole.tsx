@@ -162,6 +162,17 @@ function parseSessionSearchParam(value: string | null): { workspaceKey: string; 
   return { workspaceKey, sessionId }
 }
 
+function displayRoleLabel(role: string | null | undefined): string {
+  if (!role) return 'Message'
+  const normalized = role.trim().toLowerCase()
+  if (!normalized) return 'Message'
+  if (normalized === 'user' || normalized === 'you' || normalized === 'human') return 'You'
+  if (['assistant', 'agent', 'assistant-step', 'coder', 'planner', 'critic'].includes(normalized)) return 'Agent'
+  if (normalized === 'system') return 'System'
+  if (normalized === 'tool') return 'Tool'
+  return role.trim()
+}
+
 function updateSearchParam(name: string, value: string | null | undefined) {
   if (typeof window === 'undefined') return
   try {
@@ -790,6 +801,13 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       ? 'flex-1 min-h-0 space-y-3 overflow-y-auto'
       : 'max-h-[520px] space-y-3 overflow-y-auto pr-1'
     const scrollButtonClass = isMobileVariant ? 'right-3 bottom-20' : 'right-3 bottom-3'
+    const displayMessages = createMemo(() =>
+      messages().map((message) => {
+        const label = displayRoleLabel(message.role)
+        if (label === (message.role?.trim() ?? message.role)) return message
+        return { ...message, role: label }
+      })
+    )
 
     const infoBlock = (
       <div class="flex items-start gap-3">
@@ -882,7 +900,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
 
     const conversationPane = (
       <ConversationPane
-        messages={messages()}
+        messages={displayMessages()}
         sessionId={selectedSessionId()}
         emptyPlaceholder={
           draftingSession()
