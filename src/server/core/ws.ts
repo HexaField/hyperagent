@@ -1,4 +1,5 @@
 import { pathToFileURL } from 'node:url'
+import path from 'node:path'
 import type WebSocketType from 'ws'
 import type { WebSocketServer as WebSocketServerType } from 'ws'
 
@@ -34,6 +35,7 @@ export const loadWebSocketModule = async (): Promise<WebSocketBindings> => {
     // ignore resolve failures
   }
   candidateSpecifiers.push('ws')
+  candidateSpecifiers.push(pathToFileURL(path.resolve(process.cwd(), 'node_modules/ws/index.js')).href)
 
   for (const specifier of candidateSpecifiers) {
     try {

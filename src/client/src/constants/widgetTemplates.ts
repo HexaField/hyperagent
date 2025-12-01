@@ -4,6 +4,7 @@ export type WidgetTemplateId =
   | 'workspace-terminal'
   | 'workspace-code-server'
   | 'workspace-sessions'
+  | 'workspace-narrator'
 
 export type WidgetTemplate = {
   id: WidgetTemplateId
@@ -40,5 +41,10 @@ export const WIDGET_TEMPLATES: WidgetTemplate[] = [
     id: 'workspace-sessions',
     label: 'Coding Agent sessions',
     description: 'Background Coding Agent activity feed'
+  },
+  {
+    id: 'workspace-narrator',
+    label: 'Narrator activity',
+    description: 'Streaming LLM narration timeline'
   }
 ]

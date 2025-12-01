@@ -28,6 +28,11 @@ const SessionsWidgetView = lazy(async () => {
   return { default: module.SessionsWidget }
 })
 
+const WorkspaceNarratorView = lazy(async () => {
+  const module = await import('./workspaceNarrator')
+  return { default: module.WorkspaceNarratorWidget }
+})
+
 export type WidgetRenderContext = {
   workspace: WorkspaceRecord
   navigator: CanvasNavigatorController
@@ -102,6 +107,22 @@ const definitionMap: Record<WidgetTemplateId, WidgetDefinition> = {
     initialSize: { width: 720, height: 520 },
     startOpen: true,
     render: ({ workspace }) => <SessionsWidgetView workspacePath={workspace.repositoryPath} />
+  },
+  'workspace-narrator': {
+    id: 'workspace-narrator',
+    title: 'Narrator activity',
+    description: 'Streaming LLM narration timeline',
+    icon: '📣',
+    initialPosition: { x: 120, y: 1080 },
+    initialSize: { width: 760, height: 560 },
+    startOpen: true,
+    render: ({ workspace }) => (
+      <WorkspaceNarratorView
+        workspaceId={workspace.id}
+        workspaceName={workspace.name}
+        repositoryPath={workspace.repositoryPath}
+      />
+    )
   }
 }
 

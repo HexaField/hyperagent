@@ -81,3 +81,9 @@ const remaining = await listAgents()
 - **TypeScript client (`ts-client/`)** – Lightweight wrapper that offers `streamChat`, `listAgents`, `getAgent`, and `updateAgent` so the webapp (or any consumer) can talk to the backend without duplicating protocol details.
 
 The Makefile at the module root orchestrates installing backend dependencies, building the TypeScript client, and running the backend + reference webapp together during development.
+
+## Sidecar Deployment
+
+- **Local script**: run `./scripts/run-sidecar.sh` (from anywhere inside this module) to load `.env.sidecar`, optionally bootstrap Python deps, and start `uvicorn backend.server:app`. Set `STREAMING_LLM_BOOTSTRAP_DEPS=0` if you want to skip the `pip install -r backend/requirements.txt` step.
+- **Docker Compose**: `docker/workflow-runner/streaming-llm.compose.yml` defines a standalone `streaming-llm` service that mounts this folder, loads `.env.sidecar`, and exposes `${STREAMING_LLM_PORT:-8000}`. Include it via `docker compose -f docker/workflow-runner/streaming-llm.compose.yml up streaming-llm` or merge it into your existing stack.
+- **Environment**: `.env.sidecar.example` lists every variable consumed by `backend/settings.py` along with deployment-specific overrides such as `STREAMING_LLM_HOST`, log/summary directories, and Ollama endpoints. Update it, copy to `.env.sidecar`, and both the script + compose service will pick it up automatically.

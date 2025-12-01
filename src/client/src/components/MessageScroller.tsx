@@ -13,6 +13,8 @@ export type MessageScrollerProps = {
   onAutoScrollChange?: (v: boolean) => void
   scrollToBottomTrigger?: number
   sessionId?: string | null
+  onMessageClick?: (message: CodingAgentMessage) => void
+  selectedMessageId?: string | null
 }
 
 export default function MessageScroller(props: MessageScrollerProps) {
@@ -614,7 +616,23 @@ export default function MessageScroller(props: MessageScrollerProps) {
             <div class="whitespace-pre-wrap text-[var(--text)] break-words text-sm">
               <For each={group.messages}>
                 {(message) => (
-                  <div class="relative mb-3 rounded-xl border border-transparent p-3 transition hover:border-[var(--border)] last:mb-0">
+                  <div
+                    class="relative mb-3 rounded-xl border border-transparent p-3 transition hover:border-[var(--border)] last:mb-0"
+                    classList={{
+                      'border-blue-500 bg-blue-50 dark:bg-blue-950/30': props.selectedMessageId === message.id,
+                      'cursor-pointer': Boolean(props.onMessageClick)
+                    }}
+                    role={props.onMessageClick ? 'button' : undefined}
+                    tabIndex={props.onMessageClick ? 0 : undefined}
+                    onClick={() => props.onMessageClick?.(message)}
+                    onKeyDown={(event) => {
+                      if (!props.onMessageClick) return
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        props.onMessageClick(message)
+                      }
+                    }}
+                  >
                     <div>{renderMessageParts(message)}</div>
                   </div>
                 )}

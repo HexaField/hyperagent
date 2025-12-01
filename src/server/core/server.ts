@@ -46,6 +46,7 @@ import type { GitFileChange, GitInfo } from '../../interfaces/core/git'
 import { parseGitStashList } from '../lib/git'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
 import { createWorkspaceSessionsRouter } from '../modules/workspaceSessions/routes'
+import { createWorkspaceNarratorRouter, type NarratorRelay } from '../modules/workspaceNarrator/routes'
 import { createWorkspaceSummaryRouter } from '../modules/workspaceSummary/routes'
 import { createWorkspaceTerminalModule } from '../modules/workspaceTerminal/module'
 import { createWorkspaceWorkflowsRouter } from '../modules/workspaceWorkflows/routes'
@@ -180,6 +181,7 @@ export type CreateServerOptions = {
   codingAgentRunner?: CodingAgentRunner
   codingAgentCommandRunner?: CodingAgentCommandRunner
   webSockets?: WebSocketBindings
+  narratorRelay?: NarratorRelay
 }
 
 export type ServerInstance = {
@@ -1390,6 +1392,11 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     ensureWorkspaceDirectory
   })
 
+  const workspaceNarratorRouter = createWorkspaceNarratorRouter({
+    wrapAsync,
+    narratorRelay: options.narratorRelay
+  })
+
   const workspaceWorkflowsRouter = createWorkspaceWorkflowsRouter({
     wrapAsync,
     workflowRuntime,
@@ -1468,6 +1475,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   app.post('/api/agent/run', wrapAsync(agentRunHandler))
   app.use(workspaceSummaryRouter)
   app.use(workspaceSessionsRouter)
+  app.use(workspaceNarratorRouter)
   app.use(workspaceWorkflowsRouter)
   app.use(workspaceCodeServerRouter)
   app.use(workspaceTerminalModule.router)
