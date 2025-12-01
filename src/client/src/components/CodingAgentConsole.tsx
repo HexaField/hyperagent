@@ -14,7 +14,8 @@ import {
   type CodingAgentSessionDetail,
   type CodingAgentSessionSummary
 } from '../lib/codingAgent'
-import MessageScroller from './MessageScroller'
+import ConversationPane from './ConversationPane'
+import { createConversationScrollController } from './conversationScrollController'
 
 const REFRESH_INTERVAL_MS = 4000
 const STORAGE_PREFIX = 'coding-agent-console:v1'
@@ -281,6 +282,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [sessionOverrides, setSessionOverrides] = createSignal<Record<string, SessionOverride>>({})
   const [killingSessionId, setKillingSessionId] = createSignal<string | null>(null)
   let drawerHideTimeout: number | null = null
+  const scrollController = createConversationScrollController()
 
   const closeSessionSettings = () => setSessionSettingsId(null)
 
@@ -317,8 +319,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   }
 
   const [replyEl, setReplyEl] = createSignal<HTMLTextAreaElement | null>(null)
-  const [autoScroll, setAutoScroll] = createSignal(true)
-  const [scrollTrigger, setScrollTrigger] = createSignal(0)
 
   const openSingleWidgetByTemplate = (templateId: string) => {
     try {
@@ -406,6 +406,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         setPendingSessionId(run.sessionId)
         setSelectedSessionId(run.sessionId)
         await Promise.all([refetchSessions(), refetchRuns()])
+        scrollController.requestScrollIfAuto()
         props.onRunStarted?.(run.sessionId)
         if (isMobile()) closeSessionDrawer()
         focusReplyInput()
@@ -419,10 +420,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       const ta = replyEl()
       if (ta) ta.style.height = 'auto'
       await Promise.all([refetchSessionDetail(), refetchSessions()])
-      // Let the MessageScroller pick up the new messages and auto-scroll only if autoscroll is enabled.
-      if (autoScroll()) {
-        setScrollTrigger((v) => v + 1)
-      }
+      scrollController.requestScrollIfAuto()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to post message'
       setError(message)
@@ -595,6 +593,25 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     if (cached) return cached
     if (draftingSession()) return []
     return selectedDetail()?.messages ?? []
+  })
+
+  createEffect(() => {
+    const sessionId = selectedSessionId()
+    if (sessionId) {
+      scrollController.setContext(sessionId)
+      return
+    }
+    if (draftingSession()) {
+      scrollController.setContext('__draft__')
+      return
+    }
+    scrollController.setContext('__no-session__')
+  })
+
+  createEffect(() => {
+    const list = messages()
+    const lastMessage = list.length > 0 ? list[list.length - 1] : null
+    scrollController.notifyLatestKey(lastMessage ? messageSignature(lastMessage) : null)
   })
 
   createEffect(() => {
@@ -772,32 +789,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     const transcriptScrollerClass = isMobileVariant
       ? 'flex-1 min-h-0 space-y-3 overflow-y-auto'
       : 'max-h-[520px] space-y-3 overflow-y-auto pr-1'
-
-    const scrollToBottomButton = (positionClass: string) => (
-      <button
-        type="button"
-        class={`absolute flex h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg ${positionClass}`}
-        classList={{ hidden: autoScroll() }}
-        onClick={() => {
-          // request MessageScroller to scroll to bottom
-          setScrollTrigger((v) => v + 1)
-          setAutoScroll(true)
-        }}
-        title="Scroll to bottom"
-      >
-        ↓
-      </button>
-    )
-
-    const transcriptList = (
-      <MessageScroller
-        messages={messages()}
-        class={transcriptScrollerClass}
-        onAutoScrollChange={setAutoScroll}
-        scrollToBottomTrigger={scrollTrigger()}
-        sessionId={selectedSessionId()}
-      />
-    )
+    const scrollButtonClass = isMobileVariant ? 'right-3 bottom-20' : 'right-3 bottom-3'
 
     const infoBlock = (
       <div class="flex items-start gap-3">
@@ -850,23 +842,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       </div>
     )
 
-    const noTranscriptBlock = (
-      <div class="flex h-full min-h-0 items-center justify-center text-sm text-[var(--text-muted)]">
-        No transcript yet.
-      </div>
-    )
-
-    // Always render the MessageScroller to keep its DOM stable across polling/refetches.
-    // Show a lightweight placeholder when there are no messages.
-    const transcriptBlock = (
-      <div class={transcriptContainerClass}>
-        {transcriptList}
-        <Show when={messages().length === 0}>{noTranscriptBlock}</Show>
-        {scrollToBottomButton('right-3 bottom-3')}
-      </div>
-    )
-
-    const replyFormClass = isMobileVariant ? 'flex items-end gap-2 shrink-0 pt-3' : 'mt-3 flex items-end gap-2'
+    const replyFormClass = 'flex items-end gap-2'
 
     const replyForm = (
       <form
@@ -904,11 +880,28 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       </form>
     )
 
+    const conversationPane = (
+      <ConversationPane
+        messages={messages()}
+        sessionId={selectedSessionId()}
+        emptyPlaceholder={
+          draftingSession()
+            ? 'Enter the first prompt to start a session.'
+            : 'No transcript yet.'
+        }
+        footer={replyForm}
+        class={transcriptContainerClass}
+        scrollerClass={transcriptScrollerClass}
+        scrollButtonClass={scrollButtonClass}
+        scrollToLatestSignal={scrollController.scrollSignal()}
+        onAutoScrollChange={scrollController.handleAutoScrollChange}
+      />
+    )
+
     if (isMobileVariant) {
       return (
         <section class={sectionClass}>
-          <div class="flex-1 min-h-0">{transcriptBlock}</div>
-          <div class="shrink-0 pt-3">{replyForm}</div>
+          <div class="flex-1 min-h-0">{conversationPane}</div>
         </section>
       )
     }
@@ -916,8 +909,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     return (
       <section class={sectionClass}>
         {infoBlock}
-        {transcriptBlock}
-        {replyForm}
+        {conversationPane}
       </section>
     )
   }

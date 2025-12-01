@@ -15,6 +15,7 @@ export type MessageScrollerProps = {
   sessionId?: string | null
   onMessageClick?: (message: CodingAgentMessage) => void
   selectedMessageId?: string | null
+  footer?: JSX.Element | null
 }
 
 export default function MessageScroller(props: MessageScrollerProps) {
@@ -62,6 +63,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
 
   // monitor manual scroll requests
   createEffect(() => {
+    const nudge = props.scrollToBottomTrigger ?? 0
     const el = container()
     if (!el) return
     // Clear any persisted scroll position for this session when user requests auto-scroll
@@ -73,6 +75,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
     // We only clear any persisted scroll position and perform the requested scroll.
     // The parent (CodingAgentConsole) is responsible for flipping its own autoScroll state when the user clicks resume.
     // First attempt a smooth scroll then force an instant settle
+    if (!Number.isFinite(nudge)) return
     scrollToBottom(el, true)
   })
 
@@ -641,6 +644,9 @@ export default function MessageScroller(props: MessageScrollerProps) {
           </article>
         )}
       </For>
+      <Show when={props.footer} keyed>
+        {(footer) => <div class="mt-3">{footer}</div>}
+      </Show>
       <Show when={selectionMenu()} keyed>
         {(menu) => (
           <div
