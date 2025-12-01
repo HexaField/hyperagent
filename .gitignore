@@ -9,3 +9,5 @@ package-lock.json
 .hyperagent/
 .tmp/
 .github/prompts
+.agents/
+.agents-test/

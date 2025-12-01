@@ -46,6 +46,8 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
   const [rawStream, setRawStream] = createSignal<string | null>(null)
   const [rawStreamLoading, setRawStreamLoading] = createSignal(false)
   const [rawStreamError, setRawStreamError] = createSignal<string | null>(null)
+  const [autoScroll, setAutoScroll] = createSignal(true)
+  const [scrollTrigger, setScrollTrigger] = createSignal(0)
 
   const [feed, { refetch }] = createResource(normalizedWorkspaceId, async (workspaceId) => {
     const target = workspaceId?.trim() || normalizedWorkspaceId()
@@ -86,7 +88,8 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
 
   const timelineMessages = createMemo<CodingAgentMessage[]>(() => {
     const events = feed()?.events ?? []
-    return events.map((event) => ({
+    const ordered = [...events].reverse()
+    return ordered.map((event) => ({
       id: event.id,
       role: formatRole(event),
       createdAt: event.timestamp,
@@ -112,6 +115,7 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
 
   const summaryRef = createMemo(() => feed()?.summaryRef ?? null)
   const messageCount = createMemo(() => timelineMessages().length)
+  const hasMessages = createMemo(() => messageCount() > 0)
 
   const formatErrorMessage = () => {
     const error = feed.error
@@ -141,6 +145,9 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
       setRelayTrackingEventId(nextEventId)
       try {
         await refetch()
+        if (autoScroll()) {
+          setScrollTrigger((value) => value + 1)
+        }
       } catch {
         // feed errors surface elsewhere
       }
@@ -191,6 +198,11 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
     }
   }
 
+  const resumeAutoScroll = () => {
+    setScrollTrigger((value) => value + 1)
+    setAutoScroll(true)
+  }
+
   return (
     <div class="flex h-full flex-col gap-4">
       <header class="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
@@ -232,15 +244,32 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
           <span>{conversationLabel()}</span>
         </header>
         <div class="flex-1 min-h-[260px] overflow-hidden">
-          <Show when={timelineMessages().length > 0} fallback={<p class="text-sm text-[var(--text-muted)]">No narrator messages yet.</p>}>
+          <div class="relative flex h-full min-h-[260px] flex-col">
             <MessageScroller
               messages={timelineMessages()}
-              class="flex h-full flex-col gap-3 overflow-y-auto pr-1"
+              class="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1"
               sessionId={feed()?.conversationId ?? null}
+              onAutoScrollChange={setAutoScroll}
+              scrollToBottomTrigger={scrollTrigger()}
             />
-          </Show>
+            <Show when={!hasMessages()}>
+              <div class="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-[var(--text-muted)]">
+                No narrator messages yet.
+              </div>
+            </Show>
+            <Show when={!autoScroll() && hasMessages()}>
+              <button
+                type="button"
+                class="absolute right-3 bottom-3 flex h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg"
+                onClick={resumeAutoScroll}
+                title="Scroll to newest narrator event"
+              >
+                ↓
+              </button>
+            </Show>
+          </div>
         </div>
-        <Show when={timelineMessages().length > 0}>
+        <Show when={hasMessages()}>
           <p class="mt-3 text-xs text-[var(--text-muted)]">{messageCount()} events captured for this workspace.</p>
         </Show>
       </section>
