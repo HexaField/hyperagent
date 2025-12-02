@@ -53,6 +53,7 @@ export default function RepositoryNavigator() {
   const [radicleConversionPath, setRadicleConversionPath] = createSignal<string | null>(null)
   const [radicleConversionStatus, setRadicleConversionStatus] = createSignal<string | null>(null)
   const [quickActionStatus, setQuickActionStatus] = createSignal<string | null>(null)
+  const [quickActionLevel, setQuickActionLevel] = createSignal<'info' | 'error' | 'warn' | null>(null)
   const [createFromTemplateOpen, setCreateFromTemplateOpen] = createSignal(false)
   const [selectedTemplateId, setSelectedTemplateId] = createSignal<string | null>(null)
   
@@ -318,6 +319,7 @@ export default function RepositoryNavigator() {
 
   const openCreateFromTemplateModal = () => {
     setQuickActionStatus(null)
+    setQuickActionLevel(null)
     setCreateFromTemplateOpen(true)
     // Preselect first template if available
     const first = templates()?.[0]
@@ -344,11 +346,12 @@ export default function RepositoryNavigator() {
       return
     }
     setQuickActionStatus('Creating from template…')
+    setQuickActionLevel('info')
     setTemplateStreamLogs([])
     try {
       const resp = await fetch('/api/projects', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body: JSON.stringify({ templateId, path, workspaceId: selection.currentWorkspaceId() ?? null })
       })
       if (!resp.ok && resp.status !== 200) {
@@ -378,14 +381,22 @@ export default function RepositoryNavigator() {
             try {
               const payload = JSON.parse(payloadText)
               console.log(payload)
+              const level = (payload.level as 'info' | 'error' | 'warn' | undefined) ??
+                (payload.type === 'error' ? 'error' : 'info')
               if (payload.type === 'stdout' || payload.type === 'stderr') {
-                setTemplateStreamLogs((prev) => [...prev, String(payload.chunk)])
+                // always append logs
+                setTemplateStreamLogs((prev) => [...prev, String(payload.message ?? payload.chunk ?? '')])
+                // mark level for overall status when stderr
+                if (payload.type === 'stderr') setQuickActionLevel('warn')
               } else if (payload.type === 'step' || payload.type === 'info' || payload.type === 'start') {
                 setQuickActionStatus(String(payload.message))
+                setQuickActionLevel(level ?? 'info')
               } else if (payload.type === 'error') {
                 setQuickActionStatus(String(payload.message))
+                setQuickActionLevel('error')
               } else if (payload.type === 'done') {
                 setQuickActionStatus(String(payload.message ?? 'Done'))
+                setQuickActionLevel(level ?? 'info')
               }
             } catch {
               // ignore parse errors
@@ -400,7 +411,10 @@ export default function RepositoryNavigator() {
           if (!line.startsWith('data:')) continue
           try {
             const payload = JSON.parse(line.slice(5).trim())
-            if (payload.type === 'done') setQuickActionStatus(String(payload.message ?? 'Done'))
+            if (payload.type === 'done') {
+              setQuickActionStatus(String(payload.message ?? 'Done'))
+              setQuickActionLevel((payload.level as any) ?? 'info')
+            }
           } catch {}
         }
       }
@@ -408,6 +422,7 @@ export default function RepositoryNavigator() {
       await refreshProjects()
     } catch (error) {
       setQuickActionStatus(error instanceof Error ? error.message : 'Failed to call template service')
+      setQuickActionLevel('error')
     }
   }
 
@@ -801,7 +816,11 @@ export default function RepositoryNavigator() {
             />
 
             <Show when={quickActionStatus()}>
-              {(message) => <p class="mt-2 text-xs text-red-500">{message()}</p>}
+              {(message) => (
+                <p class={`mt-2 text-xs ${quickActionLevel() === 'error' ? 'text-red-500' : 'text-[var(--text-muted)]'}`}>
+                  {message()}
+                </p>
+              )}
             </Show>
 
             <Show when={templateStreamLogs().length > 0}>

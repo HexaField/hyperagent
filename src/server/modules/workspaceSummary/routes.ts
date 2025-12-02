@@ -527,12 +527,12 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
           }
         }
 
-        emit({ type: 'start', message: 'Create from template started', templateId, path: requestPathRaw ?? null })
+        emit({ type: 'start', level: 'info', message: 'Create from template started', templateId, path: requestPathRaw ?? null })
 
         const templateDir = path.resolve(process.cwd(), 'templates', templateId.trim())
         const targetPathRaw = requestPathRaw
         if (!targetPathRaw) {
-          emit({ type: 'error', message: 'repositoryPath (or path) is required when creating from template' })
+          emit({ type: 'error', level: 'error', message: 'repositoryPath (or path) is required when creating from template' })
           res.end()
           return
         }
@@ -542,7 +542,7 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
         try {
           await fs.stat(templateDir)
         } catch (err) {
-          emit({ type: 'error', message: `Template not found: ${templateId}` })
+          emit({ type: 'error', level: 'error', message: `Template not found: ${templateId}` })
           res.end()
           return
         }
@@ -551,7 +551,7 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
         try {
           const existing = await fs.stat(targetPath)
           if (existing) {
-            emit({ type: 'error', message: `Target path already exists: ${targetPath}` })
+            emit({ type: 'error', level: 'error', message: `Target path already exists: ${targetPath}` })
             res.end()
             return
           }
@@ -560,17 +560,17 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
         }
 
         // Create target directory
-        emit({ type: 'step', message: 'Creating target directory', path: targetPath })
+        emit({ type: 'step', level: 'info', message: 'Creating target directory', path: targetPath })
         try {
           await fs.mkdir(targetPath, { recursive: true })
         } catch (err) {
-          emit({ type: 'error', message: String(err) })
+          emit({ type: 'error', level: 'error', message: String(err) })
           res.end()
           return
         }
 
         // Read manifest early to determine whether to clone instead of copy
-        emit({ type: 'step', message: 'Reading template manifest' })
+        emit({ type: 'step', level: 'info', message: 'Reading template manifest' })
         const manifestPath = path.join(templateDir, 'template.json')
         let manifest: any = null
         try {
@@ -583,32 +583,29 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
         // If manifest includes a `url`, clone that repo instead of copying template folder
         if (manifest && typeof manifest.url === 'string' && manifest.url.trim()) {
           const cloneUrl = manifest.url.trim()
-          emit({ type: 'step', message: `Cloning template from ${cloneUrl}` })
+          emit({ type: 'step', level: 'info', message: `Cloning template from ${cloneUrl}` })
           try {
             await new Promise<void>((resolve, reject) => {
               const child = spawn('git', ['clone', cloneUrl, targetPath], { stdio: ['ignore', 'pipe', 'pipe'] })
-              child.stdout?.on('data', (chunk) => emit({ type: 'stdout', chunk: String(chunk) }))
-              child.stderr?.on('data', (chunk) => emit({ type: 'stderr', chunk: String(chunk) }))
+              child.stdout?.on('data', (chunk) => emit({ type: 'stdout', level: 'info', chunk: String(chunk), message: String(chunk) }))
+              child.stderr?.on('data', (chunk) => emit({ type: 'stderr', level: 'warn', chunk: String(chunk), message: String(chunk) }))
               child.once('error', reject)
               child.once('close', (code) =>
                 code === 0 ? resolve() : reject(new Error(`git clone failed with ${code}`))
               )
             })
           } catch (err) {
-            emit({
-              type: 'error',
-              message: `Failed to clone template url: ${err instanceof Error ? err.message : String(err)}`
-            })
+            emit({ type: 'error', level: 'error', message: `Failed to clone template url: ${err instanceof Error ? err.message : String(err)}` })
             res.end()
             return
           }
         } else {
           // Copy template contents into target
-          emit({ type: 'step', message: 'Copying template files' })
+          emit({ type: 'step', level: 'info', message: 'Copying template files' })
           try {
             try {
               await fs.cp(templateDir, targetPath, { recursive: true })
-            } catch (copyErr) {
+            } catch {
               const cp = spawn('cp', ['-a', `${templateDir}/.`, targetPath])
               await new Promise<void>((resolve, reject) => {
                 cp.once('error', reject)
@@ -616,7 +613,7 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
               })
             }
           } catch (err) {
-            emit({ type: 'error', message: `Failed to copy template files: ${String(err)}` })
+            emit({ type: 'error', level: 'error', message: `Failed to copy template files: ${String(err)}` })
             res.end()
             return
           }
@@ -625,12 +622,12 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
         if (manifest && Array.isArray(manifest.setup) && manifest.setup.length) {
           for (let i = 0; i < manifest.setup.length; i++) {
             const cmd = String(manifest.setup[i])
-            emit({ type: 'step', message: `Running setup command: ${cmd}`, index: i })
+            emit({ type: 'step', level: 'info', message: `Running setup command: ${cmd}`, index: i })
             try {
               await new Promise<void>((resolve, reject) => {
                 const child = spawn(cmd, { shell: true, cwd: targetPath, env: process.env })
-                child.stdout?.on('data', (chunk) => emit({ type: 'stdout', chunk: String(chunk) }))
-                child.stderr?.on('data', (chunk) => emit({ type: 'stderr', chunk: String(chunk) }))
+                child.stdout?.on('data', (chunk) => emit({ type: 'stdout', level: 'info', chunk: String(chunk), message: String(chunk) }))
+                child.stderr?.on('data', (chunk) => emit({ type: 'stderr', level: 'warn', chunk: String(chunk), message: String(chunk) }))
                 child.once('error', (err2) => reject(err2))
                 child.once('close', (code) => {
                   if (code === 0) resolve()
@@ -638,10 +635,7 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
                 })
               })
             } catch (err) {
-              emit({
-                type: 'error',
-                message: `Setup command failed: ${err instanceof Error ? err.message : String(err)}`
-              })
+              emit({ type: 'error', level: 'error', message: `Setup command failed: ${err instanceof Error ? err.message : String(err)}` })
               res.end()
               return
             }
@@ -650,16 +644,16 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
 
         // Ensure .hyperagent folder exists
         try {
-          emit({ type: 'step', message: 'Initializing hyperagent metadata' })
+          emit({ type: 'step', level: 'info', message: 'Initializing hyperagent metadata' })
           await fs.mkdir(path.join(targetPath, '.hyperagent'), { recursive: true })
         } catch (err) {
-          emit({ type: 'error', message: `Failed to create .hyperagent: ${String(err)}` })
+          emit({ type: 'error', level: 'error', message: `Failed to create .hyperagent: ${String(err)}` })
           res.end()
           return
         }
 
         // Initialize git and ensure initial commit
-        emit({ type: 'step', message: 'Initializing Git repository (if missing)' })
+        emit({ type: 'step', level: 'info', message: 'Initializing Git repository (if missing)' })
         try {
           await initializeWorkspaceRepository(targetPath, normalizedBranch)
 
@@ -671,7 +665,7 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
           }
 
           if (!hasHead) {
-            emit({ type: 'step', message: 'Creating initial Git commit' })
+            emit({ type: 'step', level: 'info', message: 'Creating initial Git commit' })
             try {
               await runGitCommand(['add', '--all'], targetPath)
               const authorFlag = `${(req.app as any).commitAuthor?.name ?? 'Hyperagent'} <${(req.app as any).commitAuthor?.email ?? 'workflow@hyperagent.local'}>`
@@ -679,36 +673,29 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
                 ['commit', '-m', 'Initial commit (created from template)', `--author=${authorFlag}`],
                 targetPath
               )
-              emit({ type: 'info', message: 'Initial commit created' })
+              emit({ type: 'info', level: 'info', message: 'Initial commit created' })
             } catch (commitErr) {
-              emit({
-                type: 'error',
-                message: `Failed to create initial commit: ${commitErr instanceof Error ? commitErr.message : String(commitErr)}`
-              })
+              emit({ type: 'error', level: 'error', message: `Failed to create initial commit: ${commitErr instanceof Error ? commitErr.message : String(commitErr)}` })
               res.end()
               return
             }
           } else {
-            emit({ type: 'info', message: 'Repository already has commits' })
+            emit({ type: 'info', level: 'info', message: 'Repository already has commits' })
           }
         } catch (err) {
-          emit({
-            type: 'error',
-            message: `Git initialization failed: ${err instanceof Error ? err.message : String(err)}`
-          })
+          emit({ type: 'error', level: 'error', message: `Git initialization failed: ${err instanceof Error ? err.message : String(err)}` })
           res.end()
           return
         }
 
         // Register repository with Radicle
-        emit({ type: 'step', message: 'Registering repository with Radicle' })
+        emit({ type: 'step', level: 'info', message: 'Registering repository with Radicle' })
         try {
           const rawName = path.basename(targetPath)
           let normalizedName = rawName.replace(/[^A-Za-z0-9._-]+/g, '-')
           normalizedName = normalizedName.replace(/^[._-]+|[._-]+$/g, '')
           if (!normalizedName.length) normalizedName = rawName
-          if (normalizedName !== rawName)
-            emit({ type: 'info', message: `Template name sanitized to '${normalizedName}'` })
+          if (normalizedName !== rawName) emit({ type: 'info', level: 'info', message: `Template name sanitized to '${normalizedName}'` })
 
           const registration = await radicleModule.registerRepository({
             repositoryPath: targetPath,
@@ -729,19 +716,11 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
             console.warn('Failed to persist radicle registration', { error: err })
           }
 
-          emit({
-            type: 'done',
-            message: 'Template creation complete',
-            repository: registration,
-            repositoryName: normalizedName
-          })
+          emit({ type: 'done', level: 'info', message: 'Template creation complete', repository: registration, repositoryName: normalizedName })
           res.end()
           return
         } catch (err) {
-          emit({
-            type: 'error',
-            message: `Radicle registration_failed: ${err instanceof Error ? err.message : String(err)}`
-          })
+          emit({ type: 'error', level: 'error', message: `Radicle registration_failed: ${err instanceof Error ? err.message : String(err)}` })
           res.end()
           return
         }
@@ -763,7 +742,7 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
       // Verify template exists
       try {
         await fs.stat(templateDir)
-      } catch (err) {
+      } catch {
         res.status(404).json({ error: `Template not found: ${templateId}` })
         return
       }
