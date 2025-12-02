@@ -1,0 +1,6 @@
+{
+  "name": "Solid + Tailwind",
+  "description": "Solid + Tailwind CSS + TypeScript + Vite + ESLint + Prettier Starter template",
+  "url": "https://github.com/AR10Dev/solid-tailwind-ts-vite",
+  "setup": ["npm i"]
+}

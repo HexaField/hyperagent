@@ -504,8 +504,8 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
         typeof repositoryPath === 'string' && repositoryPath.trim()
           ? repositoryPath.trim()
           : typeof req.body?.path === 'string' && req.body.path.trim()
-          ? req.body.path.trim()
-          : ''
+            ? req.body.path.trim()
+            : ''
       // If the client wants streaming feedback, switch to SSE
       const wantsStream = String(req.headers.accept ?? '').includes('text/event-stream')
       if (wantsStream) {
@@ -569,25 +569,7 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
           return
         }
 
-        // Copy template contents into target
-        emit({ type: 'step', message: 'Copying template files' })
-        try {
-          try {
-            await fs.cp(templateDir, targetPath, { recursive: true })
-          } catch (copyErr) {
-            const cp = spawn('cp', ['-a', `${templateDir}/.`, targetPath])
-            await new Promise<void>((resolve, reject) => {
-              cp.once('error', reject)
-              cp.once('close', (code) => (code === 0 ? resolve() : reject(new Error(`cp failed with ${code}`))))
-            })
-          }
-        } catch (err) {
-          emit({ type: 'error', message: `Failed to copy template files: ${String(err)}` })
-          res.end()
-          return
-        }
-
-        // Read manifest and run setup commands
+        // Read manifest early to determine whether to clone instead of copy
         emit({ type: 'step', message: 'Reading template manifest' })
         const manifestPath = path.join(templateDir, 'template.json')
         let manifest: any = null
@@ -595,7 +577,49 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
           const raw = await fs.readFile(manifestPath, 'utf8')
           manifest = JSON.parse(raw)
         } catch (err) {
-          emit({ type: 'info', message: 'No valid template manifest found, skipping setup' })
+          // manifest optional
+        }
+
+        // If manifest includes a `url`, clone that repo instead of copying template folder
+        if (manifest && typeof manifest.url === 'string' && manifest.url.trim()) {
+          const cloneUrl = manifest.url.trim()
+          emit({ type: 'step', message: `Cloning template from ${cloneUrl}` })
+          try {
+            await new Promise<void>((resolve, reject) => {
+              const child = spawn('git', ['clone', cloneUrl, targetPath], { stdio: ['ignore', 'pipe', 'pipe'] })
+              child.stdout?.on('data', (chunk) => emit({ type: 'stdout', chunk: String(chunk) }))
+              child.stderr?.on('data', (chunk) => emit({ type: 'stderr', chunk: String(chunk) }))
+              child.once('error', reject)
+              child.once('close', (code) =>
+                code === 0 ? resolve() : reject(new Error(`git clone failed with ${code}`))
+              )
+            })
+          } catch (err) {
+            emit({
+              type: 'error',
+              message: `Failed to clone template url: ${err instanceof Error ? err.message : String(err)}`
+            })
+            res.end()
+            return
+          }
+        } else {
+          // Copy template contents into target
+          emit({ type: 'step', message: 'Copying template files' })
+          try {
+            try {
+              await fs.cp(templateDir, targetPath, { recursive: true })
+            } catch (copyErr) {
+              const cp = spawn('cp', ['-a', `${templateDir}/.`, targetPath])
+              await new Promise<void>((resolve, reject) => {
+                cp.once('error', reject)
+                cp.once('close', (code) => (code === 0 ? resolve() : reject(new Error(`cp failed with ${code}`))))
+              })
+            }
+          } catch (err) {
+            emit({ type: 'error', message: `Failed to copy template files: ${String(err)}` })
+            res.end()
+            return
+          }
         }
 
         if (manifest && Array.isArray(manifest.setup) && manifest.setup.length) {
@@ -614,7 +638,10 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
                 })
               })
             } catch (err) {
-              emit({ type: 'error', message: `Setup command failed: ${err instanceof Error ? err.message : String(err)}` })
+              emit({
+                type: 'error',
+                message: `Setup command failed: ${err instanceof Error ? err.message : String(err)}`
+              })
               res.end()
               return
             }
@@ -648,10 +675,16 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
             try {
               await runGitCommand(['add', '--all'], targetPath)
               const authorFlag = `${(req.app as any).commitAuthor?.name ?? 'Hyperagent'} <${(req.app as any).commitAuthor?.email ?? 'workflow@hyperagent.local'}>`
-              await runGitCommand(['commit', '-m', 'Initial commit (created from template)', `--author=${authorFlag}`], targetPath)
+              await runGitCommand(
+                ['commit', '-m', 'Initial commit (created from template)', `--author=${authorFlag}`],
+                targetPath
+              )
               emit({ type: 'info', message: 'Initial commit created' })
             } catch (commitErr) {
-              emit({ type: 'error', message: `Failed to create initial commit: ${commitErr instanceof Error ? commitErr.message : String(commitErr)}` })
+              emit({
+                type: 'error',
+                message: `Failed to create initial commit: ${commitErr instanceof Error ? commitErr.message : String(commitErr)}`
+              })
               res.end()
               return
             }
@@ -659,7 +692,10 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
             emit({ type: 'info', message: 'Repository already has commits' })
           }
         } catch (err) {
-          emit({ type: 'error', message: `Git initialization failed: ${err instanceof Error ? err.message : String(err)}` })
+          emit({
+            type: 'error',
+            message: `Git initialization failed: ${err instanceof Error ? err.message : String(err)}`
+          })
           res.end()
           return
         }
@@ -671,7 +707,8 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
           let normalizedName = rawName.replace(/[^A-Za-z0-9._-]+/g, '-')
           normalizedName = normalizedName.replace(/^[._-]+|[._-]+$/g, '')
           if (!normalizedName.length) normalizedName = rawName
-          if (normalizedName !== rawName) emit({ type: 'info', message: `Template name sanitized to '${normalizedName}'` })
+          if (normalizedName !== rawName)
+            emit({ type: 'info', message: `Template name sanitized to '${normalizedName}'` })
 
           const registration = await radicleModule.registerRepository({
             repositoryPath: targetPath,
@@ -692,11 +729,19 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
             console.warn('Failed to persist radicle registration', { error: err })
           }
 
-          emit({ type: 'done', message: 'Template creation complete', repository: registration, repositoryName: normalizedName })
+          emit({
+            type: 'done',
+            message: 'Template creation complete',
+            repository: registration,
+            repositoryName: normalizedName
+          })
           res.end()
           return
         } catch (err) {
-          emit({ type: 'error', message: `Radicle registration_failed: ${err instanceof Error ? err.message : String(err)}` })
+          emit({
+            type: 'error',
+            message: `Radicle registration_failed: ${err instanceof Error ? err.message : String(err)}`
+          })
           res.end()
           return
         }
@@ -707,8 +752,8 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
         typeof repositoryPath === 'string' && repositoryPath.trim()
           ? repositoryPath.trim()
           : typeof req.body?.path === 'string' && req.body.path.trim()
-          ? req.body.path.trim()
-          : ''
+            ? req.body.path.trim()
+            : ''
       if (!targetPathRaw) {
         res.status(400).json({ error: 'repositoryPath (or path) is required when creating from template' })
         return
@@ -743,31 +788,47 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
         return
       }
 
-      // Copy template contents into target
-      try {
-        try {
-          await fs.cp(templateDir, targetPath, { recursive: true })
-        } catch {
-          const cp = spawn('cp', ['-a', `${templateDir}/.`, targetPath])
-          await new Promise<void>((resolve, reject) => {
-            cp.once('error', reject)
-            cp.once('close', (code) => (code === 0 ? resolve() : reject(new Error(`cp failed with ${code}`))))
-          })
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to copy template files'
-        res.status(500).json({ error: message })
-        return
-      }
-
-      // Read manifest and run setup commands
+      // Read manifest early to determine whether to clone instead of copy
       const manifestPath = path.join(templateDir, 'template.json')
       let manifest: any = null
       try {
         const raw = await fs.readFile(manifestPath, 'utf8')
         manifest = JSON.parse(raw)
       } catch {
-        // ignore missing/invalid manifest
+        // manifest optional
+      }
+
+      // If manifest includes a `url`, clone that repo instead of copying template folder
+      if (manifest && typeof manifest.url === 'string' && manifest.url.trim()) {
+        const cloneUrl = manifest.url.trim()
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const child = spawn('git', ['clone', cloneUrl, targetPath], { stdio: 'inherit' })
+            child.once('error', reject)
+            child.once('close', (code) => (code === 0 ? resolve() : reject(new Error(`git clone failed with ${code}`))))
+          })
+        } catch (err) {
+          const message = err instanceof Error ? err.message : `Failed to clone template url: ${String(err)}`
+          res.status(500).json({ error: message })
+          return
+        }
+      } else {
+        // Copy template contents into target
+        try {
+          try {
+            await fs.cp(templateDir, targetPath, { recursive: true })
+          } catch {
+            const cp = spawn('cp', ['-a', `${templateDir}/.`, targetPath])
+            await new Promise<void>((resolve, reject) => {
+              cp.once('error', reject)
+              cp.once('close', (code) => (code === 0 ? resolve() : reject(new Error(`cp failed with ${code}`))))
+            })
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Failed to copy template files'
+          res.status(500).json({ error: message })
+          return
+        }
       }
 
       if (manifest && Array.isArray(manifest.setup) && manifest.setup.length) {
