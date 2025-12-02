@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "serve": "vite preview"
+    "serve": "vite preview",
+    "gen:certs": "node ./scripts/generate-certs.cjs"
   },
   "keywords": [],
   "author": "<HexaField>",
@@ -33,7 +34,8 @@
     "tailwindcss": "^4.0.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "selfsigned": "^1.10.14"
   },
   "dependencies": {
     "@hexafield/simple-store": "^1.0.1",
