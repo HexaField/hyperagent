@@ -46,6 +46,7 @@ import type { GitFileChange, GitInfo } from '../../interfaces/core/git'
 import { parseGitStashList } from '../lib/git'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
 import { createWorkspaceSessionsRouter } from '../modules/workspaceSessions/routes'
+import { seedDefaultPersonas } from '../modules/workspaceSessions/personas'
 import { createWorkspaceNarratorRouter, type NarratorRelay } from '../modules/workspaceNarrator/routes'
 import { createWorkspaceSummaryRouter } from '../modules/workspaceSummary/routes'
 import { createWorkspaceTerminalModule } from '../modules/workspaceTerminal/module'
@@ -1441,6 +1442,13 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   await startManagedServices(managedServices)
 
   installProcessErrorHandlers()
+
+  // Ensure built-in personas exist so users have sensible defaults.
+  try {
+    await seedDefaultPersonas()
+  } catch (err) {
+    serverLogger.warn('Failed to seed default personas', { error: toErrorMeta(err) })
+  }
 
   app.get(
     '/api/health',

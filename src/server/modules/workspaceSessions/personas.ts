@@ -21,7 +21,7 @@ export type PersonaDetail = {
   updatedAt: string
 }
 
-const CONFIG_AGENT_DIR = path.join(os.homedir(), '.config', 'opencode', 'agent')
+const CONFIG_AGENT_DIR = process.env.OPENCODE_AGENT_DIR ?? path.join(os.homedir(), '.config', 'opencode', 'agent')
 
 function sanitizeId(candidate: string): string {
   if (!candidate || typeof candidate !== 'string') candidate = `persona-${Date.now()}`
@@ -158,3 +158,30 @@ export async function deletePersona(id: string): Promise<boolean> {
 }
 
 export default { listPersonas, readPersona, writePersona, deletePersona }
+
+export async function seedDefaultPersonas(): Promise<void> {
+  await ensureDir()
+  const defaults: Array<{ id: string; markdown: string }> = [
+    {
+      id: 'opencode-default',
+      markdown: `---\nlabel: Opencode Default\nmodel: github-copilot/gpt-5-mini\ndescription: Default Opencode persona\n---\nThe default Opencode persona.`
+    },
+    {
+      id: 'multi-agent',
+      markdown: `---\nlabel: Multi-Agent Persona\nmode: agent\nmodel: github-copilot/gpt-5-mini\ndescription: Runs the verifier/worker multi-agent loop\n---\nPersona that runs as a multi-agent verifier/worker pair.`
+    }
+  ]
+
+  for (const def of defaults) {
+    try {
+      const existing = await readPersona(def.id)
+      if (!existing) {
+        await writePersona(def.id, def.markdown)
+      }
+    } catch (err) {
+      // non-fatal; log and continue
+      // eslint-disable-next-line no-console
+      console.warn('[personas] Failed to seed persona', { id: def.id, error: (err as any)?.message ?? String(err) })
+    }
+  }
+}

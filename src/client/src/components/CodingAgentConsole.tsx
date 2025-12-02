@@ -1350,9 +1350,14 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                       onClick={async () => {
                         const id = editingPersonaId()
                         if (!id) return
-                        await updateCodingAgentPersona(id, editingPersonaMarkdown())
-                        const list = await fetchCodingAgentPersonas()
-                        setPersonasList(list)
+                          const ok = await updateCodingAgentPersona(id, editingPersonaMarkdown())
+                          const list = await fetchCodingAgentPersonas()
+                          setPersonasList(list)
+                          // close editor on successful save for clearer feedback
+                          if (ok) {
+                            setEditingPersonaId(null)
+                            setEditingPersonaMarkdown('')
+                          }
                       }}
                     >
                       Save

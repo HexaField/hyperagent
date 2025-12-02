@@ -20,9 +20,11 @@ import {
 } from '../../core/config'
 import fs from 'fs/promises'
 import path from 'path'
+import crypto from 'crypto'
 
 import { listPersonas, readPersona, writePersona, deletePersona } from './personas'
 import { ensureProviderConfig } from '../../../../src/modules/workflowAgentExecutor'
+import { runVerifierWorkerLoop } from '../../../../src/modules/agent'
 
 type WrapAsync = (handler: RequestHandler) => RequestHandler
 
@@ -269,7 +271,8 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       // copying and merging persona frontmatter into `opencode.json`.
       if (personaId) {
         try {
-          const personaPath = path.join(process.env.HOME || process.env.USERPROFILE || '', '.config', 'opencode', 'agent', `${personaId}.md`)
+          const agentDir = process.env.OPENCODE_AGENT_DIR ?? path.join(process.env.HOME || process.env.USERPROFILE || '', '.config', 'opencode', 'agent')
+          const personaPath = path.join(agentDir, `${personaId}.md`)
           await fs.access(personaPath)
         } catch (err: any) {
           if (err?.code === 'ENOENT') {
@@ -309,6 +312,86 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
         providerId
       })
       logSessions('Coding agent run started', { workspacePath: normalizedWorkspace, sessionId: run.sessionId })
+      // If a persona was requested and it's configured to run in agent mode,
+      // kick off the verifier/worker loop in the background. This is intentionally
+      // non-blocking: we do not await the agent loop here so the API can return
+      // the run record immediately. Errors are logged.
+      if (personaId) {
+        try {
+          const persona = await readPersona(personaId)
+          const mode = persona?.frontmatter?.['mode']
+          if (typeof mode === 'string' && mode.toLowerCase() === 'agent') {
+            ;(async () => {
+              try {
+                const streamsDir = path.join(normalizedWorkspace, '.opencode', 'agent-streams')
+                await fs.mkdir(streamsDir, { recursive: true })
+                const logPath = path.join(streamsDir, `${run.sessionId}.log`)
+                const appendChunk = async (event: { role: string; round: number; chunk: string }) => {
+                  const time = new Date().toISOString()
+                  // Try to persist into opencode storage message/part files so the UI
+                  // can display agent turns like normal messages. Fall back to a
+                  // simple file log if storage root is unavailable.
+                  try {
+                    const storageRoot = (codingAgentStorage as any)?.rootDir
+                    if (storageRoot) {
+                      const storageDir = path.join(storageRoot, 'storage')
+                      const messageDir = path.join(storageDir, 'message', run.sessionId)
+                      const partRoot = path.join(storageDir, 'part')
+                      await fs.mkdir(messageDir, { recursive: true })
+                      await fs.mkdir(partRoot, { recursive: true })
+                      const messageId = crypto.randomUUID()
+                      const partId = crypto.randomUUID()
+                      const now = new Date().toISOString()
+                      const messageJson = {
+                        id: messageId,
+                        sessionID: run.sessionId,
+                        role: event.role,
+                        time: { created: now, completed: now },
+                        modelID: resolvedModel ?? null,
+                        providerID: providerId ?? null
+                      }
+                      await fs.writeFile(path.join(messageDir, `${messageId}.json`), JSON.stringify(messageJson, null, 2), 'utf8')
+                      const partDirPath = path.join(partRoot, messageId)
+                      await fs.mkdir(partDirPath, { recursive: true })
+                      const partJson = {
+                        id: partId,
+                        type: 'text',
+                        text: event.chunk,
+                        time: { start: Date.now(), end: Date.now() }
+                      }
+                      await fs.writeFile(path.join(partDirPath, `${partId}.json`), JSON.stringify(partJson, null, 2), 'utf8')
+                      return
+                    }
+                  } catch (err) {
+                    console.warn('[coding-agent] Failed to write agent message to storage', { error: (err as any)?.message ?? String(err) })
+                  }
+                  const line = `[${time}] [${event.role}] [round:${event.round}] ${event.chunk}\n`
+                  await fs.appendFile(logPath, line, 'utf8')
+                }
+
+                await runVerifierWorkerLoop({
+                  userInstructions: prompt.trim(),
+                  model: resolvedModel,
+                  sessionDir: normalizedWorkspace,
+                  onStream: (evt) => {
+                    try {
+                      // schedule append (don't await here)
+                      void appendChunk({ role: evt.role, round: evt.round, chunk: evt.chunk })
+                    } catch (err) {
+                      console.warn('[coding-agent] Failed to write agent stream chunk', { error: (err as any)?.message ?? String(err) })
+                    }
+                  }
+                })
+              } catch (err) {
+                logSessionsError('Agent loop failed', err, { workspacePath: normalizedWorkspace, personaId })
+              }
+            })()
+          }
+        } catch (err) {
+          // If persona cannot be read, don't block session start — just log.
+          console.warn('[coding-agent] Failed to read persona for agent run', { personaId, error: (err as any)?.message ?? String(err) })
+        }
+      }
       res.status(202).json({ run })
     } catch (error) {
       logSessionsError('Failed to start coding agent session', error, {
