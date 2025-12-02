@@ -14,6 +14,7 @@ import {
 } from 'solid-js'
 import ThemeToggle from './components/ThemeToggle'
 import { WIDGET_TEMPLATES, type WidgetAddEventDetail } from './constants/widgetTemplates'
+import { WORKSPACE_NAVIGATOR_CLOSE_EVENT, WORKSPACE_NAVIGATOR_OPEN_EVENT } from './core/events/workspaceNavigator'
 import SingleWidgetView from './core/layout/SingleWidgetView'
 import RepositoryNavigator from './core/layout/navigation/RepositoryNavigator'
 import { CanvasNavigatorContext, useCanvasNavigator } from './core/state/CanvasNavigatorContext'
@@ -21,7 +22,6 @@ import { WorkspaceSelectionProvider } from './core/state/WorkspaceSelectionConte
 import { type SingleWidgetViewDetail } from './core/state/singleWidgetView'
 import WorkspacePage from './pages/WorkspacePage'
 import { fetchJson } from './shared/api/httpClient'
-import { WORKSPACE_NAVIGATOR_CLOSE_EVENT, WORKSPACE_NAVIGATOR_OPEN_EVENT } from './core/events/workspaceNavigator'
 
 type RadicleStatus = {
   reachable: boolean
@@ -210,7 +210,7 @@ function CanvasChrome(props: { mobileNavigator: Accessor<boolean> }) {
           </button>
           <Show when={navigator.isOpen() && !props.mobileNavigator()}>
             <ChromePanel title="Workspace" onNavigate={() => navigator.close()} widthClass="w-[36rem]">
-              <WorkspaceNavigatorContent variant="desktop" />
+              <WorkspaceNavigatorContent variant="desktop" onClose={navigator.close} />
             </ChromePanel>
           </Show>
         </div>
@@ -286,7 +286,7 @@ function MobileWorkspaceNavigator(props: MobileWorkspaceNavigatorProps) {
           </button>
         </div>
         <div class="flex flex-1 flex-col gap-4 overflow-hidden px-3 py-4">
-          <WorkspaceNavigatorContent variant="mobile" />
+          <WorkspaceNavigatorContent variant="mobile" onClose={props.onClose} />
         </div>
       </div>
     </Show>
@@ -295,6 +295,7 @@ function MobileWorkspaceNavigator(props: MobileWorkspaceNavigatorProps) {
 
 type WorkspaceNavigatorContentProps = {
   variant?: 'desktop' | 'mobile'
+  onClose: () => void
 }
 
 function WorkspaceNavigatorContent(props: WorkspaceNavigatorContentProps) {
@@ -313,7 +314,8 @@ function WorkspaceNavigatorContent(props: WorkspaceNavigatorContentProps) {
   const scrollClass = () =>
     props.variant === 'mobile' ? 'flex-1 overflow-y-auto pr-1' : 'max-h-[70vh] overflow-y-auto pr-1'
 
-  const containerClass = () => (props.variant === 'mobile' ? 'flex min-h-0 flex-1 flex-col gap-3' : 'flex flex-col gap-3')
+  const containerClass = () =>
+    props.variant === 'mobile' ? 'flex min-h-0 flex-1 flex-col gap-3' : 'flex flex-col gap-3'
   const showViewControls = () => props.variant !== 'mobile'
 
   return (
@@ -342,7 +344,7 @@ function WorkspaceNavigatorContent(props: WorkspaceNavigatorContentProps) {
         </div>
       </Show>
       <div class={scrollClass()}>
-        <RepositoryNavigator />
+        <RepositoryNavigator close={props.onClose} />
       </div>
     </div>
   )

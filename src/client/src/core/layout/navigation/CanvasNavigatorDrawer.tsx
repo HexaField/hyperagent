@@ -35,7 +35,7 @@ export default function CanvasNavigatorDrawer() {
             </header>
             <div class="flex-1 overflow-auto">
               <section class="px-5 py-4">
-                <RepositoryNavigator />
+                <RepositoryNavigator close={controller.close} />
               </section>
             </div>
           </aside>
