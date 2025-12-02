@@ -2,12 +2,17 @@ import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
 import { WIDGET_TEMPLATES } from '../constants/widgetTemplates'
 import {
+  createCodingAgentPersona,
+  deleteCodingAgentPersona,
+  fetchCodingAgentPersonas,
   fetchCodingAgentRuns,
   fetchCodingAgentSessionDetail,
   fetchCodingAgentSessions,
+  getCodingAgentPersona,
   killCodingAgentSession,
   postCodingAgentMessage,
   startCodingAgentRun,
+  updateCodingAgentPersona,
   type CodingAgentMessage,
   type CodingAgentProvider,
   type CodingAgentRunRecord,
@@ -40,6 +45,7 @@ const DEFAULT_PROVIDERS: readonly CodingAgentProviderConfig[] = [FALLBACK_PROVID
 type SessionOverride = {
   providerId?: CodingAgentProviderId
   modelId?: string
+  personaId?: string
 }
 const providerConfigs = () => DEFAULT_PROVIDERS
 const PROVIDER_CONFIG_MAP = new Map<CodingAgentProviderId, CodingAgentProviderConfig>(
@@ -68,6 +74,10 @@ function storageKeyFor(workspaceKey: string): string {
 
 function sessionOverridesKeyFor(workspaceKey: string): string {
   return `${storageKeyFor(workspaceKey)}${SESSION_OVERRIDES_SUFFIX}`
+}
+
+function defaultPersonaKeyFor(workspaceKey: string): string {
+  return `${storageKeyFor(workspaceKey)}:defaultPersona`
 }
 
 function normalizeProviderId(value: string | null | undefined): CodingAgentProviderId {
@@ -244,6 +254,14 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     return props.workspaceFilter ?? ''
   }
   const workspaceKey = createMemo(() => normalizeWorkspaceKey(workspaceForFetch()))
+  createEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const key = defaultPersonaKeyFor(workspaceKey())
+      const id = window.localStorage.getItem(key)
+      setDefaultPersonaId(id ?? null)
+    } catch {}
+  })
 
   const [sessions, { refetch: refetchSessions }] = createResource(workspaceForFetch, async (value) => {
     const trimmed = value?.trim()
@@ -291,6 +309,13 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [sessionSettingsProvider, setSessionSettingsProvider] = createSignal<CodingAgentProviderId>(DEFAULT_PROVIDER.id)
   const [sessionSettingsModel, setSessionSettingsModel] = createSignal<string>(DEFAULT_MODEL_ID)
   const [sessionOverrides, setSessionOverrides] = createSignal<Record<string, SessionOverride>>({})
+  const [defaultPersonaId, setDefaultPersonaId] = createSignal<string | null>(null)
+  const [personasModalOpen, setPersonasModalOpen] = createSignal(false)
+  const [personasList, setPersonasList] = createSignal<Array<any>>([])
+  const [editingPersonaId, setEditingPersonaId] = createSignal<string | null>(null)
+  const [editingPersonaMarkdown, setEditingPersonaMarkdown] = createSignal<string>('')
+  const [draftPersonaId, setDraftPersonaId] = createSignal<string | null>(null)
+  const [draftPersonaDetail, setDraftPersonaDetail] = createSignal<any | null>(null)
   const [killingSessionId, setKillingSessionId] = createSignal<string | null>(null)
   let drawerHideTimeout: number | null = null
   const scrollController = createConversationScrollController()
@@ -366,6 +391,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     }
     setError(null)
     setDraftingSession(true)
+    setDraftPersonaId(defaultPersonaId() ?? null)
     setDraftingWorkspace(workspacePath)
     setPendingSessionId(null)
     setSelectedSessionId(null)
@@ -397,16 +423,19 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         }
         const providerId = DEFAULT_PROVIDER.id
         const modelId = DEFAULT_MODEL_ID
+        const personaToUse = draftPersonaId() ?? defaultPersonaId() ?? undefined
         const run = await startCodingAgentRun({
           workspacePath,
           prompt: text,
-          model: modelId
+          model: modelId,
+          personaId: personaToUse
         })
         setSessionOverrides((prev) => ({
           ...prev,
           [run.sessionId]: {
             providerId,
-            modelId: normalizeModelId(providerId, run.model ?? modelId)
+            modelId: normalizeModelId(providerId, run.model ?? modelId),
+            ...(personaToUse ? { personaId: personaToUse } : {})
           }
         }))
         setDraftingSession(false)
@@ -547,6 +576,13 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       window.addEventListener(STATE_EVENT, stateHandler as EventListener)
     } catch {}
 
+    // Load available personas for UI dropdowns
+    try {
+      void fetchCodingAgentPersonas()
+        .then((list) => setPersonasList(list))
+        .catch(() => {})
+    } catch {}
+
     let focusHandler: ((e: FocusEvent) => void) | null = null
 
     onCleanup(() => {
@@ -564,6 +600,23 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         } catch {}
       }
     })
+  })
+
+  // Keep draft persona detail in sync when the draft selection changes
+  createEffect(() => {
+    const id = draftPersonaId()
+    if (!id) {
+      setDraftPersonaDetail(null)
+      return
+    }
+    void (async () => {
+      try {
+        const detail = await getCodingAgentPersona(id)
+        setDraftPersonaDetail(detail)
+      } catch {
+        setDraftPersonaDetail(null)
+      }
+    })()
   })
 
   createEffect(() => {
@@ -732,6 +785,15 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           >
             {draftingSession() ? 'Drafting…' : 'New session'}
           </button>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              class="rounded-full border border-[var(--border)] px-3 py-1 text-xs"
+              onClick={() => setPersonasModalOpen(true)}
+            >
+              Personas
+            </button>
+          </div>
         </header>
         <Show when={error()} keyed>
           {(message) => <p class="mb-2 text-xs text-red-500">{message}</p>}
@@ -817,11 +879,44 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
             when={selectedDetail()}
             keyed
             fallback={
-              <p class="text-xs text-[var(--text-muted)]">
-                {draftingSession()
-                  ? 'Enter the first prompt below to start a new session.'
-                  : 'Select a session to inspect its transcript.'}
-              </p>
+              <div>
+                <Show when={draftingSession()}>
+                  <div>
+                    <p class="text-xs text-[var(--text-muted)]">Enter the first prompt below to start a new session.</p>
+                    <div class="mt-2 flex items-center gap-2">
+                      <label class="text-xs text-[var(--text-muted)]">Persona:</label>
+                      <select
+                        class="rounded border border-[var(--border)] bg-[var(--bg-muted)] px-2 py-1 text-sm"
+                        value={draftPersonaId() ?? ''}
+                        onInput={(e) => setDraftPersonaId(e.currentTarget.value || null)}
+                      >
+                        <option value="">(none)</option>
+                        <For each={personasList()}>{(p: any) => <option value={p.id}>{p.label ?? p.id}</option>}</For>
+                      </select>
+                    </div>
+                    <Show when={draftPersonaDetail()} keyed>
+                      {(d) => (
+                        <div class="mt-2 text-xs text-[var(--text-muted)]">
+                          <div>Model: {String(d.frontmatter?.model ?? d.frontmatter?.model ?? '')}</div>
+                          <Show when={d.frontmatter?.permission}>
+                            {(perm) => (
+                              <div>
+                                Permissions:{' '}
+                                {Object.entries(perm as Record<string, any>)
+                                  .map(([k, v]) => `${k}:${v}`)
+                                  .join(', ')}
+                              </div>
+                            )}
+                          </Show>
+                        </div>
+                      )}
+                    </Show>
+                  </div>
+                </Show>
+                <Show when={!draftingSession()}>
+                  <p class="text-xs text-[var(--text-muted)]">Select a session to inspect its transcript.</p>
+                </Show>
+              </div>
             }
           >
             {(detail) => (
@@ -902,11 +997,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       <ConversationPane
         messages={displayMessages()}
         sessionId={selectedSessionId()}
-        emptyPlaceholder={
-          draftingSession()
-            ? 'Enter the first prompt to start a session.'
-            : 'No transcript yet.'
-        }
+        emptyPlaceholder={draftingSession() ? 'Enter the first prompt to start a session.' : 'No transcript yet.'}
         footer={replyForm}
         class={transcriptContainerClass}
         scrollerClass={transcriptScrollerClass}
@@ -947,13 +1038,15 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
             {selectedDetail() ? selectedDetail()!.session.title || selectedDetail()!.session.id : 'No session selected'}
           </p>
         </div>
-        <button
-          type="button"
-          class="ml-3 rounded-full border border-[var(--border)] px-3 py-1 text-xs"
-          onClick={() => openSessionDrawer()}
-        >
-          Sessions
-        </button>
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="ml-3 rounded-full border border-[var(--border)] px-3 py-1 text-xs"
+            onClick={() => openSessionDrawer()}
+          >
+            Sessions
+          </button>
+        </div>
       </div>
       <div class="flex-1 min-h-0 overflow-hidden">
         {SessionDetail({ variant: 'mobile', class: 'flex h-full min-h-0 flex-col p-4 overflow-hidden' })}
@@ -1107,6 +1200,185 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     </Show>
   )
 
+  const PersonasModal = () => (
+    <Show when={personasModalOpen()}>
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--bg)]/90 px-4 py-8 backdrop-blur-sm">
+        <button
+          type="button"
+          class="absolute inset-0"
+          aria-label="Close personas"
+          tabIndex={-1}
+          onClick={() => setPersonasModalOpen(false)}
+        />
+        <div class="relative w-full max-w-2xl rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-5 shadow-2xl">
+          <div class="mb-4 flex items-center justify-between">
+            <div>
+              <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">Personas</p>
+              <h3 class="text-lg font-semibold text-[var(--text)]">Manage personas</h3>
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="rounded border px-3 py-1 text-sm"
+                onClick={async () => {
+                  try {
+                    const list = await fetchCodingAgentPersonas()
+                    setPersonasList(list)
+                  } catch {}
+                }}
+              >
+                Refresh
+              </button>
+              <button
+                type="button"
+                class="rounded border px-3 py-1 text-sm"
+                onClick={() => setPersonasModalOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+          <div class="col-span-1">
+            <div class="space-y-2">
+              <For each={personasList()}>
+                {(p: any) => (
+                  <div class="p-2 rounded border border-[var(--border)]">
+                    <div class="flex items-center justify-between">
+                      <div>
+                        <div class="text-sm font-semibold">{p.label ?? p.id}</div>
+                        <div class="text-xs text-[var(--text-muted)]">{p.description}</div>
+                      </div>
+                      <div class="flex items-center gap-1">
+                        <button
+                          class="text-xs rounded px-2 py-1 border"
+                          onClick={async () => {
+                            const detail = await getCodingAgentPersona(p.id)
+                            setEditingPersonaId(detail?.id ?? null)
+                            setEditingPersonaMarkdown(detail?.markdown ?? '')
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          class="text-xs rounded px-2 py-1 border"
+                          onClick={async () => {
+                            await deleteCodingAgentPersona(p.id)
+                            const list = await fetchCodingAgentPersonas()
+                            setPersonasList(list)
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                    <div class="mt-2 flex items-center gap-2">
+                      <div class="text-xs text-[var(--text-muted)]">
+                        <Show when={p.tools} keyed>
+                          {(t) => (
+                            <div>
+                              Tools:{' '}
+                              {Object.entries(t as Record<string, any>)
+                                .filter(([, v]) => Boolean(v))
+                                .map(([k]) => k)
+                                .join(', ') || '(none)'}
+                            </div>
+                          )}
+                        </Show>
+                      </div>
+                      <div class="text-xs text-[var(--text-muted)]">
+                        <Show when={p.permission} keyed>
+                          {(perm) => (
+                            <div>
+                              Perms:{' '}
+                              {Object.entries(perm as Record<string, any>)
+                                .map(([k, v]) => `${k}:${String(v)}`)
+                                .join(', ') || '(none)'}
+                            </div>
+                          )}
+                        </Show>
+                      </div>
+                      <button
+                        class="text-xs rounded px-2 py-1 border"
+                        onClick={() => {
+                          try {
+                            const key = defaultPersonaKeyFor(workspaceKey())
+                            if (typeof window !== 'undefined') window.localStorage.setItem(key, p.id)
+                            setDefaultPersonaId(p.id)
+                            if (draftingSession()) setDraftPersonaId(p.id)
+                          } catch {}
+                        }}
+                      >
+                        Use
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </For>
+            </div>
+            <div class="mt-4">
+              <button
+                class="rounded px-3 py-2 border"
+                onClick={async () => {
+                  const template = `---\ndescription: New persona\n---\n\nDescribe the persona here.`
+                  const res = await createCodingAgentPersona(template)
+                  if (res?.id) {
+                    const list = await fetchCodingAgentPersonas()
+                    setPersonasList(list)
+                  }
+                }}
+              >
+                New Persona
+              </button>
+            </div>
+          </div>
+          <div class="col-span-2">
+            <Show when={editingPersonaId()} keyed>
+              {(id) => (
+                <div>
+                  <div class="mb-2 flex items-center justify-between">
+                    <div class="text-sm font-semibold">Editing: {id}</div>
+                    <div class="text-xs text-[var(--text-muted)]">Markdown editor</div>
+                  </div>
+                  <textarea
+                    class="w-full h-64 rounded border border-[var(--border)] bg-[var(--bg)] p-2 text-sm font-mono"
+                    value={editingPersonaMarkdown()}
+                    onInput={(e) => setEditingPersonaMarkdown(e.currentTarget.value)}
+                  />
+                  <div class="mt-2 flex items-center gap-2">
+                    <button
+                      class="rounded px-3 py-1 border"
+                      onClick={async () => {
+                        const id = editingPersonaId()
+                        if (!id) return
+                        await updateCodingAgentPersona(id, editingPersonaMarkdown())
+                        const list = await fetchCodingAgentPersonas()
+                        setPersonasList(list)
+                      }}
+                    >
+                      Save
+                    </button>
+                    <button
+                      class="rounded px-3 py-1 border"
+                      onClick={() => {
+                        setEditingPersonaId(null)
+                        setEditingPersonaMarkdown('')
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </Show>
+            <Show when={!editingPersonaId()}>
+              <div class="text-sm text-[var(--text-muted)]">Select a persona to edit or create a new one.</div>
+            </Show>
+          </div>
+        </div>
+      </div>
+    </Show>
+  )
+
   const rootClass = () =>
     [props.class ?? '', isMobile() ? 'flex h-[calc(100dvh-47px)] flex-col overflow-hidden' : 'flex h-full flex-col']
       .filter(Boolean)
@@ -1122,13 +1394,16 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
               {(description) => <p class="text-sm text-[var(--text-muted)]">{description}</p>}
             </Show>
           </div>
-          <Show when={props.headerActions} keyed>
-            {(actions) => <div class="flex-shrink-0">{actions}</div>}
-          </Show>
+          <div class="flex items-center gap-2">
+            <Show when={props.headerActions} keyed>
+              {(actions) => <div class="flex-shrink-0">{actions}</div>}
+            </Show>
+          </div>
         </header>
       </Show>
       <div class="flex-1 min-h-0">{isMobile() ? MobileLayout : DesktopLayout}</div>
       {SessionSettingsModal()}
+      {PersonasModal()}
     </div>
   )
 }

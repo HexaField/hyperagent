@@ -18,6 +18,11 @@ import {
   FALLBACK_CODING_AGENT_MODEL_IDS,
   KNOWN_CODING_AGENT_MODEL_LABELS
 } from '../../core/config'
+import fs from 'fs/promises'
+import path from 'path'
+
+import { listPersonas, readPersona, writePersona, deletePersona } from './personas'
+import { ensureProviderConfig } from '../../../../src/modules/workflowAgentExecutor'
 
 type WrapAsync = (handler: RequestHandler) => RequestHandler
 
@@ -240,6 +245,7 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
 
   const startCodingAgentSessionHandler: RequestHandler = async (req, res) => {
     const { workspacePath, prompt, title, model, providerId: rawProviderId } = req.body ?? {}
+    const personaId = typeof req.body?.personaId === 'string' && req.body.personaId.trim() ? req.body.personaId.trim() : null
     if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
       res.status(400).json({ error: 'workspacePath is required' })
       return
@@ -258,12 +264,30 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
     }
     try {
       await ensureWorkspaceDirectory(normalizedWorkspace)
+      // If a persona is requested, validate that it exists in the user's
+      // OpenCode config directory and then let `ensureProviderConfig` handle
+      // copying and merging persona frontmatter into `opencode.json`.
+      if (personaId) {
+        try {
+          const personaPath = path.join(process.env.HOME || process.env.USERPROFILE || '', '.config', 'opencode', 'agent', `${personaId}.md`)
+          await fs.access(personaPath)
+        } catch (err: any) {
+          if (err?.code === 'ENOENT') {
+            res.status(400).json({ error: `Persona not found: ${personaId}` })
+            return
+          }
+          console.warn('[coding-agent] Failed to access persona file', { personaId, error: err?.message ?? String(err) })
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Workspace path is unavailable'
       res.status(400).json({ error: message })
       return
     }
-    try {
+      try {
+        // ensure provider config and apply persona merges if requested
+        await ensureProviderConfig(normalizedWorkspace, providerId, personaId)
+
       const resolvedModel = typeof model === 'string' && model.trim().length ? model.trim() : DEFAULT_CODING_AGENT_MODEL
       if (adapter.validateModel) {
         const ok = await Promise.resolve(adapter.validateModel(resolvedModel))
@@ -419,6 +443,94 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
   }
 
   router.get('/api/coding-agent/providers', wrapAsync(listCodingAgentProvidersHandler))
+  // Persona management (OpenCode agent markdown files in ~/.config/opencode/agent)
+  const listPersonasHandler: RequestHandler = async (_req, res) => {
+    try {
+      const personas = await listPersonas()
+      res.json({ personas })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to list personas'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const getPersonaHandler: RequestHandler = async (req, res) => {
+    const id = req.params.id
+    if (!id) {
+      res.status(400).json({ error: 'persona id is required' })
+      return
+    }
+    try {
+      const detail = await readPersona(id)
+      if (!detail) {
+        res.status(404).json({ error: 'Unknown persona' })
+        return
+      }
+      res.json({ persona: detail })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to read persona'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const createPersonaHandler: RequestHandler = async (req, res) => {
+    const body = req.body ?? {}
+    const markdown = typeof body.markdown === 'string' ? body.markdown : null
+    const suggestedId = typeof body.id === 'string' ? body.id : undefined
+    if (!markdown) {
+      res.status(400).json({ error: 'markdown is required' })
+      return
+    }
+    try {
+      const { id, path } = await writePersona(suggestedId, markdown)
+      res.status(201).json({ id, path })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create persona'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const updatePersonaHandler: RequestHandler = async (req, res) => {
+    const id = req.params.id
+    const body = req.body ?? {}
+    const markdown = typeof body.markdown === 'string' ? body.markdown : null
+    if (!id) {
+      res.status(400).json({ error: 'persona id is required' })
+      return
+    }
+    if (!markdown) {
+      res.status(400).json({ error: 'markdown is required' })
+      return
+    }
+    try {
+      const result = await writePersona(id, markdown)
+      res.json({ id: result.id, path: result.path })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update persona'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  const deletePersonaHandler: RequestHandler = async (req, res) => {
+    const id = req.params.id
+    if (!id) {
+      res.status(400).json({ error: 'persona id is required' })
+      return
+    }
+    try {
+      const ok = await deletePersona(id)
+      res.json({ success: ok })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete persona'
+      res.status(500).json({ error: message })
+    }
+  }
+
+  router.get('/api/coding-agent/personas', wrapAsync(listPersonasHandler))
+  router.get('/api/coding-agent/personas/:id', wrapAsync(getPersonaHandler))
+  router.post('/api/coding-agent/personas', wrapAsync(createPersonaHandler))
+  router.put('/api/coding-agent/personas/:id', wrapAsync(updatePersonaHandler))
+  router.delete('/api/coding-agent/personas/:id', wrapAsync(deletePersonaHandler))
   router.get('/api/coding-agent/sessions', wrapAsync(listCodingAgentSessionsHandler))
   router.get('/api/coding-agent/sessions/:sessionId', wrapAsync(getCodingAgentSessionHandler))
   router.get('/api/coding-agent/runs', wrapAsync(listCodingAgentRunsHandler))

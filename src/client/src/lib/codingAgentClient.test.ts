@@ -45,9 +45,46 @@ describe('coding agent client helpers', () => {
       body: JSON.stringify({ workspacePath: '/repo', prompt: 'Hello' })
     })
 
+    // include personaId when provided
+    fetchJsonMock.mockResolvedValue({ run: { sessionId: 'ses_test2' } })
+    await startCodingAgentRun({ workspacePath: '/repo', prompt: 'Hello', personaId: 'senior-engineer' })
+    expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspacePath: '/repo', prompt: 'Hello', personaId: 'senior-engineer' })
+    })
+
     fetchJsonMock.mockResolvedValue({ success: true })
     await killCodingAgentSession('ses_test')
     expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions/ses_test/kill', { method: 'POST' })
+  })
+
+  it('manages personas via the API', async () => {
+    // list
+    fetchJsonMock.mockResolvedValue({ personas: [{ id: 'p1', label: 'P1', updatedAt: 'now' }] })
+    const { fetchCodingAgentPersonas, getCodingAgentPersona, createCodingAgentPersona, updateCodingAgentPersona, deleteCodingAgentPersona } = await import('./codingAgent')
+    const list = await fetchCodingAgentPersonas()
+    expect(list.length).toBeGreaterThan(0)
+
+    // get detail
+    fetchJsonMock.mockResolvedValue({ id: 'p1', markdown: 'md', frontmatter: {}, body: '', updatedAt: 'now' })
+    const detail = await getCodingAgentPersona('p1')
+    expect(detail?.id).toBe('p1')
+
+    // create
+    fetchJsonMock.mockResolvedValue({ id: 'created' })
+    const created = await createCodingAgentPersona('# hi')
+    expect(created?.id).toBe('created')
+
+    // update
+    fetchJsonMock.mockResolvedValue({})
+    const updated = await updateCodingAgentPersona('created', '# updated')
+    expect(updated).toBe(true)
+
+    // delete
+    fetchJsonMock.mockResolvedValue({})
+    const deleted = await deleteCodingAgentPersona('created')
+    expect(deleted).toBe(true)
   })
 
   it('posts messages to sessions', async () => {

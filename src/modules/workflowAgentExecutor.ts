@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
+import { parseFrontmatter } from '../server/modules/workspaceSessions/personas'
 import { runVerifierWorkerLoop, type AgentLoopResult, type AgentStreamCallback } from './agent'
 import type { Provider } from './llm'
 import type { AgentExecutor, AgentExecutorArgs, AgentExecutorResult } from './workflows'
@@ -139,10 +140,90 @@ async function ensureOpencodeConfig(sessionDir: string): Promise<void> {
  * Provider-agnostic config bootstrap. Currently delegates to opencode-specific
  * config creation for backward compatibility.
  */
-export async function ensureProviderConfig(sessionDir: string, providerId?: string): Promise<void> {
+export async function ensureProviderConfig(sessionDir: string, providerId?: string, personaId?: string): Promise<void> {
   void providerId
   // For now we only support the opencode provider's config file.
   await ensureOpencodeConfig(sessionDir)
+  // If a personaId is provided and the provider is opencode (or unspecified),
+  // copy the persona markdown from the user's OpenCode config into the
+  // session's `.opencode/agent/` directory so the opencode CLI can discover it.
+  // Additionally, merge persona frontmatter (permission/tools) into `opencode.json`.
+  if (!personaId) return
+  try {
+    const home = process.env.HOME || process.env.USERPROFILE || ''
+    const src = path.join(home, '.config', 'opencode', 'agent', `${personaId}.md`)
+    const raw = await fs.readFile(src, 'utf8')
+    // write persona into session
+    const dstDir = path.join(sessionDir, '.opencode', 'agent')
+    await fs.mkdir(dstDir, { recursive: true })
+    const dst = path.join(dstDir, `${personaId}.md`)
+    await fs.writeFile(dst, raw, 'utf8')
+
+    // attempt to parse frontmatter and merge into opencode.json
+    try {
+      const { fm } = parseFrontmatter(raw)
+      if (fm && Object.keys(fm).length) {
+        const configPath = path.join(sessionDir, 'opencode.json')
+        let config: any = {
+          $schema: 'https://opencode.ai/config.json',
+          permission: {
+            edit: 'allow',
+            bash: 'allow',
+            webfetch: 'allow',
+            doom_loop: 'allow',
+            external_directory: 'deny'
+          }
+        }
+        try {
+          const existing = await fs.readFile(configPath, 'utf8')
+          config = JSON.parse(existing)
+        } catch {
+          // use default config when missing or invalid
+        }
+
+        // merge tools (shallow)
+        if (fm['tools'] && typeof fm['tools'] === 'object') {
+          config.tools = { ...(config.tools ?? {}), ...(fm['tools'] as Record<string, unknown>) }
+        }
+
+        // merge permission (validate values)
+        if (fm['permission'] && typeof fm['permission'] === 'object') {
+          config.permission = { ...(config.permission ?? {}) }
+          const allowed = new Set(['allow', 'ask', 'deny'])
+          for (const [k, v] of Object.entries(fm['permission'] as Record<string, unknown>)) {
+            const sval = String(v)
+            if (allowed.has(sval)) {
+              config.permission[k] = sval
+            }
+          }
+        }
+
+        try {
+          await fs.writeFile(path.join(sessionDir, 'opencode.json'), JSON.stringify(config, null, 2), 'utf8')
+        } catch (err) {
+          console.warn('[workflow-agent] failed to write merged opencode.json', {
+            personaId,
+            error: err instanceof Error ? err.message : String(err)
+          })
+        }
+      }
+    } catch (err) {
+      console.warn('[workflow-agent] failed to parse persona frontmatter for merging', {
+        personaId,
+        error: err instanceof Error ? err.message : String(err)
+      })
+    }
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') {
+      // persona not found — surface a warning but allow workflow executor to continue
+      console.warn('[workflow-agent] persona not found, continuing without persona', { personaId })
+      return
+    }
+    console.warn('[workflow-agent] failed to copy persona into session dir', {
+      personaId,
+      error: err?.message ?? String(err)
+    })
+  }
 }
 
 async function detectLogsPath(sessionDir: string): Promise<string | undefined> {
@@ -230,7 +311,10 @@ function buildFallbackReason(error: unknown): string {
 function synthesizePlan(instructions: string): string[] {
   const trimmed = instructions.trim()
   if (!trimmed) return ['Review workspace context', 'Apply requested changes', 'Report blocking issues']
-  const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
   if (!lines.length) return ['Review workspace context', 'Apply requested changes', 'Report blocking issues']
   const bullets: string[] = []
   for (const line of lines) {
