@@ -9,10 +9,7 @@ function commandExists(cmd: string): boolean {
   return res.status === 0
 }
 
-const runAgentCliTests = process.env.RUN_LLM_CLI_TESTS === 'true'
-const describeAgent = runAgentCliTests ? describe : describe.skip
-
-describeAgent('Verifier/worker collaboration loop', () => {
+describe('Verifier/worker collaboration loop', () => {
   it('iterates on a complex graph-feature coding brief', async () => {
     const sessionDir = path.join(process.cwd(), `.tests/agent-integration-${Date.now()}`)
     const exists = commandExists('opencode')

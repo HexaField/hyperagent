@@ -46,18 +46,19 @@ const normalizePromptArg = (text: string): string => {
   return text.startsWith('-') ? ` ${text}` : text
 }
 
-registerProvider({
-  id: 'opencode',
-  label: 'Opencode CLI',
-  validateModel: () => true,
-  buildInvocation: ({ sessionId, modelId, text }) => {
-    const cliArgs = ['run', normalizePromptArg(text), '--format', 'json', '--model', modelId]
-    const trimmedSession = sessionId.trim()
-    if (trimmedSession.length) {
-      cliArgs.push('--session', trimmedSession)
-    }
-    return { cliArgs }
-  }
-})
+/** @todo implement proper provider */
+// registerProvider({
+//   id: 'opencode',
+//   label: 'Opencode CLI',
+//   validateModel: () => true,
+//   buildInvocation: ({ sessionId, modelId, text }) => {
+//     const cliArgs = ['run', normalizePromptArg(text), '--format', 'json', '--model', modelId]
+//     const trimmedSession = sessionId.trim()
+//     if (trimmedSession.length) {
+//       cliArgs.push('--session', trimmedSession)
+//     }
+//     return { cliArgs }
+//   }
+// })
 
 export default { registerProvider, getProviderAdapter, listProviders }

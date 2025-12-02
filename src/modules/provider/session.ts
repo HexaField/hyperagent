@@ -1,7 +1,6 @@
 import { spawnSync } from 'child_process'
 
 export function createProviderSession(sessionId: string, sessionDir: string, providerId?: string): void {
-  // Default to opencode behavior for now.
   const provider = providerId ?? 'opencode'
   if (provider === 'opencode') {
     spawnSync('opencode', ['session', 'create', sessionId], { cwd: sessionDir })

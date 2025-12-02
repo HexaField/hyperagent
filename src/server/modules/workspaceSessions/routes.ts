@@ -260,11 +260,11 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
     const normalizedWorkspace = workspacePath.trim()
     const providerId =
       typeof rawProviderId === 'string' && rawProviderId.trim().length ? rawProviderId.trim() : CODING_AGENT_PROVIDER_ID
-    const adapter = getProviderAdapter(providerId)
-    if (!adapter) {
-      res.status(400).json({ error: `Unsupported provider: ${providerId}` })
-      return
-    }
+    // const adapter = getProviderAdapter(providerId)
+    // if (!adapter) {
+    //   res.status(400).json({ error: `Unsupported provider: ${providerId}` })
+    //   return
+    // }
     // personaModeAgent is determined below; declare in outer scope so it's
     // available after workspace validation.
     let personaModeAgent = false
@@ -303,13 +303,14 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       await ensureProviderConfig(normalizedWorkspace, providerId, personaId)
 
       const resolvedModel = typeof model === 'string' && model.trim().length ? model.trim() : DEFAULT_CODING_AGENT_MODEL
-      if (adapter.validateModel) {
-        const ok = await Promise.resolve(adapter.validateModel(resolvedModel))
-        if (!ok) {
-          res.status(400).json({ error: `Model not supported by provider: ${resolvedModel}` })
-          return
-        }
-      }
+      /** @todo use provider abstraction in the future */
+      // if (adapter.validateModel) {
+      //   const ok = await Promise.resolve(adapter.validateModel(resolvedModel))
+      //   if (!ok) {
+      //     res.status(400).json({ error: `Model not supported by provider: ${resolvedModel}` })
+      //     return
+      //   }
+      // }
       logSessions('Starting coding agent run', {
         workspacePath: normalizedWorkspace,
         providerId,
