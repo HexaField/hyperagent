@@ -58,6 +58,17 @@ export default function RepositoryNavigator() {
   const [sessionSubmitting, setSessionSubmitting] = createSignal(false)
   const [radicleConversionPath, setRadicleConversionPath] = createSignal<string | null>(null)
   const [radicleConversionStatus, setRadicleConversionStatus] = createSignal<string | null>(null)
+  const [quickActionStatus, setQuickActionStatus] = createSignal<string | null>(null)
+  const [createFromTemplateOpen, setCreateFromTemplateOpen] = createSignal(false)
+  const [selectedTemplateId, setSelectedTemplateId] = createSignal<string | null>(null)
+  const [templatePathInput, setTemplatePathInput] = createSignal('')
+  const [templateStreamLogs, setTemplateStreamLogs] = createSignal<string[]>([])
+  const [templates, { refetch: refetchTemplates }] = createResource(async () => {
+    const payload = await fetchJson<{ templates: { id: string; name: string; description?: string }[] }>(
+      '/api/templates'
+    )
+    return payload.templates
+  })
   let lastKnownBrowserPath: string | undefined
 
   const [projects, { refetch: refetchProjects }] = createResource(async () => {
@@ -341,10 +352,99 @@ export default function RepositoryNavigator() {
     setBrowserPage((prev) => Math.min(totalPages(), prev + 1))
   }
 
-  const focusPreferredWorkspace = () => {
-    const target = selection.currentWorkspaceId() ?? projects()?.[0]?.id ?? null
-    if (target) {
-      selection.setWorkspaceId(target)
+  
+
+  const openCreateFromTemplateModal = () => {
+    setQuickActionStatus(null)
+    setCreateFromTemplateOpen(true)
+    // Preselect first template if available
+    const first = templates()?.[0]
+    if (first) setSelectedTemplateId(first.id)
+    setTemplatePathInput('')
+  }
+
+  const closeCreateFromTemplateModal = () => {
+    setCreateFromTemplateOpen(false)
+    setSelectedTemplateId(null)
+    setTemplatePathInput('')
+  }
+
+  const submitCreateFromTemplate = async (event?: SubmitEvent) => {
+    event?.preventDefault()
+    const templateId = selectedTemplateId()
+    const path = templatePathInput().trim()
+    if (!templateId) {
+      setQuickActionStatus('Please select a template')
+      return
+    }
+    if (!path.length) {
+      setQuickActionStatus('Please enter a path for the new project')
+      return
+    }
+    setQuickActionStatus('Creating from template…')
+    setTemplateStreamLogs([])
+    try {
+      const resp = await fetch('/api/templates/create-from', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ templateId, path, workspaceId: selection.currentWorkspaceId() ?? null })
+      })
+      if (!resp.ok && resp.status !== 200) {
+        const text = await resp.text()
+        setQuickActionStatus(`Server error: ${resp.status} ${text}`)
+        return
+      }
+      const reader = resp.body?.getReader()
+      if (!reader) {
+        setQuickActionStatus('No streaming response from server')
+        return
+      }
+      const decoder = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        let sep
+        while ((sep = buf.indexOf('\n\n')) !== -1) {
+          const frame = buf.slice(0, sep)
+          buf = buf.slice(sep + 2)
+          const lines = frame.split(/\r?\n/)
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue
+            const payloadText = line.slice(5).trim()
+            try {
+              const payload = JSON.parse(payloadText)
+              if (payload.type === 'stdout' || payload.type === 'stderr') {
+                setTemplateStreamLogs((prev) => [...prev, String(payload.chunk)])
+              } else if (payload.type === 'step' || payload.type === 'info' || payload.type === 'start') {
+                setQuickActionStatus(String(payload.message))
+              } else if (payload.type === 'error') {
+                setQuickActionStatus(String(payload.message))
+              } else if (payload.type === 'done') {
+                setQuickActionStatus(String(payload.message ?? 'Done'))
+              }
+            } catch {
+              // ignore parse errors
+            }
+          }
+        }
+      }
+      // Drain any remaining buffer
+      if (buf.length) {
+        const lines = buf.split(/\r?\n/)
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue
+          try {
+            const payload = JSON.parse(line.slice(5).trim())
+            if (payload.type === 'done') setQuickActionStatus(String(payload.message ?? 'Done'))
+          } catch {}
+        }
+      }
+      closeCreateFromTemplateModal()
+      await refreshProjects()
+    } catch (error) {
+      setQuickActionStatus(error instanceof Error ? error.message : 'Failed to call template service')
     }
   }
 
@@ -680,26 +780,98 @@ export default function RepositoryNavigator() {
           <button
             class="rounded-xl border border-[var(--border)] px-3 py-2 text-left hover:border-blue-500"
             type="button"
-            onClick={focusPreferredWorkspace}
+            onClick={() => void openCreateFromTemplateModal()}
           >
-            Launch workflows
+            Create From Template
           </button>
-          <button
-            class="rounded-xl border border-[var(--border)] px-3 py-2 text-left hover:border-blue-500"
-            type="button"
-            onClick={focusPreferredWorkspace}
-          >
-            Terminal sessions
-          </button>
-          <button
-            class="rounded-xl border border-[var(--border)] px-3 py-2 text-left hover:border-blue-500"
-            type="button"
-            onClick={focusPreferredWorkspace}
-          >
-            Session history
-          </button>
+          <Show when={quickActionStatus()}>{(message) => <p class="text-xs text-[var(--text-muted)] mt-2">{message()}</p>}</Show>
         </div>
       </section>
+
+      <Show when={createFromTemplateOpen()}>
+        <div
+          class="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => closeCreateFromTemplateModal()}
+        >
+          <form
+            class="w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void submitCreateFromTemplate()
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header class="mb-4">
+              <p class="text-xs uppercase tracking-[0.35em] text-[var(--text-muted)]">Create from template</p>
+              <h2 class="text-2xl font-semibold">New Hyperagent project</h2>
+            </header>
+            <label class="text-xs font-semibold text-[var(--text-muted)]">Template</label>
+            <div class="mt-2 rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-3 text-sm">
+              <Show
+                when={templates()}
+                fallback={<p class="text-sm text-[var(--text-muted)]">Loading templates…</p>}
+              >
+                {(list) => (
+                  <div>
+                    <For each={list()}>
+                      {(tmpl) => (
+                        <label class="flex items-center gap-3 py-2">
+                          <input
+                            type="radio"
+                            name="template"
+                            value={tmpl.id}
+                            checked={selectedTemplateId() === tmpl.id}
+                            onChange={() => setSelectedTemplateId(tmpl.id)}
+                          />
+                          <div>
+                            <div class="font-semibold">{tmpl.name}</div>
+                            <div class="text-xs text-[var(--text-muted)]">{tmpl.description}</div>
+                          </div>
+                        </label>
+                      )}
+                    </For>
+                  </div>
+                )}
+              </Show>
+            </div>
+
+            <label class="mt-3 text-xs font-semibold text-[var(--text-muted)]" for="template-path">
+              New project path
+            </label>
+            <input
+              id="template-path"
+              class="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm"
+              type="text"
+              placeholder="/path/to/new/project"
+              value={templatePathInput()}
+              onInput={(e) => setTemplatePathInput(e.currentTarget.value)}
+            />
+
+            <Show when={quickActionStatus()}>
+              {(message) => <p class="mt-2 text-xs text-red-500">{message()}</p>}
+            </Show>
+
+            <Show when={templateStreamLogs().length > 0}>
+              <pre class="mt-3 max-h-48 w-full overflow-auto rounded bg-[var(--bg-muted)] p-3 text-xs">{templateStreamLogs().join('')}</pre>
+            </Show>
+
+            <div class="mt-4 flex justify-end gap-2 text-sm">
+              <button
+                class="rounded-xl border border-[var(--border)] px-4 py-2"
+                type="button"
+                onClick={() => closeCreateFromTemplateModal()}
+              >
+                Cancel
+              </button>
+              <button class="rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white" type="submit">
+                Create project
+              </button>
+            </div>
+          </form>
+        </div>
+      </Show>
 
       <Show when={sessionProject()}>
         {(activeProject) => (

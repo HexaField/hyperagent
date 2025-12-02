@@ -1,0 +1,38 @@
+{
+  "name": "@hexafield/template-library-node",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A template for creating TypeScript libraries with Node.js.",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": "./create.mjs",
+  "scripts": {
+    "build": "rm -rf dist && rollup -c",
+    "test": "npm run build && vitest run",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [],
+  "author": "<HexaField>",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@ianvs/prettier-plugin-sort-imports": "^4.7.0",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-typescript": "^11.1.6",
+    "@types/node": "^24.3.0",
+    "prettier-plugin-organize-imports": "^4.2.0",
+    "rollup": "^4.49.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {}
+}

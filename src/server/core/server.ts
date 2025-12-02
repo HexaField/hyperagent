@@ -1472,7 +1472,281 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     })
   )
 
+  const createFromTemplateHandler: RequestHandler = async (req, res) => {
+    const workspaceId = typeof req.body?.workspaceId === 'string' ? req.body.workspaceId : null
+    const templateId = typeof req.body?.templateId === 'string' ? req.body.templateId : null
+    const targetPathRaw = typeof req.body?.path === 'string' ? req.body.path : null
+
+    const emit = (packet: Record<string, unknown>) => {
+      try {
+        res.write(`data: ${JSON.stringify(packet)}\n\n`)
+        const maybeFlush = (res as Response & { flush?: () => void }).flush
+        if (typeof maybeFlush === 'function') maybeFlush.call(res)
+      } catch {
+        // ignore write errors
+      }
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive'
+    })
+    res.flushHeaders?.()
+
+    emit({ type: 'start', message: 'Create from template started', workspaceId, templateId, path: targetPathRaw })
+
+    if (!templateId || !templateId.trim()) {
+      emit({ type: 'error', message: 'templateId is required' })
+      res.end()
+      return
+    }
+    if (!targetPathRaw || !targetPathRaw.trim()) {
+      emit({ type: 'error', message: 'path is required' })
+      res.end()
+      return
+    }
+
+    const templateDir = path.resolve(process.cwd(), 'templates', templateId)
+    const targetPath = path.resolve(targetPathRaw)
+
+    try {
+      // Verify template exists
+      await fs.stat(templateDir)
+    } catch (err) {
+      emit({ type: 'error', message: `Template not found: ${templateId}` })
+      res.end()
+      return
+    }
+
+    try {
+      // Ensure target does not already exist
+      try {
+        const existing = await fs.stat(targetPath)
+        if (existing) {
+          emit({ type: 'error', message: `Target path already exists: ${targetPath}` })
+          res.end()
+          return
+        }
+      } catch {
+        // not exists, continue
+      }
+
+      // Create target directory
+      emit({ type: 'step', message: 'Creating target directory', path: targetPath })
+      await fs.mkdir(targetPath, { recursive: true })
+
+      // Copy template contents into target
+      emit({ type: 'step', message: 'Copying template files' })
+      // Use fs.cp to copy recursively
+      try {
+        await fs.cp(templateDir, targetPath, { recursive: true })
+      } catch (copyErr) {
+        // Fallback to manual copy if fs.cp not available
+        const cp = spawn('cp', ['-a', `${templateDir}/.`, targetPath])
+        await new Promise<void>((resolve, reject) => {
+          cp.once('error', reject)
+          cp.once('close', (code) => (code === 0 ? resolve() : reject(new Error(`cp failed with ${code}`))))
+        })
+      }
+
+      // Read manifest and run setup commands
+      const manifestPath = path.join(templateDir, 'template.json')
+      let manifest: any = null
+      try {
+        const raw = await fs.readFile(manifestPath, 'utf8')
+        manifest = JSON.parse(raw)
+      } catch (err) {
+        // No manifest or invalid JSON — continue but note it
+        emit({ type: 'info', message: 'No valid template manifest found, skipping setup' })
+      }
+
+      if (manifest && Array.isArray(manifest.setup) && manifest.setup.length) {
+        for (let i = 0; i < manifest.setup.length; i++) {
+          const cmd = String(manifest.setup[i])
+          emit({ type: 'step', message: `Running setup command: ${cmd}`, index: i })
+          await new Promise<void>((resolve, reject) => {
+            const child = spawn(cmd, { shell: true, cwd: targetPath, env: process.env })
+            child.stdout?.on('data', (chunk) => emit({ type: 'stdout', chunk: String(chunk) }))
+            child.stderr?.on('data', (chunk) => emit({ type: 'stderr', chunk: String(chunk) }))
+            child.once('error', (err2) => reject(err2))
+            child.once('close', (code) => {
+              if (code === 0) resolve()
+              else reject(new Error(`Command failed with code ${code}`))
+            })
+          })
+        }
+      }
+
+      // Ensure .hyperagent folder exists
+      try {
+        emit({ type: 'step', message: 'Initializing hyperagent metadata' })
+        await fs.mkdir(path.join(targetPath, '.hyperagent'), { recursive: true })
+      } catch (err) {
+        emit({ type: 'error', message: `Failed to create .hyperagent: ${String(err)}` })
+        res.end()
+        return
+      }
+
+      // Ensure Git repo is initialized and there is at least one commit
+      emit({ type: 'step', message: 'Initializing Git repository (if missing)' })
+      try {
+        // Initialize repository and set default branch if needed
+        const defaultBranch = (manifest?.defaultBranch as string) ?? 'main'
+        await initializeWorkspaceRepository(targetPath, defaultBranch)
+
+        // If there is no commit yet, create an initial commit
+        let hasHead = true
+        try {
+          await runGitCommand(['rev-parse', '--verify', 'HEAD'], targetPath)
+        } catch {
+          hasHead = false
+        }
+
+        if (!hasHead) {
+          emit({ type: 'step', message: 'Creating initial Git commit' })
+          try {
+            await runGitCommand(['add', '--all'], targetPath)
+            const authorFlag = `${commitAuthor.name} <${commitAuthor.email}>`
+            await runGitCommand([
+              'commit',
+              '-m',
+              'Initial commit (created from template)',
+              `--author=${authorFlag}`
+            ], targetPath)
+            emit({ type: 'info', message: 'Initial commit created' })
+          } catch (commitErr) {
+            emit({ type: 'error', message: `Failed to create initial commit: ${commitErr instanceof Error ? commitErr.message : String(commitErr)}` })
+            res.end()
+            return
+          }
+        } else {
+          emit({ type: 'info', message: 'Repository already has commits' })
+        }
+      } catch (err) {
+        emit({ type: 'error', message: `Git initialization failed: ${err instanceof Error ? err.message : String(err)}` })
+        res.end()
+        return
+      }
+
+      // Register repository with Radicle
+      emit({ type: 'step', message: 'Registering repository with Radicle' })
+      let registration
+      try {
+        // Sanitize template name to conform with Radicle repository name rules:
+        // only alphanumeric characters, '-', '_' and '.' are allowed.
+        const rawName = (manifest?.name ?? path.basename(targetPath)) as string
+        let normalizedName = rawName.replace(/[^A-Za-z0-9._-]+/g, '-')
+        // Trim leading/trailing separators
+        normalizedName = normalizedName.replace(/^[._-]+|[._-]+$/g, '')
+        if (!normalizedName.length) normalizedName = path.basename(targetPath)
+        if (normalizedName !== rawName) {
+          emit({ type: 'info', message: `Template name sanitized to '${normalizedName}'` })
+          serverLogger.info('Sanitized template name for rad init', { rawName, normalizedName })
+        }
+        // Try registering with the normalized name, but if it already exists
+        // in the Radicle network, retry with a short random suffix up to 3 times.
+        const maxAttempts = 3
+        let attempt = 0
+        let lastErr: unknown = null
+        while (attempt < maxAttempts) {
+          const tryName = attempt === 0 ? normalizedName : `${normalizedName}-${Math.random().toString(36).slice(2, 8)}`
+          if (attempt > 0) emit({ type: 'info', message: `Retrying rad init with alternative name: ${tryName}` })
+          try {
+            registration = await radicleModule.registerRepository({
+              repositoryPath: targetPath,
+              name: tryName,
+              description: manifest?.description ?? undefined,
+              visibility: manifest?.visibility === 'public' ? 'public' : 'private'
+            })
+            break
+          } catch (err2) {
+            lastErr = err2
+            const msg = err2 instanceof Error ? err2.message : String(err2)
+            serverLogger.warn('Radicle registration attempt failed', { attempt, tryName, message: msg })
+            // If the error indicates the repository name already exists, try another name.
+            const isNameExists = typeof msg === 'string' && /exist|exists|already exists|class=Repository|code=Exists/i.test(msg)
+            if (!isNameExists) {
+              throw err2
+            }
+            // otherwise, try again with a suffix
+            attempt++
+            continue
+          }
+        }
+        if (!registration) {
+          throw lastErr ?? new Error('Radicle registration failed')
+        }
+      } catch (err) {
+        emit({ type: 'error', message: `Radicle registration failed: ${err instanceof Error ? err.message : String(err)}` })
+        res.end()
+        return
+      }
+
+      // Persist registration in DB
+      try {
+        persistence.radicleRegistrations.upsert({
+          repositoryPath: targetPath,
+          name: manifest?.name ?? path.basename(targetPath),
+          description: manifest?.description ?? undefined,
+          visibility: manifest?.visibility === 'public' ? 'public' : 'private',
+          defaultBranch: registration.defaultBranch ?? undefined
+        })
+      } catch (err) {
+        serverLogger.warn('Failed to persist radicle registration', { error: toErrorMeta(err) })
+      }
+
+      emit({ type: 'done', message: 'Template creation complete', repository: registration })
+      res.end()
+      return
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      emit({ type: 'error', message })
+      res.end()
+      return
+    }
+  }
+
+  app.get(
+    '/api/templates',
+    wrapAsync(async (_req, res) => {
+      const templatesDir = path.resolve(process.cwd(), 'templates')
+      let dirEntries
+      try {
+        dirEntries = await fs.readdir(templatesDir, { withFileTypes: true })
+      } catch (err) {
+        serverLogger.warn('Templates directory not found', { dir: templatesDir, error: toErrorMeta(err) })
+        res.json({ templates: [] })
+        return
+      }
+
+      const templates: Array<{
+        id: string
+        name: string
+        description: string | null
+        manifest?: Record<string, unknown> | null
+      }> = []
+
+      for (const entry of dirEntries) {
+        if (!entry.isDirectory()) continue
+        const id = entry.name
+        const manifestPath = path.join(templatesDir, id, 'template.json')
+        let manifest: Record<string, unknown> | null = null
+        try {
+          const raw = await fs.readFile(manifestPath, 'utf8')
+          manifest = JSON.parse(raw)
+        } catch (err) {
+          serverLogger.warn('Failed to read template manifest', { id, manifestPath, error: toErrorMeta(err) })
+        }
+        templates.push({ id, name: (manifest && (manifest.name as string)) ?? id, description: (manifest && (manifest.description as string)) ?? null, manifest })
+      }
+
+      res.json({ templates })
+    })
+  )
+
   app.post('/api/agent/run', wrapAsync(agentRunHandler))
+  app.post('/api/templates/create-from', wrapAsync(createFromTemplateHandler))
   app.use(workspaceSummaryRouter)
   app.use(workspaceSessionsRouter)
   app.use(workspaceNarratorRouter)
