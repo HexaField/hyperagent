@@ -988,7 +988,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                         aria-label="Close widget menu"
                         onClick={() => setWidgetMenuOpen(false)}
                       />
-                      <div class="fixed left-0 right-0 top-12 z-50 max-w-none border-t border-b border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-lg">
+                      <div class="fixed left-0 right-0 top-12 z-50 max-w-none border-t border-b border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-lg max-h-[calc(100vh-3rem)] overflow-y-auto">
                         <For each={WIDGET_TEMPLATES}>
                           {(template) => (
                             <button

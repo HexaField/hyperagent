@@ -427,7 +427,7 @@ export default function RepositoryNavigator() {
   }
 
   return (
-    <div class="flex flex-col gap-6 p-4 text-[var(--text)]">
+    <div class="flex flex-col gap-6 text-[var(--text)]" id="RepositoryNavigator">
       <section class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)]">
         <button
           class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
