@@ -45,7 +45,7 @@ describe('workspace sessions routes — agent persona', () => {
     // create persona dir and file
     const personaDir = path.join(tmpHome, '.config', 'opencode', 'agent')
     await fs.mkdir(personaDir, { recursive: true })
-    const personaMarkdown = `---\nlabel: Test Agent\nmode: agent\n---\n# Agent persona`
+    const personaMarkdown = `---\nlabel: Test Agent\nmode: primary\n---\n# Agent persona`
     await fs.writeFile(path.join(personaDir, `${TEST_PERSONA_ID}.md`), personaMarkdown, 'utf8')
 
     // Spy on runVerifierWorkerLoop and simulate streaming

@@ -263,6 +263,19 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     } catch {}
   })
 
+  // keep the new-session selector defaulted to the workspace default persona
+  createEffect(() => {
+    const def = defaultPersonaId()
+    if (def && !newSessionPersonaId()) setNewSessionPersonaId(def)
+  })
+
+  // if no explicit choice, default the new-session selector to the first persona in the list
+  createEffect(() => {
+    const current = newSessionPersonaId()
+    const list = personasList()
+    if (!current && list && list.length > 0) setNewSessionPersonaId(list[0].id)
+  })
+
   const [sessions, { refetch: refetchSessions }] = createResource(workspaceForFetch, async (value) => {
     const trimmed = value?.trim()
     return await fetchCodingAgentSessions(trimmed ? { workspacePath: trimmed } : undefined)
@@ -316,9 +329,11 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [editingPersonaMarkdown, setEditingPersonaMarkdown] = createSignal<string>('')
   const [draftPersonaId, setDraftPersonaId] = createSignal<string | null>(null)
   const [draftPersonaDetail, setDraftPersonaDetail] = createSignal<any | null>(null)
+  const [newSessionPersonaId, setNewSessionPersonaId] = createSignal<string | null>(null)
   const [killingSessionId, setKillingSessionId] = createSignal<string | null>(null)
   let drawerHideTimeout: number | null = null
   const scrollController = createConversationScrollController()
+  const [selectedSessionPersonaDetail, setSelectedSessionPersonaDetail] = createSignal<any | null>(null)
 
   const closeSessionSettings = () => setSessionSettingsId(null)
 
@@ -390,8 +405,10 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       return
     }
     setError(null)
+    // Set the draft persona first to avoid a reactive ordering/race where the
+    // drafting flag causes other effects to run and clear the selection.
+    setDraftPersonaId(newSessionPersonaId() ?? defaultPersonaId() ?? null)
     setDraftingSession(true)
-    setDraftPersonaId(defaultPersonaId() ?? null)
     setDraftingWorkspace(workspacePath)
     setPendingSessionId(null)
     setSelectedSessionId(null)
@@ -680,9 +697,25 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
 
   createEffect(() => {
     const detail = selectedDetail()
-    if (!detail) return
+    if (!detail) {
+      setSelectedSessionPersonaDetail(null)
+      return
+    }
     const sessionId = detail.session.id
-    const incoming = detail.messages ?? []
+    const incoming = detail.messages ?? ([] as CodingAgentMessage[])
+    // load persona for this session from overrides if present
+    ;(async () => {
+      try {
+        const overrides = sessionOverrides()
+        const personaId = overrides?.[sessionId]?.personaId ?? null
+        if (personaId) {
+          const pd = await getCodingAgentPersona(personaId)
+          setSelectedSessionPersonaDetail(pd)
+          return
+        }
+      } catch {}
+      setSelectedSessionPersonaDetail(null)
+    })()
     setMessageCache((prev) => {
       const prevMessages = prev[sessionId] ?? []
       const nextMessages = reconcileMessages(prevMessages, incoming)
@@ -785,6 +818,16 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           >
             {draftingSession() ? 'Drafting…' : 'New session'}
           </button>
+          <div>
+            <select
+              class="ml-2 rounded border border-[var(--border)] bg-[var(--bg-muted)] px-2 py-1 text-sm"
+              value={newSessionPersonaId() ?? ''}
+              onInput={(e) => setNewSessionPersonaId(e.currentTarget.value || null)}
+            >
+              <option value="">(none)</option>
+              <For each={personasList()}>{(p: any) => <option value={p.id}>{p.label ?? p.id}</option>}</For>
+            </select>
+          </div>
           <div class="flex items-center gap-2">
             <button
               type="button"
@@ -924,6 +967,13 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                 <h3 class={`text-base font-semibold text-[var(--text)] ${isMobileVariant ? 'truncate' : ''}`}>
                   {detail.session.title || detail.session.id}
                 </h3>
+                <Show when={selectedSessionPersonaDetail()} keyed>
+                  {(pd) => (
+                    <div class="ml-3 text-xs text-[var(--text-muted)]">
+                      Persona: {pd.label ?? pd.id} {pd.frontmatter?.model ? `· ${String(pd.frontmatter.model)}` : ''}
+                    </div>
+                  )}
+                </Show>
                 <Show when={!isMobileVariant}>
                   <Show when={selectedSessionMeta()?.state} keyed>
                     {(state) => (
@@ -1262,9 +1312,14 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                         <button
                           class="text-xs rounded px-2 py-1 border"
                           onClick={async () => {
-                            await deleteCodingAgentPersona(p.id)
+                            const ok = await deleteCodingAgentPersona(p.id)
                             const list = await fetchCodingAgentPersonas()
                             setPersonasList(list)
+                            // if the persona being edited was deleted, clear the editor
+                            if (ok && editingPersonaId() === p.id) {
+                              setEditingPersonaId(null)
+                              setEditingPersonaMarkdown('')
+                            }
                           }}
                         >
                           Delete
@@ -1297,19 +1352,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                           )}
                         </Show>
                       </div>
-                      <button
-                        class="text-xs rounded px-2 py-1 border"
-                        onClick={() => {
-                          try {
-                            const key = defaultPersonaKeyFor(workspaceKey())
-                            if (typeof window !== 'undefined') window.localStorage.setItem(key, p.id)
-                            setDefaultPersonaId(p.id)
-                            if (draftingSession()) setDraftPersonaId(p.id)
-                          } catch {}
-                        }}
-                      >
-                        Use
-                      </button>
+                      {/* Use button removed: select persona when creating a new session via the SessionsPanel dropdown */}
                     </div>
                   </div>
                 )}
@@ -1350,14 +1393,14 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                       onClick={async () => {
                         const id = editingPersonaId()
                         if (!id) return
-                          const ok = await updateCodingAgentPersona(id, editingPersonaMarkdown())
-                          const list = await fetchCodingAgentPersonas()
-                          setPersonasList(list)
-                          // close editor on successful save for clearer feedback
-                          if (ok) {
-                            setEditingPersonaId(null)
-                            setEditingPersonaMarkdown('')
-                          }
+                        const ok = await updateCodingAgentPersona(id, editingPersonaMarkdown())
+                        const list = await fetchCodingAgentPersonas()
+                        setPersonasList(list)
+                        // close editor on successful save for clearer feedback
+                        if (ok) {
+                          setEditingPersonaId(null)
+                          setEditingPersonaMarkdown('')
+                        }
                       }}
                     >
                       Save

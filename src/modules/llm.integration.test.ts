@@ -152,7 +152,7 @@ describeCli('LLM CLI integrations', () => {
     expect(exists, "Required CLI 'opencode' not found on PATH").toBe(true)
 
     const sessionName = `itest-session-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    const create = spawnSync('opencode', ['session', 'create', sessionName])
+    const create = spawnSync('opencode', ['session', 'create', sessionName, '--non-interactive'])
     expect(
       create.status,
       `Unable to create opencode session '${sessionName}': ${create.stderr?.toString?.() || ''}`

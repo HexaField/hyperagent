@@ -2,6 +2,7 @@ import fsSync from 'fs'
 import fs from 'fs/promises'
 import {
   spawn as spawnProcess,
+  spawnSync as spawnProcessSync,
   type ChildProcessWithoutNullStreams,
   type SpawnOptionsWithoutStdio
 } from 'node:child_process'
@@ -76,9 +77,30 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
     await assertWorkspaceExists(input.workspacePath)
     const resolvedModel = resolveModel(input.model)
     const resolvedProvider = resolveProvider(input.providerId)
+    // Resolve opencode binary path. Allow overriding with OPENCODE_BIN env var.
+    let opencodeCmd = process.env.OPENCODE_BIN ?? 'opencode'
+    let resolvedOpencodePath = ''
+    try {
+      if (process.env.OPENCODE_BIN) {
+        resolvedOpencodePath = process.env.OPENCODE_BIN
+      } else {
+        const whichResult = spawnProcessSync('which', [opencodeCmd])
+        if (whichResult.status === 0 && whichResult.stdout) {
+          resolvedOpencodePath = String(whichResult.stdout).trim()
+        }
+      }
+    } catch {
+      resolvedOpencodePath = ''
+    }
+    if (!resolvedOpencodePath) {
+      throw new Error('Missing `opencode` CLI on PATH. Install the opencode binary or set OPENCODE_BIN to its path.')
+    }
+    // Log chosen binary for easier troubleshooting
+    console.log('[opencode-runner] Using opencode binary:', resolvedOpencodePath)
     const env = { ...process.env }
     const args = buildRunArgs({ ...input, model: resolvedModel })
-    const child = spawnFn('opencode', args, {
+    console.log('[opencode-runner] spawn args:', args)
+    const child = spawnFn(resolvedOpencodePath, args, {
       cwd: input.workspacePath,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -139,12 +161,32 @@ export function createOpencodeRunner(options: RunnerOptions = {}): OpencodeRunne
         }
       })
 
+      let sawStdout = false
+      let sawStderr = false
       child.stdout.on('data', (chunk) => {
-        logStream.write(chunk)
-        parser(chunk.toString())
+        try {
+          const asStr = chunk.toString()
+          logStream.write(chunk)
+          parser(asStr)
+          if (!sawStdout) {
+            sawStdout = true
+            console.log('[opencode-runner] child stdout (first chunk):', asStr.slice(0, 200))
+          }
+        } catch (err) {
+          logStream.write(`\n[stdout parse error: ${String(err)}]\n`)
+        }
       })
       child.stderr.on('data', (chunk) => {
-        logStream.write(chunk)
+        try {
+          const asStr = chunk.toString()
+          logStream.write(chunk)
+          if (!sawStderr) {
+            sawStderr = true
+            console.error('[opencode-runner] child stderr (first chunk):', asStr.slice(0, 200))
+          }
+        } catch (err) {
+          logStream.write(`\n[stderr parse error: ${String(err)}]\n`)
+        }
       })
       child.on('error', (error) => {
         logStream.end(`\n[process error: ${error instanceof Error ? error.message : String(error)}]\n`)

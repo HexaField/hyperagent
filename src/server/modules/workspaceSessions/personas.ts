@@ -1,6 +1,6 @@
 import fs from 'fs/promises'
-import path from 'path'
 import os from 'os'
+import path from 'path'
 
 export type PersonaSummary = {
   id: string
@@ -21,7 +21,9 @@ export type PersonaDetail = {
   updatedAt: string
 }
 
-const CONFIG_AGENT_DIR = process.env.OPENCODE_AGENT_DIR ?? path.join(os.homedir(), '.config', 'opencode', 'agent')
+function getConfigAgentDir(): string {
+  return process.env.OPENCODE_AGENT_DIR ?? path.join(os.homedir(), '.config', 'opencode', 'agent')
+}
 
 function sanitizeId(candidate: string): string {
   if (!candidate || typeof candidate !== 'string') candidate = `persona-${Date.now()}`
@@ -34,15 +36,17 @@ function sanitizeId(candidate: string): string {
 }
 
 async function ensureDir(): Promise<string> {
-  await fs.mkdir(CONFIG_AGENT_DIR, { recursive: true })
-  return CONFIG_AGENT_DIR
+  const dir = getConfigAgentDir()
+  await fs.mkdir(dir, { recursive: true })
+  return dir
 }
 
 function personaPathFor(id: string): string {
+  const dir = getConfigAgentDir()
   const name = sanitizeId(id) + '.md'
-  const candidate = path.join(CONFIG_AGENT_DIR, name)
+  const candidate = path.join(dir, name)
   const resolved = path.resolve(candidate)
-  if (!resolved.startsWith(path.resolve(CONFIG_AGENT_DIR))) {
+  if (!resolved.startsWith(path.resolve(dir))) {
     throw new Error('Invalid persona id')
   }
   return resolved
@@ -89,12 +93,12 @@ export function parseFrontmatter(markdown: string): { fm: Record<string, unknown
 }
 
 export async function listPersonas(): Promise<PersonaSummary[]> {
-  await ensureDir()
-  const entries = await fs.readdir(CONFIG_AGENT_DIR, { withFileTypes: true })
+  const dir = await ensureDir()
+  const entries = await fs.readdir(dir, { withFileTypes: true })
   const list: PersonaSummary[] = []
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.md')) continue
-    const full = path.join(CONFIG_AGENT_DIR, entry.name)
+    const full = path.join(dir, entry.name)
     try {
       const stat = await fs.stat(full)
       const raw = await fs.readFile(full, 'utf8')
@@ -106,8 +110,11 @@ export async function listPersonas(): Promise<PersonaSummary[]> {
         description: (fm['description'] as string) ?? undefined,
         model: (fm['model'] as string) ?? undefined,
         mode: (fm['mode'] as string) ?? undefined,
-        tools: (fm['tools'] && typeof fm['tools'] === 'object') ? (fm['tools'] as Record<string, unknown>) : undefined,
-        permission: (fm['permission'] && typeof fm['permission'] === 'object') ? (fm['permission'] as Record<string, unknown>) : undefined,
+        tools: fm['tools'] && typeof fm['tools'] === 'object' ? (fm['tools'] as Record<string, unknown>) : undefined,
+        permission:
+          fm['permission'] && typeof fm['permission'] === 'object'
+            ? (fm['permission'] as Record<string, unknown>)
+            : undefined,
         updatedAt: stat.mtime.toISOString()
       })
     } catch {
@@ -168,7 +175,7 @@ export async function seedDefaultPersonas(): Promise<void> {
     },
     {
       id: 'multi-agent',
-      markdown: `---\nlabel: Multi-Agent Persona\nmode: agent\nmodel: github-copilot/gpt-5-mini\ndescription: Runs the verifier/worker multi-agent loop\n---\nPersona that runs as a multi-agent verifier/worker pair.`
+      markdown: `---\nlabel: Multi-Agent Persona\nmode: primary\nmodel: github-copilot/gpt-5-mini\ndescription: Runs the verifier/worker multi-agent loop\n---\nPersona that runs as a multi-agent verifier/worker pair.`
     }
   ]
 
@@ -176,7 +183,10 @@ export async function seedDefaultPersonas(): Promise<void> {
     try {
       const existing = await readPersona(def.id)
       if (!existing) {
-        await writePersona(def.id, def.markdown)
+        // defensively strip an outer fenced-code block (some fixtures include ```markdown)
+        const sanitize = (m: string) => m.replace(/^\s*```(?:markdown)?\s*\n/, '').replace(/\n\s*```\s*$/,'').trim()
+        const markdown = sanitize(def.markdown)
+        await writePersona(def.id, markdown)
       }
     } catch (err) {
       // non-fatal; log and continue

@@ -151,12 +151,19 @@ export async function ensureProviderConfig(sessionDir: string, providerId?: stri
   if (!personaId) return
   try {
     const home = process.env.HOME || process.env.USERPROFILE || ''
-    const src = path.join(home, '.config', 'opencode', 'agent', `${personaId}.md`)
+    // Respect OPENCODE_AGENT_DIR when provided (tests / user overrides).
+    const agentDir = process.env.OPENCODE_AGENT_DIR ?? path.join(home, '.config', 'opencode', 'agent')
+    const src = path.join(agentDir, `${personaId}.md`)
     const raw = await fs.readFile(src, 'utf8')
     // write persona into session
     const dstDir = path.join(sessionDir, '.opencode', 'agent')
     await fs.mkdir(dstDir, { recursive: true })
     const dst = path.join(dstDir, `${personaId}.md`)
+    // log a short preview to aid debugging when the provider CLI rejects persona files
+    try {
+      // eslint-disable-next-line no-console
+      console.log('[workflow-agent] copying persona', { personaId, bytes: raw.length, preview: raw.slice(0, 200) })
+    } catch {}
     await fs.writeFile(dst, raw, 'utf8')
 
     // attempt to parse frontmatter and merge into opencode.json
