@@ -489,46 +489,387 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
   }
 
   const createProjectHandler: RequestHandler = async (req, res) => {
-    const { name, repositoryPath, description, defaultBranch, visibility } = req.body ?? {}
-    if (!name || typeof name !== 'string' || !repositoryPath || typeof repositoryPath !== 'string') {
-      res.status(400).json({ error: 'name and repositoryPath are required' })
-      return
-    }
-    const normalizedName = name.trim()
+    const { name, repositoryPath, description, defaultBranch, visibility, templateId } = req.body ?? {}
     const normalizedBranch =
       typeof defaultBranch === 'string' && defaultBranch.trim().length ? defaultBranch.trim() : 'main'
     const normalizedDescription =
       typeof description === 'string' && description.trim().length ? description.trim() : undefined
-    const normalizedPath = repositoryPath.trim()
     const normalizedVisibility = visibility === 'public' || visibility === 'private' ? visibility : 'private'
-    let resolvedPath: string
-    try {
-      resolvedPath = await initializeWorkspaceRepository(normalizedPath, normalizedBranch)
-      await fs.mkdir(path.join(resolvedPath, '.hyperagent'), { recursive: true })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to initialize workspace directory'
-      res.status(500).json({ error: message })
-      return
-    }
 
-    try {
-      const registration = await radicleModule.registerRepository({
-        repositoryPath: resolvedPath,
-        name: normalizedName,
-        description: normalizedDescription,
-        visibility: normalizedVisibility
-      })
-      persistence.radicleRegistrations.upsert({
-        repositoryPath: resolvedPath,
-        name: normalizedName,
-        description: normalizedDescription ?? null,
-        visibility: normalizedVisibility,
-        defaultBranch: registration.defaultBranch ?? normalizedBranch
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to register repository with Radicle'
-      res.status(500).json({ error: message })
-      return
+    // If a templateId is provided, create the repository from the template
+    let resolvedPath: string
+    if (typeof templateId === 'string' && templateId.trim()) {
+      // Accept either `repositoryPath` or `path` from the client (some clients send `path`)
+      const requestPathRaw =
+        typeof repositoryPath === 'string' && repositoryPath.trim()
+          ? repositoryPath.trim()
+          : typeof req.body?.path === 'string' && req.body.path.trim()
+          ? req.body.path.trim()
+          : ''
+      // If the client wants streaming feedback, switch to SSE
+      const wantsStream = String(req.headers.accept ?? '').includes('text/event-stream')
+      if (wantsStream) {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache, no-transform',
+          Connection: 'keep-alive'
+        })
+        res.flushHeaders?.()
+        req.socket?.setKeepAlive?.(true)
+
+        const emit = (packet: Record<string, unknown>) => {
+          try {
+            res.write(`data: ${JSON.stringify(packet)}\n\n`)
+            const maybeFlush = (res as Response & { flush?: () => void }).flush
+            if (typeof maybeFlush === 'function') maybeFlush.call(res)
+          } catch {
+            // ignore write errors
+          }
+        }
+
+        emit({ type: 'start', message: 'Create from template started', templateId, path: requestPathRaw ?? null })
+
+        const templateDir = path.resolve(process.cwd(), 'templates', templateId.trim())
+        const targetPathRaw = requestPathRaw
+        if (!targetPathRaw) {
+          emit({ type: 'error', message: 'repositoryPath (or path) is required when creating from template' })
+          res.end()
+          return
+        }
+        const targetPath = path.resolve(targetPathRaw)
+
+        // Verify template exists
+        try {
+          await fs.stat(templateDir)
+        } catch (err) {
+          emit({ type: 'error', message: `Template not found: ${templateId}` })
+          res.end()
+          return
+        }
+
+        // Ensure target does not already exist
+        try {
+          const existing = await fs.stat(targetPath)
+          if (existing) {
+            emit({ type: 'error', message: `Target path already exists: ${targetPath}` })
+            res.end()
+            return
+          }
+        } catch {
+          // not exists, continue
+        }
+
+        // Create target directory
+        emit({ type: 'step', message: 'Creating target directory', path: targetPath })
+        try {
+          await fs.mkdir(targetPath, { recursive: true })
+        } catch (err) {
+          emit({ type: 'error', message: String(err) })
+          res.end()
+          return
+        }
+
+        // Copy template contents into target
+        emit({ type: 'step', message: 'Copying template files' })
+        try {
+          try {
+            await fs.cp(templateDir, targetPath, { recursive: true })
+          } catch (copyErr) {
+            const cp = spawn('cp', ['-a', `${templateDir}/.`, targetPath])
+            await new Promise<void>((resolve, reject) => {
+              cp.once('error', reject)
+              cp.once('close', (code) => (code === 0 ? resolve() : reject(new Error(`cp failed with ${code}`))))
+            })
+          }
+        } catch (err) {
+          emit({ type: 'error', message: `Failed to copy template files: ${String(err)}` })
+          res.end()
+          return
+        }
+
+        // Read manifest and run setup commands
+        emit({ type: 'step', message: 'Reading template manifest' })
+        const manifestPath = path.join(templateDir, 'template.json')
+        let manifest: any = null
+        try {
+          const raw = await fs.readFile(manifestPath, 'utf8')
+          manifest = JSON.parse(raw)
+        } catch (err) {
+          emit({ type: 'info', message: 'No valid template manifest found, skipping setup' })
+        }
+
+        if (manifest && Array.isArray(manifest.setup) && manifest.setup.length) {
+          for (let i = 0; i < manifest.setup.length; i++) {
+            const cmd = String(manifest.setup[i])
+            emit({ type: 'step', message: `Running setup command: ${cmd}`, index: i })
+            try {
+              await new Promise<void>((resolve, reject) => {
+                const child = spawn(cmd, { shell: true, cwd: targetPath, env: process.env })
+                child.stdout?.on('data', (chunk) => emit({ type: 'stdout', chunk: String(chunk) }))
+                child.stderr?.on('data', (chunk) => emit({ type: 'stderr', chunk: String(chunk) }))
+                child.once('error', (err2) => reject(err2))
+                child.once('close', (code) => {
+                  if (code === 0) resolve()
+                  else reject(new Error(`Command failed with code ${code}`))
+                })
+              })
+            } catch (err) {
+              emit({ type: 'error', message: `Setup command failed: ${err instanceof Error ? err.message : String(err)}` })
+              res.end()
+              return
+            }
+          }
+        }
+
+        // Ensure .hyperagent folder exists
+        try {
+          emit({ type: 'step', message: 'Initializing hyperagent metadata' })
+          await fs.mkdir(path.join(targetPath, '.hyperagent'), { recursive: true })
+        } catch (err) {
+          emit({ type: 'error', message: `Failed to create .hyperagent: ${String(err)}` })
+          res.end()
+          return
+        }
+
+        // Initialize git and ensure initial commit
+        emit({ type: 'step', message: 'Initializing Git repository (if missing)' })
+        try {
+          await initializeWorkspaceRepository(targetPath, normalizedBranch)
+
+          let hasHead = true
+          try {
+            await runGitCommand(['rev-parse', '--verify', 'HEAD'], targetPath)
+          } catch {
+            hasHead = false
+          }
+
+          if (!hasHead) {
+            emit({ type: 'step', message: 'Creating initial Git commit' })
+            try {
+              await runGitCommand(['add', '--all'], targetPath)
+              const authorFlag = `${(req.app as any).commitAuthor?.name ?? 'Hyperagent'} <${(req.app as any).commitAuthor?.email ?? 'workflow@hyperagent.local'}>`
+              await runGitCommand(['commit', '-m', 'Initial commit (created from template)', `--author=${authorFlag}`], targetPath)
+              emit({ type: 'info', message: 'Initial commit created' })
+            } catch (commitErr) {
+              emit({ type: 'error', message: `Failed to create initial commit: ${commitErr instanceof Error ? commitErr.message : String(commitErr)}` })
+              res.end()
+              return
+            }
+          } else {
+            emit({ type: 'info', message: 'Repository already has commits' })
+          }
+        } catch (err) {
+          emit({ type: 'error', message: `Git initialization failed: ${err instanceof Error ? err.message : String(err)}` })
+          res.end()
+          return
+        }
+
+        // Register repository with Radicle
+        emit({ type: 'step', message: 'Registering repository with Radicle' })
+        try {
+          const rawName = path.basename(targetPath)
+          let normalizedName = rawName.replace(/[^A-Za-z0-9._-]+/g, '-')
+          normalizedName = normalizedName.replace(/^[._-]+|[._-]+$/g, '')
+          if (!normalizedName.length) normalizedName = rawName
+          if (normalizedName !== rawName) emit({ type: 'info', message: `Template name sanitized to '${normalizedName}'` })
+
+          const registration = await radicleModule.registerRepository({
+            repositoryPath: targetPath,
+            name: normalizedName,
+            description: manifest?.description ?? normalizedDescription,
+            visibility: manifest?.visibility === 'public' ? 'public' : normalizedVisibility
+          })
+
+          try {
+            persistence.radicleRegistrations.upsert({
+              repositoryPath: targetPath,
+              name: path.basename(targetPath),
+              description: manifest?.description ?? normalizedDescription ?? null,
+              visibility: manifest?.visibility === 'public' ? 'public' : normalizedVisibility,
+              defaultBranch: registration.defaultBranch ?? normalizedBranch
+            })
+          } catch (err) {
+            console.warn('Failed to persist radicle registration', { error: err })
+          }
+
+          emit({ type: 'done', message: 'Template creation complete', repository: registration, repositoryName: normalizedName })
+          res.end()
+          return
+        } catch (err) {
+          emit({ type: 'error', message: `Radicle registration_failed: ${err instanceof Error ? err.message : String(err)}` })
+          res.end()
+          return
+        }
+      }
+      // non-streaming template creation falls through to synchronous handling below
+      const templateDir = path.resolve(process.cwd(), 'templates', templateId.trim())
+      const targetPathRaw =
+        typeof repositoryPath === 'string' && repositoryPath.trim()
+          ? repositoryPath.trim()
+          : typeof req.body?.path === 'string' && req.body.path.trim()
+          ? req.body.path.trim()
+          : ''
+      if (!targetPathRaw) {
+        res.status(400).json({ error: 'repositoryPath (or path) is required when creating from template' })
+        return
+      }
+      const targetPath = path.resolve(targetPathRaw)
+
+      // Verify template exists
+      try {
+        await fs.stat(templateDir)
+      } catch (err) {
+        res.status(404).json({ error: `Template not found: ${templateId}` })
+        return
+      }
+
+      // Ensure target does not already exist
+      try {
+        const existing = await fs.stat(targetPath)
+        if (existing) {
+          res.status(400).json({ error: `Target path already exists: ${targetPath}` })
+          return
+        }
+      } catch {
+        // not exists, continue
+      }
+
+      // Create target directory
+      try {
+        await fs.mkdir(targetPath, { recursive: true })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to create target directory'
+        res.status(500).json({ error: message })
+        return
+      }
+
+      // Copy template contents into target
+      try {
+        try {
+          await fs.cp(templateDir, targetPath, { recursive: true })
+        } catch {
+          const cp = spawn('cp', ['-a', `${templateDir}/.`, targetPath])
+          await new Promise<void>((resolve, reject) => {
+            cp.once('error', reject)
+            cp.once('close', (code) => (code === 0 ? resolve() : reject(new Error(`cp failed with ${code}`))))
+          })
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to copy template files'
+        res.status(500).json({ error: message })
+        return
+      }
+
+      // Read manifest and run setup commands
+      const manifestPath = path.join(templateDir, 'template.json')
+      let manifest: any = null
+      try {
+        const raw = await fs.readFile(manifestPath, 'utf8')
+        manifest = JSON.parse(raw)
+      } catch {
+        // ignore missing/invalid manifest
+      }
+
+      if (manifest && Array.isArray(manifest.setup) && manifest.setup.length) {
+        for (let i = 0; i < manifest.setup.length; i++) {
+          const cmd = String(manifest.setup[i])
+          try {
+            await new Promise<void>((resolve, reject) => {
+              const child = spawn(cmd, { shell: true, cwd: targetPath, env: process.env })
+              child.once('error', (err2) => reject(err2))
+              child.once('close', (code) => {
+                if (code === 0) resolve()
+                else reject(new Error(`Command failed with code ${code}`))
+              })
+            })
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Template setup command failed'
+            res.status(500).json({ error: message })
+            return
+          }
+        }
+      }
+
+      // Ensure .hyperagent folder exists
+      try {
+        await fs.mkdir(path.join(targetPath, '.hyperagent'), { recursive: true })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to create .hyperagent'
+        res.status(500).json({ error: message })
+        return
+      }
+
+      // Initialize git and register with Radicle
+      try {
+        resolvedPath = await initializeWorkspaceRepository(targetPath, normalizedBranch)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to initialize workspace repository'
+        res.status(500).json({ error: message })
+        return
+      }
+
+      try {
+        // Use folder basename as repository name; sanitize similarly to other handlers
+        const rawName = path.basename(resolvedPath)
+        let normalizedName = rawName.replace(/[^A-Za-z0-9._-]+/g, '-')
+        normalizedName = normalizedName.replace(/^[._-]+|[._-]+$/g, '')
+        if (!normalizedName.length) normalizedName = rawName
+
+        await radicleModule.registerRepository({
+          repositoryPath: resolvedPath,
+          name: normalizedName,
+          description: manifest?.description ?? normalizedDescription,
+          visibility: manifest?.visibility === 'public' ? 'public' : normalizedVisibility
+        })
+        persistence.radicleRegistrations.upsert({
+          repositoryPath: resolvedPath,
+          name: path.basename(resolvedPath),
+          description: manifest?.description ?? normalizedDescription ?? null,
+          visibility: manifest?.visibility === 'public' ? 'public' : normalizedVisibility,
+          defaultBranch: normalizedBranch
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to register repository with Radicle'
+        res.status(500).json({ error: message })
+        return
+      }
+    } else {
+      // Legacy plain project creation (no template)
+      const { name: pname, repositoryPath } = req.body ?? {}
+      if (!pname || typeof pname !== 'string' || !repositoryPath || typeof repositoryPath !== 'string') {
+        res.status(400).json({ error: 'name and repositoryPath are required' })
+        return
+      }
+      const normalizedName = pname.trim()
+      const normalizedPath = repositoryPath.trim()
+      try {
+        resolvedPath = await initializeWorkspaceRepository(normalizedPath, normalizedBranch)
+        await fs.mkdir(path.join(resolvedPath, '.hyperagent'), { recursive: true })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to initialize workspace directory'
+        res.status(500).json({ error: message })
+        return
+      }
+
+      try {
+        const registration = await radicleModule.registerRepository({
+          repositoryPath: resolvedPath,
+          name: normalizedName,
+          description: normalizedDescription,
+          visibility: normalizedVisibility
+        })
+        persistence.radicleRegistrations.upsert({
+          repositoryPath: resolvedPath,
+          name: normalizedName,
+          description: normalizedDescription ?? null,
+          visibility: normalizedVisibility,
+          defaultBranch: registration.defaultBranch ?? normalizedBranch
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to register repository with Radicle'
+        res.status(500).json({ error: message })
+        return
+      }
     }
 
     const project = persistence.projects.getByRepositoryPath(resolvedPath)

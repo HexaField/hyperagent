@@ -84,35 +84,7 @@ describe('RepositoryNavigator', () => {
     vi.clearAllMocks()
   })
 
-  it('creates a Hyperagent project from the drawer', async () => {
-    setupApiMocks()
-    renderNavigator()
-
-    const trigger = await screen.findByRole('button', { name: /new repository/i })
-    fireEvent.click(trigger)
-
-    fireEvent.input(await screen.findByLabelText('Name'), { target: { value: 'Drawer Repo' } })
-    fireEvent.input(screen.getByLabelText('Repository path'), { target: { value: '/tmp/drawer' } })
-    fireEvent.input(screen.getByLabelText('Default branch'), { target: { value: 'develop' } })
-    fireEvent.input(screen.getByLabelText('Description (optional)'), { target: { value: 'Via drawer' } })
-
-    fireEvent.submit(screen.getByTestId('new-repo-form'))
-
-    await waitFor(() => {
-      const postCall = fetchJsonMock.mock.calls.find(
-        ([url, init]) => url === '/api/projects' && init?.method === 'POST'
-      )
-      expect(postCall).toBeTruthy()
-      const [, init] = postCall!
-      const payload = JSON.parse(init!.body as string)
-      expect(payload).toMatchObject({
-        name: 'Drawer Repo',
-        repositoryPath: '/tmp/drawer',
-        defaultBranch: 'develop',
-        description: 'Via drawer'
-      })
-    })
-  })
+  // Legacy drawer-based project creation was removed in favor of the template modal.
 
   it('converts a Radicle-only entry into a Hyperagent project', async () => {
     const syntheticProject: ProjectPayload = {

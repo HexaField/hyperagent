@@ -33,13 +33,7 @@ const normalizeFsPath = (input: string | undefined | null) => {
 export default function RepositoryNavigator() {
   const selection = useWorkspaceSelection()
   const [, setSearchParams] = useSearchParams()
-  const [form, setForm] = createSignal({
-    name: '',
-    repositoryPath: '',
-    description: '',
-    defaultBranch: 'main'
-  })
-  const [status, setStatus] = createSignal<string | null>(null)
+  const [templatePathInput, setTemplatePathInput] = createSignal('')
   const [browser, setBrowser] = createSignal<DirectoryListing | null>(null)
   const [browserLoading, setBrowserLoading] = createSignal(false)
   const [browserError, setBrowserError] = createSignal<string | null>(null)
@@ -50,7 +44,7 @@ export default function RepositoryNavigator() {
   const [folderStatus, setFolderStatus] = createSignal<string | null>(null)
   const [expandedProjects, setExpandedProjects] = createSignal(new Set<string>())
   const [expandedRadRepos, setExpandedRadRepos] = createSignal(new Set<string>())
-  const [newRepoModalOpen, setNewRepoModalOpen] = createSignal(false)
+  
   const [sessionProject, setSessionProject] = createSignal<WorkspaceRecord | null>(null)
   const [sessionName, setSessionName] = createSignal('')
   const [sessionDetails, setSessionDetails] = createSignal('')
@@ -61,7 +55,7 @@ export default function RepositoryNavigator() {
   const [quickActionStatus, setQuickActionStatus] = createSignal<string | null>(null)
   const [createFromTemplateOpen, setCreateFromTemplateOpen] = createSignal(false)
   const [selectedTemplateId, setSelectedTemplateId] = createSignal<string | null>(null)
-  const [templatePathInput, setTemplatePathInput] = createSignal('')
+  
   const [templateStreamLogs, setTemplateStreamLogs] = createSignal<string[]>([])
   const [templates, { refetch: refetchTemplates }] = createResource(async () => {
     const payload = await fetchJson<{ templates: { id: string; name: string; description?: string }[] }>(
@@ -100,30 +94,6 @@ export default function RepositoryNavigator() {
     return registeredRadiclePaths().has(normalizeFsPath(repoPath))
   }
 
-  const handleSubmit = async (event: SubmitEvent) => {
-    event.preventDefault()
-    if (!form().name.trim() || !form().repositoryPath.trim()) {
-      setStatus('Project name and repository path are required')
-      return
-    }
-    try {
-      await fetchJson<WorkspaceRecord>('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: form().name.trim(),
-          repositoryPath: form().repositoryPath.trim(),
-          description: form().description.trim() || undefined,
-          defaultBranch: form().defaultBranch.trim() || undefined
-        })
-      })
-      setForm({ name: '', repositoryPath: '', description: '', defaultBranch: 'main' })
-      setStatus('Project created')
-      await refreshProjects()
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Failed to create project')
-    }
-  }
 
   const refreshProjects = async () => {
     await Promise.all([refetchProjects(), refetchRadicleRepositories(), selection.refetchWorkspaces()])
@@ -197,10 +167,7 @@ export default function RepositoryNavigator() {
     })
   }
 
-  const closeNewRepoModal = () => {
-    setNewRepoModalOpen(false)
-    setStatus(null)
-  }
+  // legacy new repo drawer removed
 
   const openSessionModal = (project: WorkspaceRecord) => {
     setSessionProject(project)
@@ -379,7 +346,7 @@ export default function RepositoryNavigator() {
     setQuickActionStatus('Creating from template…')
     setTemplateStreamLogs([])
     try {
-      const resp = await fetch('/api/templates/create-from', {
+      const resp = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ templateId, path, workspaceId: selection.currentWorkspaceId() ?? null })
@@ -532,9 +499,9 @@ export default function RepositoryNavigator() {
                               <button
                                 class="rounded-xl border border-[var(--border)] px-3 py-1"
                                 type="button"
-                                onClick={() => setForm((prev) => ({ ...prev, repositoryPath: entry.path }))}
+                                onClick={() => setTemplatePathInput(entry.path)}
                               >
-                                Use in form
+                                Use in template path
                               </button>
                               <Show when={entryIsRegistered()}>
                                 <span class="rounded-xl bg-green-600 px-3 py-1 font-semibold text-white">
@@ -920,79 +887,7 @@ export default function RepositoryNavigator() {
         )}
       </Show>
 
-      <Show when={newRepoModalOpen()}>
-        <div
-          class="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
-          role="dialog"
-          aria-modal="true"
-          onClick={closeNewRepoModal}
-        >
-          <form
-            data-testid="new-repo-form"
-            class="w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-6"
-            onSubmit={handleSubmit}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <header class="mb-4">
-              <p class="text-xs uppercase tracking-[0.35em] text-[var(--text-muted)]">New project</p>
-              <h2 class="text-2xl font-semibold">Register repository</h2>
-            </header>
-            <label class="text-xs font-semibold text-[var(--text-muted)]" for="repo-name">
-              Name
-            </label>
-            <input
-              id="repo-name"
-              class="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm"
-              type="text"
-              value={form().name}
-              onInput={(event) => setForm((prev) => ({ ...prev, name: event.currentTarget.value }))}
-            />
-            <label class="mt-3 text-xs font-semibold text-[var(--text-muted)]" for="repo-path">
-              Repository path
-            </label>
-            <input
-              id="repo-path"
-              class="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm"
-              type="text"
-              value={form().repositoryPath}
-              onInput={(event) => setForm((prev) => ({ ...prev, repositoryPath: event.currentTarget.value }))}
-            />
-            <label class="mt-3 text-xs font-semibold text-[var(--text-muted)]" for="repo-branch">
-              Default branch
-            </label>
-            <input
-              id="repo-branch"
-              class="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm"
-              type="text"
-              value={form().defaultBranch}
-              onInput={(event) => setForm((prev) => ({ ...prev, defaultBranch: event.currentTarget.value }))}
-            />
-            <label class="mt-3 text-xs font-semibold text-[var(--text-muted)]" for="repo-description">
-              Description (optional)
-            </label>
-            <textarea
-              id="repo-description"
-              rows={3}
-              class="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-2 text-sm"
-              value={form().description}
-              onInput={(event) => setForm((prev) => ({ ...prev, description: event.currentTarget.value }))}
-            />
-            <Show when={status()}>{(message) => <p class="mt-2 text-xs text-[var(--text-muted)]">{message()}</p>}</Show>
-            <div class="mt-4 flex justify-end gap-2 text-sm">
-              <button
-                class="rounded-xl border border-[var(--border)] px-4 py-2"
-                type="button"
-                onClick={closeNewRepoModal}
-              >
-                Cancel
-              </button>
-              <button class="rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white" type="submit">
-                Save project
-              </button>
-            </div>
-          </form>
-        </div>
-      </Show>
+      {/* Old New project drawer removed — use the Create From Template modal instead */}
     </div>
   )
 }

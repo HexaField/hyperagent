@@ -1,5 +1,5 @@
 {
     "name": "NodeJS Library",
     "description": "Typescript & Rollup",
-    "setup": "npm i"
+    "setup": ["npm i"]
 }
