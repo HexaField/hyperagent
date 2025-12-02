@@ -197,11 +197,6 @@ export default function RepositoryNavigator() {
     })
   }
 
-  const openNewRepoModal = () => {
-    setStatus(null)
-    setNewRepoModalOpen(true)
-  }
-
   const closeNewRepoModal = () => {
     setNewRepoModalOpen(false)
     setStatus(null)
@@ -415,6 +410,7 @@ export default function RepositoryNavigator() {
             const payloadText = line.slice(5).trim()
             try {
               const payload = JSON.parse(payloadText)
+              console.log(payload)
               if (payload.type === 'stdout' || payload.type === 'stderr') {
                 setTemplateStreamLogs((prev) => [...prev, String(payload.chunk)])
               } else if (payload.type === 'step' || payload.type === 'info' || payload.type === 'start') {
@@ -619,7 +615,7 @@ export default function RepositoryNavigator() {
             <button
               class="rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white"
               type="button"
-              onClick={openNewRepoModal}
+              onClick={() => openCreateFromTemplateModal()}
             >
               New repository
             </button>
@@ -774,19 +770,7 @@ export default function RepositoryNavigator() {
         </Show>
       </section>
 
-      <section class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4 text-sm">
-        <p class="text-xs uppercase tracking-[0.35em] text-[var(--text-muted)]">Quick actions</p>
-        <div class="mt-3 grid gap-2">
-          <button
-            class="rounded-xl border border-[var(--border)] px-3 py-2 text-left hover:border-blue-500"
-            type="button"
-            onClick={() => void openCreateFromTemplateModal()}
-          >
-            Create From Template
-          </button>
-          <Show when={quickActionStatus()}>{(message) => <p class="text-xs text-[var(--text-muted)] mt-2">{message()}</p>}</Show>
-        </div>
-      </section>
+      {/* Quick Actions removed — template modal now opens from New repository button */}
 
       <Show when={createFromTemplateOpen()}>
         <div

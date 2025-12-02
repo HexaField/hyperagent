@@ -1633,9 +1633,9 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       emit({ type: 'step', message: 'Registering repository with Radicle' })
       let registration
       try {
-        // Sanitize template name to conform with Radicle repository name rules:
-        // only alphanumeric characters, '-', '_' and '.' are allowed.
-        const rawName = (manifest?.name ?? path.basename(targetPath)) as string
+        // Use user-specified folder name for the Radicle repository name.
+        // Sanitize it to conform with Radicle rules: only alphanumeric characters, '-', '_' and '.' are allowed.
+        const rawName = path.basename(targetPath) as string
         let normalizedName = rawName.replace(/[^A-Za-z0-9._-]+/g, '-')
         // Trim leading/trailing separators
         normalizedName = normalizedName.replace(/^[._-]+|[._-]+$/g, '')
@@ -1652,13 +1652,13 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         while (attempt < maxAttempts) {
           const tryName = attempt === 0 ? normalizedName : `${normalizedName}-${Math.random().toString(36).slice(2, 8)}`
           if (attempt > 0) emit({ type: 'info', message: `Retrying rad init with alternative name: ${tryName}` })
-          try {
-            registration = await radicleModule.registerRepository({
-              repositoryPath: targetPath,
-              name: tryName,
-              description: manifest?.description ?? undefined,
-              visibility: manifest?.visibility === 'public' ? 'public' : 'private'
-            })
+            try {
+              registration = await radicleModule.registerRepository({
+                repositoryPath: targetPath,
+                name: tryName,
+                description: manifest?.description ?? undefined,
+                visibility: manifest?.visibility === 'public' ? 'public' : 'private'
+              })
             break
           } catch (err2) {
             lastErr = err2
@@ -1687,7 +1687,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       try {
         persistence.radicleRegistrations.upsert({
           repositoryPath: targetPath,
-          name: manifest?.name ?? path.basename(targetPath),
+          name: path.basename(targetPath),
           description: manifest?.description ?? undefined,
           visibility: manifest?.visibility === 'public' ? 'public' : 'private',
           defaultBranch: registration.defaultBranch ?? undefined

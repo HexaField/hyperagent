@@ -1,4 +1,5 @@
 {
     "name": "React Library",
-    "description": "Typescript, React & Rollup"
+    "description": "Typescript, React & Rollup",
+    "setup": "npm i"
 }
