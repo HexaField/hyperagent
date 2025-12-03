@@ -1,29 +1,9 @@
 import axios from 'axios'
-import { spawn } from 'child_process'
-import fs from 'fs'
-import ollama from 'ollama'
-import os from 'os'
-import path from 'path'
 import { runProviderInvocation, runProviderInvocationStream } from './providerRunner'
-import { getProviderAdapter } from './providers'
+import { getProviderAdapter, type ProviderAdapter, type ProviderInvocationContext } from './providers'
+import { DEFAULT_MODEL_MAX_CTX, extractOrCreateJSON, loadSessionMeta, runCLI } from './llm.shared'
 
-const modelSettings = {
-  'llama3.2': {
-    maxContext: 128000
-  },
-  'gpt-oss:20b': {
-    maxContext: 32000
-  },
-  'llama3.1:8b': {
-    maxContext: 64000
-  }
-} as {
-  [model: string]: {
-    maxContext: number
-  }
-}
-
-const MODEL_MAX_CTX = 128000
+const MODEL_MAX_CTX = DEFAULT_MODEL_MAX_CTX
 
 export type LLMResponse = {
   success: boolean
@@ -51,553 +31,10 @@ export type CallLLMOptions = {
   signal?: AbortSignal
 }
 
-// Simple in-memory session stores. For ollama we keep a rolling chat history per session.
-// For CLI-based providers we prefer passing a --session flag, but also retain the
-// last assistant text for optional future heuristics if desired.
-type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string }
-const ollamaSessions = new Map<string, ChatMessage[]>()
-const cliLastResponses = new Map<string, string>()
-
-// Persistent session storage now lives inside a caller-provided directory (e.g. a sourceDir).
-const META_FOLDER = '.hyperagent'
-
-function sanitizeSessionId(sessionId: string): string {
-  const safe = sessionId.replace(/[^a-zA-Z0-9._-]/g, '_')
-  return safe.length ? safe : 'session'
-}
-
-function resolveSessionRoot(sessionId: string, baseDir?: string): string {
-  return baseDir ? path.join(baseDir) : path.join(os.tmpdir(), '.sessions', sessionId)
-}
-
-function metaDirectory(sessionId: string, baseDir?: string): string {
-  const root = resolveSessionRoot(sessionId, baseDir)
-  const dir = path.join(root, META_FOLDER)
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-  return dir
-}
-
-function metaFile(sessionId: string, baseDir?: string) {
-  const dir = metaDirectory(sessionId, baseDir)
-  return path.join(dir, `${sanitizeSessionId(sessionId)}.json`)
-}
-
-type LogEntry = {
-  entryId: string
-  provider: Provider | 'agent'
-  model?: string
-  role?: string
-  payload: any
-  createdAt: string
-}
-type SessionMeta = {
-  id: string
-  log: LogEntry[]
-  createdAt: string
-  updatedAt: string
-}
-function loadSessionMeta(sessionId: string, baseDir?: string): SessionMeta {
-  const file = metaFile(sessionId, baseDir)
-  if (fs.existsSync(file)) {
-    try {
-      const raw = fs.readFileSync(file, 'utf-8')
-      const parsed = JSON.parse(raw)
-      parsed.log = Array.isArray(parsed.log) ? parsed.log : []
-      return parsed
-    } catch (e) {
-      console.log('Failed to parse session meta json; recreating', e)
-    }
-  }
-  const blank: SessionMeta = {
-    id: sessionId,
-    log: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  }
-  saveSessionMeta(blank, baseDir)
-  return blank
-}
-function saveSessionMeta(meta: SessionMeta, baseDir?: string) {
-  const file = metaFile(meta.id, baseDir)
-  meta.updatedAt = new Date().toISOString()
-  fs.writeFileSync(file, JSON.stringify(meta, null, 2))
-}
-
-type LogEntryInit = {
-  provider: Provider | 'agent'
-  model?: string
-  role?: string
-  payload: any
-  entryId?: string
-  createdAt?: string
-}
-
-function appendLogEntry(meta: SessionMeta, entry: LogEntryInit, baseDir?: string) {
-  const normalized: LogEntry = {
-    entryId: entry.entryId || `${entry.provider}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    provider: entry.provider,
-    model: entry.model,
-    role: entry.role,
-    payload: entry.payload,
-    createdAt: entry.createdAt || new Date().toISOString()
-  }
-  meta.log = Array.isArray(meta.log) ? meta.log : []
-  meta.log.push(normalized)
-  saveSessionMeta(meta, baseDir)
-}
-
-function findLatestLogEntry(meta: SessionMeta, predicate: (entry: LogEntry) => boolean): LogEntry | undefined {
-  const log = Array.isArray(meta.log) ? meta.log : []
-  for (let i = log.length - 1; i >= 0; i--) {
-    const entry = log[i]
-    if (predicate(entry)) return entry
-  }
-  return undefined
-}
-
-type CLIStreamHooks = {
-  onStdout?: (chunk: string) => void
-  onStderr?: (chunk: string) => void
-}
-
-export async function runCLI(
-  command: string,
-  args: string[],
-  input: string,
-  sessionDir?: string,
-  hooks?: CLIStreamHooks
-): Promise<string> {
-  const workingDir = sessionDir || path.join(os.tmpdir(), 'hyperagent-cli')
-  if (!fs.existsSync(workingDir)) {
-    fs.mkdirSync(workingDir, { recursive: true })
-  }
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      cwd: workingDir
-    })
-    let out = ''
-    let err = ''
-
-    child.stdout.on('data', (chunk) => {
-      const text = String(chunk)
-      console.log(text)
-      out += text
-      try {
-        hooks?.onStdout?.(text)
-      } catch (err) {
-        console.warn('runCLI stdout hook failed', err)
-      }
-    })
-    child.stderr.on('data', (chunk) => {
-      const text = String(chunk)
-      console.log(text)
-      err += text
-      try {
-        hooks?.onStderr?.(text)
-      } catch (errHook) {
-        console.warn('runCLI stderr hook failed', errHook)
-      }
-    })
-
-    child.on('error', (e) => reject(e))
-    child.on('close', (code) => {
-      if (code !== 0) {
-        return reject(new Error(`CLI exited ${code}: ${err}`))
-      }
-      resolve(out)
-    })
-
-    if (input) {
-      child.stdin.write(input)
-    }
-    child.stdin.end()
-  })
-}
-
 function wrapAsJSONCodeFence(obj: any): string {
   const pretty = JSON.stringify(obj, null, 2)
   // Avoid template literal containing backticks to prevent parser confusion; build with concatenation.
   return '\n\n```json\n' + pretty + '\n```\n'
-}
-
-function extractOrCreateJSON(fullMessage: string): any {
-  // Try to parse directly
-  try {
-    return JSON.parse(fullMessage)
-  } catch {
-    // Try to extract JSON objects from the text and pick one that looks like structured output.
-    const allMatches = Array.from(fullMessage.matchAll(/(\{[\s\S]*?\})/g)).map((r) => r[1])
-    for (const jsonText of allMatches) {
-      try {
-        const parsed = JSON.parse(jsonText)
-        // Prefer objects that match the typical { answer, status } shape or any non-empty object.
-        if (parsed && typeof parsed === 'object') {
-          // If this object directly matches the expected shape, return it.
-          if ('answer' in parsed && 'status' in parsed) return parsed
-
-          // Some CLIs wrap the JSON as a string under a `text`/`message` field.
-          for (const key of ['text', 'message', 'content']) {
-            if (typeof (parsed as any)[key] === 'string') {
-              const inner = (parsed as any)[key]
-              try {
-                const innerParsed = JSON.parse(inner)
-                if (
-                  innerParsed &&
-                  typeof innerParsed === 'object' &&
-                  'answer' in innerParsed &&
-                  'status' in innerParsed
-                ) {
-                  return innerParsed
-                }
-              } catch {
-                // not JSON, continue
-              }
-            }
-          }
-
-          // Otherwise, accept any non-empty object as a fallback.
-          if (Object.keys(parsed).length > 0) return parsed
-        }
-      } catch {
-        // ignore
-      }
-    }
-    // Fallback: embed raw text under `text`
-    return { text: fullMessage }
-  }
-}
-
-async function callOllama(
-  systemPrompt: string,
-  userQuery: string,
-  model: string,
-  sessionId?: string,
-  sessionDir?: string,
-  onChunk?: (chunk: string) => void
-): Promise<string> {
-  // Maintain a per-session message history when a sessionId is provided
-  let messages: ChatMessage[]
-  if (sessionId) {
-    const meta = loadSessionMeta(sessionId, sessionDir)
-    const lastLog = findLatestLogEntry(
-      meta,
-      (entry) => entry.provider === 'ollama' && Array.isArray(entry.payload?.messages)
-    )
-    const storedMessages = (lastLog?.payload?.messages as ChatMessage[]) || []
-    // clone to avoid mutating prior log entries
-    messages = JSON.parse(JSON.stringify(storedMessages))
-    if (messages.length === 0) messages.push({ role: 'system', content: systemPrompt })
-    messages.push({ role: 'user', content: userQuery })
-    ollamaSessions.set(sessionId, messages)
-  } else {
-    messages = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userQuery }
-    ]
-  }
-
-  const response = await ollama.chat({
-    model,
-    options: {
-      num_ctx: modelSettings[model]?.maxContext || MODEL_MAX_CTX
-    },
-    stream: true,
-    messages
-  })
-
-  let fullMessage = ''
-  for await (const chunk of response as any) {
-    if (chunk.message?.content) {
-      const text = chunk.message.content
-      fullMessage += text
-      if (text) onChunk?.(text)
-    }
-  }
-  // Store assistant turn for session continuity
-  if (sessionId) {
-    const hist = ollamaSessions.get(sessionId) || messages
-    hist.push({ role: 'assistant', content: fullMessage })
-    ollamaSessions.set(sessionId, hist)
-    // Persist to disk
-    const meta = loadSessionMeta(sessionId, sessionDir)
-    appendLogEntry(
-      meta,
-      {
-        provider: 'ollama',
-        model,
-        payload: { messages: hist }
-      },
-      sessionDir
-    )
-  }
-  return fullMessage
-}
-
-async function callOpencodeCLI(
-  systemPrompt: string,
-  userQuery: string,
-  model: string,
-  sessionId?: string,
-  sessionDir?: string,
-  onChunk?: (chunk: string) => void,
-  signal?: AbortSignal
-): Promise<string> {
-  // We assume `opencode` CLI is installed. We'll pass the combined prompt as a positional argument.
-  const combined = `${systemPrompt}\n${userQuery}`
-  // If the model doesn't include a provider (provider/model), try to pick a default available model.
-  let modelToUse = model
-  if (!model.includes('/')) {
-    try {
-      const modelsRaw = await runCLI('opencode', ['models'], '', sessionDir)
-      const lines = modelsRaw
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter(Boolean)
-      // prefer local opencode models first, then github-copilot provider models
-      const preferredLocal = lines.find((l) => /^opencode\//i.test(l))
-      const preferredProvider = lines.find((l) => /github-?copilot|gpt|o3|claude|gemini/i.test(l))
-      modelToUse = (preferredLocal as string) || (preferredProvider as string) || lines[0] || model
-    } catch {
-      // if listing models fails, fall back to the given model
-      modelToUse = model
-    }
-  }
-
-  // Use the `run` subcommand with the prompt as a positional argument and request JSON output.
-  const args = ['run', combined, '-m', modelToUse, '--format', 'json']
-  let sessionFlag: string | undefined
-  if (sessionId) {
-    const usable = await opencodeSessionExists(sessionId, sessionDir)
-    if (usable) {
-      sessionFlag = sessionId
-    } else {
-      console.warn(`Opencode session "${sessionId}" not found or unavailable; continuing without --session flag.`)
-    }
-  }
-  if (sessionFlag) {
-    args.push('--session', sessionFlag)
-  }
-  console.log(args)
-  let emitted = false
-  // If an adapter exists for 'opencode', prefer to use it so provider logic
-  // can be centralized. Otherwise fall back to running the opencode CLI directly.
-  const adapter = getProviderAdapter('opencode')
-  let res = ''
-  if (adapter && adapter.buildInvocation) {
-    const invocation = adapter.buildInvocation({
-      sessionId: sessionId ?? '',
-      modelId: modelToUse,
-      text: combined,
-      workspacePath: sessionDir
-    })
-    const opencodeRunnerWrapper = async (args: string[], _options?: any) => {
-      void _options
-      const out = await runCLI('opencode', args, '', sessionDir, {
-        onStdout: (chunk) => {
-          emitted = true
-          if (chunk) onChunk?.(chunk)
-        }
-      })
-      return { stdout: out, stderr: '' }
-    }
-    if (onChunk) {
-      // stream chunks using the provider stream generator
-      let accumulated = ''
-      try {
-        for await (const chunk of runProviderInvocationStream(invocation, {
-          cwd: sessionDir,
-          opencodeCommandRunner: opencodeRunnerWrapper,
-          signal
-        })) {
-          accumulated += chunk
-          if (chunk) onChunk?.(chunk)
-        }
-      } catch {
-        // If streaming fails, fall back to non-streaming invocation
-        const result = await runProviderInvocation(invocation, {
-          cwd: sessionDir,
-          opencodeCommandRunner: opencodeRunnerWrapper
-        })
-        accumulated = (result && result.stdout) || (result && result.responseText) || accumulated
-      }
-      res = accumulated
-    } else {
-      const result = await runProviderInvocation(invocation, {
-        cwd: sessionDir,
-        opencodeCommandRunner: opencodeRunnerWrapper
-      })
-      res = (result && result.stdout) || (result && result.responseText) || ''
-    }
-  } else {
-    res = await runCLI('opencode', args, '', sessionDir, {
-      onStdout: (chunk) => {
-        emitted = true
-        if (chunk) onChunk?.(chunk)
-      }
-    })
-  }
-  console.log('Opencode CLI output:', res.split('\n').map(extractOrCreateJSON))
-
-  const finalRes = res
-    .split('\n')
-    .map(extractOrCreateJSON)
-    .reverse() // get last
-    .find((obj) => (obj && typeof obj === 'object' && obj.type === 'text' && obj.part) || obj.text)
-
-  let text = finalRes?.part?.text ?? finalRes?.text?.text ?? ''
-  if (!text) {
-    // Fallback: if output is a bare JSON object or array, surface it directly
-    try {
-      const maybe = extractOrCreateJSON(res)
-      if (maybe && typeof maybe === 'object') {
-        text = JSON.stringify(maybe)
-      }
-    } catch {
-      // ignore, keep empty text
-    }
-  }
-  if (sessionId) {
-    cliLastResponses.set(sessionId, text)
-    const meta = loadSessionMeta(sessionId, sessionDir)
-    appendLogEntry(
-      meta,
-      {
-        provider: 'opencode',
-        model: modelToUse,
-        payload: { output: text }
-      },
-      sessionDir
-    )
-  }
-  if (!emitted && text) onChunk?.(text)
-  console.log('finalRes:', text)
-  return text
-}
-
-async function opencodeSessionExists(sessionName: string, sessionDir?: string): Promise<boolean> {
-  if (!sessionName) return false
-  const probes: string[][] = [
-    ['session', 'list', '--format', 'json'],
-    ['session', 'list']
-  ]
-  for (const probe of probes) {
-    try {
-      const raw = await runCLI('opencode', probe, '', sessionDir)
-      if (!raw) continue
-      // Try JSON first
-      try {
-        const parsed = JSON.parse(raw)
-        const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : Array.isArray(parsed) ? parsed : []
-        if (
-          Array.isArray(sessions) &&
-          sessions.some((entry) => {
-            if (!entry) return false
-            if (typeof entry === 'string') return entry.trim() === sessionName
-            if (typeof entry === 'object') {
-              return entry.name === sessionName || entry.session === sessionName || entry.id === sessionName
-            }
-            return false
-          })
-        ) {
-          return true
-        }
-      } catch {
-        // Not JSON; fall back to string search
-      }
-      if (raw.includes(sessionName)) return true
-    } catch {
-      // Ignore probe failures, try next strategy
-    }
-  }
-  return false
-}
-
-async function callGooseCLI(
-  systemPrompt: string,
-  userQuery: string,
-  model: string,
-  sessionId?: string,
-  sessionDir?: string,
-  onChunk?: (chunk: string) => void
-): Promise<string> {
-  const combined = `${systemPrompt}\n${userQuery}`
-  // Try to pick a provider/model that exists locally via opencode models if possible.
-  let providerArg = undefined
-
-  const args = ['run', '--text', combined, '--no-session']
-  if (providerArg) args.push('--provider', providerArg)
-  if (sessionId) args.push('--session-id', sessionId)
-  // ignore model and assume it's already configured
-  // if (model) args.push('--model', model)
-  // Use quiet mode if available to reduce extra output
-
-  let emitted = false
-  const out = await runCLI('goose', args, '', sessionDir, {
-    onStdout: (chunk) => {
-      emitted = true
-      if (chunk) onChunk?.(chunk)
-    }
-  })
-  console.log('Goose CLI output:', out)
-  if (sessionId) {
-    cliLastResponses.set(sessionId, out)
-    const meta = loadSessionMeta(sessionId, sessionDir)
-    appendLogEntry(
-      meta,
-      {
-        provider: 'goose',
-        model,
-        payload: { output: out }
-      },
-      sessionDir
-    )
-  }
-  const cleaned = outClean(out)
-  if (!emitted && cleaned) onChunk?.(cleaned)
-  return cleaned
-}
-
-async function callOllamaCLI(
-  systemPrompt: string,
-  userQuery: string,
-  model: string,
-  sessionId?: string,
-  sessionDir?: string,
-  onChunk?: (chunk: string) => void
-): Promise<string> {
-  const combined = `${systemPrompt}\n${userQuery}`
-  // Use `ollama run MODEL PROMPT --format json` to get a JSON response when supported.
-  // Pass the prompt as a positional argument; do not send via stdin.
-  const args = ['run', model, combined, '--format', 'json']
-  let emitted = false
-  const out = await runCLI('ollama', args, '', sessionDir, {
-    onStdout: (chunk) => {
-      emitted = true
-      if (chunk) onChunk?.(chunk)
-    }
-  })
-  if (sessionId) {
-    cliLastResponses.set(sessionId, out)
-    const meta = loadSessionMeta(sessionId, sessionDir)
-    appendLogEntry(
-      meta,
-      {
-        provider: 'ollama-cli',
-        model,
-        payload: { output: out }
-      },
-      sessionDir
-    )
-  }
-  const cleaned = outClean(out)
-  if (!emitted && cleaned) onChunk?.(cleaned)
-  return cleaned
-}
-
-function outClean(s: string): string {
-  // Small normalization to reduce spurious whitespace differences
-  return typeof s === 'string' ? s.trim() : s
 }
 
 /**
@@ -655,70 +92,22 @@ export async function callLLM(
         }
       : undefined
     try {
-      let raw = ''
-      // Prefer provider adapters where available. If an adapter exists for the
-      // requested provider, use it via the provider runner. Otherwise fall back
-      // to provider-specific CLI helpers.
       const adapter = getProviderAdapter(provider)
-      if (adapter && adapter.buildInvocation) {
-        const combined = `${systemPrompt}\n${userQuery}`
-        const invocation = adapter.buildInvocation({
-          sessionId: sessionId ?? '',
-          modelId: String(model),
-          text: combined,
-          workspacePath: sessionDir
-        })
-        const runnerWrapper = async (args: string[], _options?: any) => {
-          void _options
-          // default wrapper uses runCLI to execute a command and return stdout
-          const out = await runCLI('opencode', args, '', sessionDir, {
-            onStdout: (chunk) => {
-              if (chunk) emitChunk?.(chunk)
-            }
-          })
-          return { stdout: out, stderr: '' }
-        }
-        if (emitChunk) {
-          let acc = ''
-          try {
-            for await (const chunk of runProviderInvocationStream(invocation, {
-              cwd: sessionDir,
-              opencodeCommandRunner: runnerWrapper,
-              signal
-            })) {
-              acc += chunk
-              if (chunk) emitChunk(chunk)
-            }
-          } catch {
-            const invocationResult = await runProviderInvocation(invocation, {
-              cwd: sessionDir,
-              opencodeCommandRunner: runnerWrapper
-            })
-            acc =
-              (invocationResult && invocationResult.stdout) ||
-              (invocationResult && invocationResult.responseText) ||
-              acc
-          }
-          raw = acc
-        } else {
-          const invocationResult = await runProviderInvocation(invocation, {
-            cwd: sessionDir,
-            opencodeCommandRunner: runnerWrapper
-          })
-          raw =
-            (invocationResult && invocationResult.stdout) || (invocationResult && invocationResult.responseText) || ''
-        }
-      } else if (provider === 'ollama') {
-        raw = await callOllama(systemPrompt, userQuery, model, sessionId, sessionDir, emitChunk)
-      } else if (provider === 'opencode') {
-        raw = await callOpencodeCLI(systemPrompt, userQuery, String(model), sessionId, sessionDir, emitChunk, signal)
-      } else if (provider === 'goose') {
-        raw = await callGooseCLI(systemPrompt, userQuery, String(model), sessionId, sessionDir, emitChunk)
-      } else if (provider === 'ollama-cli') {
-        raw = await callOllamaCLI(systemPrompt, userQuery, String(model), sessionId, sessionDir, emitChunk)
-      } else {
+      if (!adapter) {
         throw new Error(`Unsupported LLM provider: ${provider}`)
       }
+      const providerCtx: ProviderInvocationContext = {
+        providerId: provider,
+        systemPrompt,
+        userPrompt: userQuery,
+        combinedPrompt: `${systemPrompt}\n${userQuery}`,
+        modelId: String(model),
+        sessionId,
+        sessionDir,
+        signal,
+        onChunk: emitChunk
+      }
+      const raw = await executeAdapter(adapter, providerCtx)
 
       console.log('LLM', provider, model, 'raw response', raw)
 
@@ -738,6 +127,58 @@ export async function callLLM(
   }
 
   return { success: false, error: String(lastErr) }
+}
+
+async function executeAdapter(adapter: ProviderAdapter, ctx: ProviderInvocationContext): Promise<string> {
+  if (adapter.invoke) {
+    return adapter.invoke(ctx)
+  }
+  if (!adapter.buildInvocation) {
+    throw new Error(`Provider ${adapter.id} does not implement invoke or buildInvocation`)
+  }
+  const invocation = adapter.buildInvocation({
+    sessionId: ctx.sessionId ?? '',
+    modelId: ctx.modelId,
+    text: ctx.combinedPrompt,
+    workspacePath: ctx.sessionDir ?? ctx.workspacePath,
+    messages: ctx.messages,
+    session: ctx.session
+  })
+  const command = invocation.command || 'opencode'
+  const runnerWrapper = async (args: string[], _options?: any) => {
+    void _options
+    const out = await runCLI(command, args, '', ctx.sessionDir, {
+      onStdout: (chunk) => {
+        if (chunk) ctx.onChunk?.(chunk)
+      }
+    })
+    return { stdout: out, stderr: '' }
+  }
+  if (ctx.onChunk) {
+    let acc = ''
+    try {
+      for await (const chunk of runProviderInvocationStream(invocation, {
+        cwd: ctx.sessionDir,
+        opencodeCommandRunner: runnerWrapper,
+        signal: ctx.signal
+      })) {
+        acc += chunk
+        if (chunk) ctx.onChunk?.(chunk)
+      }
+    } catch {
+      const invocationResult = await runProviderInvocation(invocation, {
+        cwd: ctx.sessionDir,
+        opencodeCommandRunner: runnerWrapper
+      })
+      acc = invocationResult?.stdout || invocationResult?.responseText || acc
+    }
+    return acc
+  }
+  const invocationResult = await runProviderInvocation(invocation, {
+    cwd: ctx.sessionDir,
+    opencodeCommandRunner: runnerWrapper
+  })
+  return invocationResult?.stdout || invocationResult?.responseText || ''
 }
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434'

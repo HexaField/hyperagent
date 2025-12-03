@@ -1,4 +1,24 @@
+import './adapters/gooseAdapter'
+import './adapters/ollamaAdapter'
+import './adapters/ollamaCliAdapter'
+import './adapters/opencodeAdapter'
+export { getProviderAdapter, listProviders, registerProvider } from './registry'
 import type { ConversationMessage, SessionDetail } from './types'
+
+export type ProviderInvocationContext = {
+  providerId: string
+  systemPrompt: string
+  userPrompt: string
+  combinedPrompt: string
+  modelId: string
+  sessionId?: string
+  sessionDir?: string
+  workspacePath?: string
+  messages?: ConversationMessage[]
+  session?: SessionDetail | null
+  signal?: AbortSignal
+  onChunk?: (chunk: string) => void
+}
 
 export type ProviderAdapter = {
   id: string
@@ -7,6 +27,10 @@ export type ProviderAdapter = {
    * Optional validator to check whether a given modelId is supported by the provider.
    */
   validateModel?: (modelId: string) => Promise<boolean> | boolean
+  /**
+   * If provided, handle the invocation completely inside the adapter (HTTP/SDK/etc).
+   */
+  invoke?: (ctx: ProviderInvocationContext) => Promise<string>
   /**
    * Build command-line args or other invocation payload for this provider given
    * a session id, resolved model id, text input and workspace path. Return
@@ -20,45 +44,6 @@ export type ProviderAdapter = {
     workspacePath?: string
     messages?: ConversationMessage[]
     session?: SessionDetail | null
-  }) => { cliArgs?: string[]; payload?: unknown }
+  }) => { cliArgs?: string[]; payload?: unknown; command?: string }
 }
 
-const registry = new Map<string, ProviderAdapter>()
-
-export function registerProvider(adapter: ProviderAdapter) {
-  if (!adapter || !adapter.id) throw new Error('Invalid provider adapter')
-  registry.set(adapter.id, adapter)
-}
-
-export function getProviderAdapter(providerId: string): ProviderAdapter | null {
-  if (!providerId) return null
-  return registry.get(providerId) ?? null
-}
-
-export function listProviders(): ProviderAdapter[] {
-  return Array.from(registry.values())
-}
-
-// Default provider adapter for the existing opencode CLI-style provider.
-// Keeps behaviour identical to the previous code path.
-const normalizePromptArg = (text: string): string => {
-  if (!text) return ''
-  return text.startsWith('-') ? ` ${text}` : text
-}
-
-/** @todo implement proper provider */
-// registerProvider({
-//   id: 'opencode',
-//   label: 'Opencode CLI',
-//   validateModel: () => true,
-//   buildInvocation: ({ sessionId, modelId, text }) => {
-//     const cliArgs = ['run', normalizePromptArg(text), '--format', 'json', '--model', modelId]
-//     const trimmedSession = sessionId.trim()
-//     if (trimmedSession.length) {
-//       cliArgs.push('--session', trimmedSession)
-//     }
-//     return { cliArgs }
-//   }
-// })
-
-export default { registerProvider, getProviderAdapter, listProviders }
