@@ -2,7 +2,6 @@ import { beforeAll, afterAll, describe, expect, it } from 'vitest'
 import NodeWebSocket from 'ws'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 import { listAgents, streamChat, type Agent, type ChatEvent } from '../src'
@@ -10,7 +9,6 @@ import { listAgents, streamChat, type Agent, type ChatEvent } from '../src'
 const DEFAULT_HTTP_BASE = 'http://127.0.0.1:38080'
 const DEFAULT_WS_BASE = 'ws://127.0.0.1:38080/ws/chat'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const moduleRoot = path.resolve(__dirname, '..', '..')
 
 if (typeof globalThis.WebSocket === 'undefined') {
@@ -107,7 +105,8 @@ describe('streaming-llm TypeScript client – integration', () => {
       expect(conversationId).toBeDefined()
       expect(tokens.join('').trim().length).toBeGreaterThan(0)
       expect(events.some((event) => event.type === 'token')).toBe(true)
-      expect(events.at(-1)?.type).toBe('done')
+      const lastEvent = events.length ? events[events.length - 1] : undefined
+      expect(lastEvent?.type).toBe('done')
     },
     120_000
   )

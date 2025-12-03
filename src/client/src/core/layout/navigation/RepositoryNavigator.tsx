@@ -1,3 +1,4 @@
+import type { RouteSectionProps } from '@solidjs/router'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onMount } from 'solid-js'
 import type { GitInfo } from '../../../../../interfaces/core/git'
 import type { ProjectListResponse, WorkspaceRecord } from '../../../../../interfaces/core/projects'
@@ -22,7 +23,10 @@ const normalizeFsPath = (input: string | undefined | null) => {
   return trimmed.length ? trimmed : replaced
 }
 
-export default function RepositoryNavigator({ close }: { close: () => void }) {
+type RepositoryNavigatorProps = Partial<RouteSectionProps<unknown>> & { close?: () => void }
+
+export default function RepositoryNavigator(props: RepositoryNavigatorProps) {
+  const handleClose = () => props.close?.()
   const selection = useWorkspaceSelection()
   const [templatePathInput, setTemplatePathInput] = createSignal('')
   const [browser, setBrowser] = createSignal<DirectoryListing | null>(null)
@@ -557,7 +561,7 @@ export default function RepositoryNavigator({ close }: { close: () => void }) {
                             type="button"
                             onClick={() => {
                               selection.setWorkspaceId(project.id)
-                              close()
+                              handleClose()
                             }}
                           >
                             Open
