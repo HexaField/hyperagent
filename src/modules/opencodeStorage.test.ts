@@ -259,7 +259,8 @@ describe('createOpencodeStorage', () => {
       expect(resolver.extractStepText).toHaveBeenCalledWith({
         snapshotHash: 'deadbeef',
         workspacePath: '/workspace/snapshot-repo',
-        stage: 'start'
+        stage: 'start',
+        actor: null
       })
     } finally {
       await fs.promises.rm(tmpRoot, { recursive: true, force: true })
@@ -334,7 +335,103 @@ describe('createOpencodeStorage', () => {
       expect(resolver.extractStepText).toHaveBeenCalledWith({
         snapshotHash: 'nestedhash',
         workspacePath: '/workspace/nested-snapshot',
-        stage: 'start'
+        stage: 'start',
+        actor: null
+      })
+    } finally {
+      await fs.promises.rm(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('passes worker and verifier actor hints to the snapshot resolver', async () => {
+    const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencode-step-actor-'))
+    try {
+      const storageDir = path.join(tmpRoot, 'storage')
+      const sessionDir = path.join(storageDir, 'session', 'hash-step-actor')
+      const messageDir = path.join(storageDir, 'message', 'ses_actor')
+      const partRoot = path.join(storageDir, 'part')
+      await fs.promises.mkdir(sessionDir, { recursive: true })
+      await fs.promises.mkdir(messageDir, { recursive: true })
+      await fs.promises.mkdir(partRoot, { recursive: true })
+
+      const now = Date.now()
+      const sessionJson = {
+        id: 'ses_actor',
+        directory: '/workspace/actor-repo',
+        title: 'Actor Session',
+        time: { created: now, updated: now },
+        summary: { additions: 0, deletions: 0, files: 0 }
+      }
+      await fs.promises.writeFile(path.join(sessionDir, 'ses_actor.json'), JSON.stringify(sessionJson), 'utf8')
+
+      const workerMessage = {
+        id: 'msg_worker',
+        sessionID: 'ses_actor',
+        role: 'worker',
+        time: { created: now, completed: now },
+        modelID: 'mock-model',
+        providerID: 'opencode'
+      }
+      const verifierMessage = {
+        id: 'msg_verifier',
+        sessionID: 'ses_actor',
+        role: 'verifier',
+        time: { created: now, completed: now },
+        modelID: 'mock-model',
+        providerID: 'opencode'
+      }
+      await fs.promises.writeFile(path.join(messageDir, 'msg_worker.json'), JSON.stringify(workerMessage), 'utf8')
+      await fs.promises.writeFile(path.join(messageDir, 'msg_verifier.json'), JSON.stringify(verifierMessage), 'utf8')
+
+      const makePart = (id: string) => ({
+        id,
+        sessionID: 'ses_actor',
+        messageID: id.startsWith('prt_worker') ? 'msg_worker' : 'msg_verifier',
+        type: 'step-start',
+        text: '',
+        snapshot: 'cafebabe',
+        time: { start: now, end: now }
+      })
+
+      const workerPartDir = path.join(partRoot, 'msg_worker')
+      const verifierPartDir = path.join(partRoot, 'msg_verifier')
+      await fs.promises.mkdir(workerPartDir, { recursive: true })
+      await fs.promises.mkdir(verifierPartDir, { recursive: true })
+      await fs.promises.writeFile(path.join(workerPartDir, 'prt_worker.json'), JSON.stringify(makePart('prt_worker')), 'utf8')
+      await fs.promises.writeFile(
+        path.join(verifierPartDir, 'prt_verifier.json'),
+        JSON.stringify(makePart('prt_verifier')),
+        'utf8'
+      )
+
+      const resolver = {
+        extractStepText: vi.fn().mockImplementation(async ({ actor }) =>
+          actor === 'verifier' ? 'Verifier snapshot text' : actor === 'worker' ? 'Worker snapshot text' : 'Unknown snapshot'
+        )
+      }
+
+      const storage = createOpencodeStorage({ rootDir: tmpRoot, snapshotResolver: resolver })
+      const detail = await storage.getSession('ses_actor')
+      expect(detail).not.toBeNull()
+      if (!detail) return
+      const workerMsg = detail.messages.find((m) => m.id === 'msg_worker')
+      const verifierMsg = detail.messages.find((m) => m.id === 'msg_verifier')
+      const workerPart = workerMsg?.parts.find((p) => p.id === 'prt_worker')
+      const verifierPart = verifierMsg?.parts.find((p) => p.id === 'prt_verifier')
+      expect(workerPart?.text).toBe('Worker snapshot text')
+      expect(verifierPart?.text).toBe('Verifier snapshot text')
+
+      expect(resolver.extractStepText).toHaveBeenCalledWith({
+        snapshotHash: 'cafebabe',
+        workspacePath: '/workspace/actor-repo',
+        stage: 'start',
+        actor: 'worker'
+      })
+      expect(resolver.extractStepText).toHaveBeenCalledWith({
+        snapshotHash: 'cafebabe',
+        workspacePath: '/workspace/actor-repo',
+        stage: 'start',
+        actor: 'verifier'
       })
     } finally {
       await fs.promises.rm(tmpRoot, { recursive: true, force: true })

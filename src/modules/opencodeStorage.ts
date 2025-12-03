@@ -51,9 +51,15 @@ export type OpencodeSessionDetail = {
 }
 
 type SnapshotStage = 'start' | 'finish' | 'unknown'
+type SnapshotActor = 'worker' | 'verifier'
 
 type SnapshotResolver = {
-  extractStepText: (input: { snapshotHash: string; workspacePath?: string | null; stage: SnapshotStage }) => Promise<string | null>
+  extractStepText: (input: {
+    snapshotHash: string
+    workspacePath?: string | null
+    stage: SnapshotStage
+    actor?: SnapshotActor | null
+  }) => Promise<string | null>
 }
 
 export type ListSessionsOptions = {
@@ -265,7 +271,8 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
     const parts: OpencodeMessagePart[] = []
     const normalizationContext: PartNormalizationContext = {
       snapshotResolver,
-      workspacePath: resolveMessageWorkspacePath(message, meta)
+      workspacePath: resolveMessageWorkspacePath(message, meta),
+      actor: normalizeActorRole(message.role)
     }
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue
@@ -309,6 +316,7 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
   type PartNormalizationContext = {
     snapshotResolver: SnapshotResolver | null
     workspacePath?: string | null
+    actor?: SnapshotActor | null
   }
 
   async function normalizeStepLikePart(part: OpencodeMessagePart, raw: RawPartJson, ctx: PartNormalizationContext) {
@@ -382,11 +390,16 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
     if (!snapshotHash) return
     if (hasMeaningfulStepText(part.text, snapshotHash)) return
     const stage: SnapshotStage = part.type === 'step-start' ? 'start' : part.type === 'step-finish' ? 'finish' : 'unknown'
+    const actor = ctx.actor ??
+      normalizeActorRole((raw as any)?.role) ??
+      normalizeActorRole((raw as any)?.actor) ??
+      normalizeActorRole((raw as any)?.agent)
     try {
       const text = await ctx.snapshotResolver.extractStepText({
         snapshotHash,
         workspacePath: ctx.workspacePath,
-        stage
+        stage,
+        actor
       })
       if (text && text.trim().length) {
         part.text = text.trim()
@@ -687,10 +700,7 @@ type SnapshotTreeEntry = {
   name: string
 }
 
-type SnapshotHydratedData = {
-  worker?: SnapshotLogSummary
-  verifier?: SnapshotLogSummary
-}
+type SnapshotHydratedData = Partial<Record<SnapshotActor, SnapshotLogSummary>>
 
 type SnapshotLogSummary = {
   startText?: string | null
@@ -702,6 +712,7 @@ type SnapshotRequest = {
   snapshotHash: string
   workspacePath?: string | null
   stage: SnapshotStage
+  actor?: SnapshotActor | null
 }
 
 class SnapshotGitResolver implements SnapshotResolver {
@@ -720,13 +731,35 @@ class SnapshotGitResolver implements SnapshotResolver {
     const data = await this.loadSnapshotData(repo, hash)
     if (!data) return null
     const stage = input.stage ?? 'unknown'
+    const preferredOrder = this.buildActorPreference(input.actor)
     const candidate =
-      stage === 'start'
-        ? data.worker?.startText ?? data.verifier?.startText ?? data.worker?.anyText ?? data.verifier?.anyText
-        : stage === 'finish'
-          ? data.worker?.finishText ?? data.verifier?.finishText ?? data.worker?.anyText ?? data.verifier?.anyText
-          : data.worker?.anyText ?? data.verifier?.anyText
+      this.pickSnapshotText(data, stage, preferredOrder) ??
+      this.pickSnapshotText(data, stage === 'start' ? 'finish' : 'start', preferredOrder) ??
+      this.pickSnapshotText(data, 'unknown', preferredOrder)
     return candidate ?? null
+  }
+
+  private buildActorPreference(actor?: SnapshotActor | null): SnapshotActor[] {
+    if (actor === 'verifier') return ['verifier', 'worker']
+    if (actor === 'worker') return ['worker', 'verifier']
+    return ['worker', 'verifier']
+  }
+
+  private pickSnapshotText(data: SnapshotHydratedData, stage: SnapshotStage, order: SnapshotActor[]): string | null {
+    for (const actor of order) {
+      const summary = data[actor]
+      if (!summary) continue
+      const candidate = this.selectStageText(summary, stage)
+      if (candidate) return candidate
+    }
+    return null
+  }
+
+  private selectStageText(summary: SnapshotLogSummary, stage: SnapshotStage): string | null {
+    if (!summary) return null
+    if (stage === 'start') return summary.startText ?? summary.anyText ?? summary.finishText ?? null
+    if (stage === 'finish') return summary.finishText ?? summary.anyText ?? summary.startText ?? null
+    return summary.anyText ?? summary.startText ?? summary.finishText ?? null
   }
 
   private async resolveRepo(input: SnapshotRequest): Promise<SnapshotRepoMeta | null> {
@@ -1022,6 +1055,15 @@ function parseJsonString(raw: string): any | null {
   } catch {
     return null
   }
+}
+
+function normalizeActorRole(value: unknown): SnapshotActor | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().toLowerCase()
+  if (!normalized.length) return null
+  if (normalized.includes('worker')) return 'worker'
+  if (normalized.includes('verifier')) return 'verifier'
+  return null
 }
 
 function coerceString(value: unknown): string | null {

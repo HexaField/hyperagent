@@ -73,16 +73,136 @@ const parseStepEventPayload = (raw: string | null): any | null => {
   return parsed
 }
 
-const renderStepPart = (part: any, label: string): JSX.Element => {
+type SectionConfig = {
+  labels: string[]
+  defaultOpen: string
+}
+
+const SECTION_CONFIGS: Record<string, SectionConfig> = {
+  worker: { labels: ['Plan', 'Work', 'Requests'], defaultOpen: 'Requests' },
+  verifier: { labels: ['Verdict', 'Critique', 'Instructions'], defaultOpen: 'Verdict' }
+}
+
+const CollapsibleSection = (props: { title: string; defaultOpen?: boolean; children?: JSX.Element }) => {
+  const [open, setOpen] = createSignal(Boolean(props.defaultOpen))
+  return (
+    <details
+      class="rounded-lg border border-[var(--border)] bg-[var(--bg-muted)]"
+      open={open()}
+      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary class="flex cursor-pointer items-center justify-between px-3 py-2 text-sm font-semibold text-[var(--text)]">
+        <span>{props.title}</span>
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          width="16"
+          height="16"
+          class={`transition-transform duration-150 ${open() ? 'rotate-90' : ''}`}
+        >
+          <path fill="currentColor" d="M9 6l6 6-6 6" />
+        </svg>
+      </summary>
+      <div class="border-t border-[var(--border)] px-3 py-2">
+        {props.children}
+      </div>
+    </details>
+  )
+}
+
+type SectionExtractionResult = {
+  prefix: string | null
+  sections: Record<string, string | null>
+}
+
+function extractLabeledSections(text: string, labels: string[]): SectionExtractionResult {
+  const normalized = new Map(labels.map((label) => [label.toLowerCase(), label]))
+  const buffers = new Map(labels.map((label) => [label, [] as string[]]))
+  const prefixLines: string[] = []
+  let current: string | null = null
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine ?? ''
+    const headingMatch = line.match(/^([A-Za-z ]+?):\s*(.*)$/)
+    if (headingMatch) {
+      const key = headingMatch[1]?.trim().toLowerCase()
+      const canonical = key ? normalized.get(key) : undefined
+      if (canonical) {
+        current = canonical
+        const remainder = headingMatch[2]?.trim()
+        if (remainder) buffers.get(canonical)?.push(remainder)
+        continue
+      }
+    }
+    if (current) {
+      buffers.get(current)?.push(line)
+    } else {
+      prefixLines.push(line)
+    }
+  }
+
+  const sections: Record<string, string | null> = {}
+  for (const label of labels) {
+    const chunk = buffers.get(label)?.join('\n').trim()
+    sections[label] = chunk && chunk.length ? chunk : null
+  }
+
+  const prefix = prefixLines.join('\n').trim()
+  return { prefix: prefix || null, sections }
+}
+
+const renderStructuredSections = (body: string | null, role?: string | null): JSX.Element | null => {
+  if (!body) return null
+  const normalizedRole = role?.toLowerCase() ?? null
+  const candidateKeys: string[] = []
+  if (normalizedRole && SECTION_CONFIGS[normalizedRole]) candidateKeys.push(normalizedRole)
+  for (const key of Object.keys(SECTION_CONFIGS)) {
+    if (!candidateKeys.includes(key)) candidateKeys.push(key)
+  }
+
+  for (const key of candidateKeys) {
+    const config = SECTION_CONFIGS[key]
+    if (!config) continue
+    const extraction = extractLabeledSections(body, config.labels)
+    const hasAnySection = config.labels.some((label) => Boolean(extraction.sections[label]))
+    if (!hasAnySection) continue
+    return (
+      <div class="space-y-2">
+        {extraction.prefix ? (
+          <p class="whitespace-pre-wrap text-sm text-[var(--text)]">{extraction.prefix}</p>
+        ) : null}
+        <For each={config.labels}>
+          {(label) => {
+            const content = extraction.sections[label]
+            if (!content) return null
+            return (
+              <CollapsibleSection title={label} defaultOpen={label === config.defaultOpen}>
+                <p class="whitespace-pre-wrap text-sm text-[var(--text)]">{content}</p>
+              </CollapsibleSection>
+            )
+          }}
+        </For>
+      </div>
+    )
+  }
+  return null
+}
+
+const renderStepPart = (part: any, label: string, role?: string | null): JSX.Element => {
   const body = deriveStepDetails(part)
+  const structured = renderStructuredSections(body, role)
   return (
     <div class="mb-2 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-2 text-sm">
       <div class="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
         <span>{label}</span>
       </div>
-      <Show when={body} fallback={<p class="mt-1 text-xs text-[var(--text-muted)]">No output captured.</p>} keyed>
-        {(content) => <p class="mt-1 whitespace-pre-wrap text-[var(--text)]">{content}</p>}
-      </Show>
+      {structured ? (
+        <div class="mt-2">{structured}</div>
+      ) : (
+        <Show when={body} fallback={<p class="mt-1 text-xs text-[var(--text-muted)]">No output captured.</p>} keyed>
+          {(content) => <p class="mt-1 whitespace-pre-wrap text-[var(--text)]">{content}</p>}
+        </Show>
+      )}
     </div>
   )
 }
@@ -447,7 +567,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
       const normalizedType = typeof part.type === 'string' ? part.type.toLowerCase() : ''
 
       if (normalizedType && STEP_TYPE_LABELS[normalizedType]) {
-        elements.push(renderStepPart(part, STEP_TYPE_LABELS[normalizedType]))
+        elements.push(renderStepPart(part, STEP_TYPE_LABELS[normalizedType], message.role))
         continue
       }
 
