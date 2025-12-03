@@ -37,7 +37,7 @@ const createRadCliStub = async () => {
   const binPath = path.join(dir, 'rad')
   const script = `#!/usr/bin/env bash
 set -euo pipefail
-printf "%s" "$@" >> "${logPath}"
+printf "%s " "$@" >> "${logPath}"
 printf "\n" >> "${logPath}"
 `
   await fs.writeFile(binPath, script, { mode: 0o755 })

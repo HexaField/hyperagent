@@ -3,7 +3,7 @@ import type { WorkspaceNarratorEvent } from '../../../../interfaces/widgets/work
 import ConversationPane from '../../components/ConversationPane'
 import { createConversationScrollController } from '../../components/conversationScrollController'
 import type { CodingAgentMessage, CodingAgentMessagePart } from '../../lib/codingAgent'
-import { fetchNarratorFeed, postNarratorMessage } from '../../lib/narratorFeed'
+import { fetchNarratorFeed, fetchNarratorRawLog, postNarratorMessage } from '../../lib/narratorFeed'
 
 const POLL_INTERVAL_MS = 5000
 const FAST_POLL_INTERVAL_MS = 1000
@@ -37,6 +37,10 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
   const [relayError, setRelayError] = createSignal<string | null>(null)
   const [relayTrackingEventId, setRelayTrackingEventId] = createSignal<string | null>(null)
   const [pollInterval, setPollInterval] = createSignal(POLL_INTERVAL_MS)
+  const [showRawLog, setShowRawLog] = createSignal(false)
+  const [rawLog, setRawLog] = createSignal<string | null>(null)
+  const [rawLogError, setRawLogError] = createSignal<string | null>(null)
+  const [rawLogLoading, setRawLogLoading] = createSignal(false)
   const scrollController = createConversationScrollController()
 
   const [feed, { refetch }] = createResource(normalizedWorkspaceId, async (workspaceId) => {
@@ -94,6 +98,11 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
   const rawLogsUrl = createMemo(() => {
     const id = normalizedWorkspaceId()
     return id ? `/api/workspaces/${encodeURIComponent(id)}/narrator/raw` : '#'
+  })
+
+  const conversationLabel = createMemo(() => {
+    const id = (feed()?.conversationId ?? '').trim()
+    return id.length ? `Conversation ${id}` : 'Conversation pending'
   })
 
   createEffect(() => {
@@ -162,6 +171,31 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
     }
   }
 
+  const ensureRawLogLoaded = async () => {
+    if (rawLog() || rawLogLoading()) return
+    const workspaceId = normalizedWorkspaceId()
+    if (!workspaceId) return
+    setRawLogLoading(true)
+    setRawLogError(null)
+    try {
+      const content = await fetchNarratorRawLog({ workspaceId })
+      setRawLog(content)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load raw narrator stream'
+      setRawLogError(message)
+    } finally {
+      setRawLogLoading(false)
+    }
+  }
+
+  const toggleRawLog = () => {
+    const next = !showRawLog()
+    setShowRawLog(next)
+    if (next) {
+      void ensureRawLogLoaded()
+    }
+  }
+
   const composerForm = (
     <form class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4" onSubmit={handleSend}>
       <label class="text-sm font-semibold text-[var(--text)]" for="narrator-message-input">
@@ -217,7 +251,7 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
               rel="noreferrer"
               class="mt-2 inline-flex text-xs font-semibold text-red-700 underline"
             >
-              Download raw log
+              Download raw logs
             </a>
           </div>
         )}
@@ -227,7 +261,53 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
 
   return (
     <div class="flex h-full flex-col gap-4">
+      <header class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
+        <p class="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Conversation thread</p>
+        <div class="mt-1 flex flex-wrap items-baseline gap-3">
+          <h2 class="text-lg font-semibold text-[var(--text)]">Narrator activity for {props.workspaceName}</h2>
+          <span class="text-sm text-[var(--text-muted)]">{conversationLabel()}</span>
+        </div>
+        <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
+          <p class="text-xs text-[var(--text-muted)]">Events captured for this workspace</p>
+          <button
+            type="button"
+            class="text-xs font-semibold text-[var(--text)] underline"
+            aria-expanded={showRawLog() ? 'true' : 'false'}
+            onClick={toggleRawLog}
+          >
+            Raw narrator stream
+          </button>
+        </div>
+      </header>
+
       <Show when={formatErrorMessage()}>{(message) => <p class="text-sm text-red-500">{message()}</p>}</Show>
+
+      <Show when={showRawLog()}>
+        <section class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
+          <h3 class="text-sm font-semibold text-[var(--text)]">Raw narrator stream</h3>
+          <Show when={rawLogError()}>
+            {(message) => <p class="mt-2 text-xs text-red-500">{message()}</p>}
+          </Show>
+          <Show when={rawLogLoading()}>
+            <p class="mt-2 text-xs text-[var(--text-muted)]">Loading raw narrator stream…</p>
+          </Show>
+          <Show when={rawLog()}>
+            {(content) => (
+              <pre class="mt-3 max-h-52 overflow-y-auto rounded-xl bg-[var(--bg-muted)] p-3 text-xs text-[var(--text)]">
+                {content()}
+              </pre>
+            )}
+          </Show>
+          <a
+            href={rawLogsUrl()}
+            target="_blank"
+            rel="noreferrer"
+            class="mt-3 inline-flex text-xs font-semibold text-[var(--text)] underline"
+          >
+            Download raw logs
+          </a>
+        </section>
+      </Show>
 
       <section class="flex flex-1 min-h-0 flex-col rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
         <div class="flex-1 min-h-0">

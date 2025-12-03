@@ -421,6 +421,7 @@ export const radicleRegistrationsPersistence: PersistenceModule<RadicleRegistrat
 }
 
 function createRadicleRegistrationsRepository(db: PersistenceContext['db']): RadicleRegistrationsRepository {
+  deduplicateRadicleRegistrations(db)
   return {
     upsert: (input) => {
       const now = new Date().toISOString()
@@ -467,6 +468,50 @@ function canonicalizeRepositoryPath(repositoryPath: string): string {
   const resolved = path.resolve(repositoryPath)
   const real = resolveRealpath(resolved)
   return real ?? resolved
+}
+
+function deduplicateRadicleRegistrations(db: PersistenceContext['db']): void {
+  const rows = db
+    .prepare(
+      `SELECT repository_path, name, description, visibility, default_branch, registered_at
+       FROM radicle_registrations`
+    )
+    .all() as Array<{
+    repository_path: string
+    registered_at: string
+  }>
+  if (!rows.length) return
+  const groups = new Map<string, { repository_path: string; registered_at: string }[]>()
+  for (const row of rows) {
+    const canonical = canonicalizeRepositoryPath(row.repository_path)
+    const group = groups.get(canonical)
+    if (group) {
+      group.push(row)
+    } else {
+      groups.set(canonical, [row])
+    }
+  }
+  for (const [canonicalPath, entries] of groups.entries()) {
+    if (!entries.length) continue
+    entries.sort((a, b) => parseRegisteredAt(b.registered_at) - parseRegisteredAt(a.registered_at))
+    const [keeper, ...duplicates] = entries
+    for (const dup of duplicates) {
+      db.prepare('DELETE FROM radicle_registrations WHERE repository_path = ?').run(dup.repository_path)
+    }
+    if (!keeper) continue
+    if (keeper.repository_path !== canonicalPath) {
+      db.prepare('UPDATE radicle_registrations SET repository_path = ? WHERE repository_path = ?').run(
+        canonicalPath,
+        keeper.repository_path
+      )
+    }
+  }
+}
+
+function parseRegisteredAt(value: string | null | undefined): number {
+  if (!value) return 0
+  const ts = Date.parse(value)
+  return Number.isFinite(ts) ? ts : 0
 }
 
 function resolveRealpath(target: string): string | null {

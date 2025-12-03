@@ -362,7 +362,18 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
       runnerStatus,
       runnerError: runnerError ?? null
     })
-    res.json({ ok: true })
+    try {
+      await workflowRuntime.runStepById({ workflowId, stepId, runnerInstanceId })
+      res.json({ ok: true })
+    } catch (error) {
+      logWorkflowError('Runner callback execution failed', error, {
+        workflowId,
+        stepId,
+        runnerInstanceId,
+        runnerStatus
+      })
+      res.status(500).json({ error: error instanceof Error ? error.message : 'Runner execution failed' })
+    }
   }
 
   const workflowStepDiffHandler: RequestHandler = async (req, res) => {

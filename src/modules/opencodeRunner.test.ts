@@ -5,7 +5,7 @@ import { spawn as realSpawn } from 'node:child_process'
 import os from 'os'
 import path from 'path'
 import { PassThrough } from 'stream'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createOpencodeRunner, DEFAULT_OPENCODE_MODEL } from './provider'
 
 class FakeChild extends EventEmitter {
@@ -27,8 +27,19 @@ class FakeChild extends EventEmitter {
   send = vi.fn(() => false)
 }
 
+const ORIGINAL_OPENCODE_BIN = process.env.OPENCODE_BIN
+
+beforeEach(() => {
+  process.env.OPENCODE_BIN = 'opencode'
+})
+
 afterEach(() => {
   vi.restoreAllMocks()
+  if (typeof ORIGINAL_OPENCODE_BIN === 'string') {
+    process.env.OPENCODE_BIN = ORIGINAL_OPENCODE_BIN
+  } else {
+    delete process.env.OPENCODE_BIN
+  }
 })
 
 describe('createOpencodeRunner', () => {

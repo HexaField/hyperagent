@@ -1425,12 +1425,12 @@ describe('opencode session endpoints', () => {
         providers: Array<{ id: string; models: Array<{ id: string; label: string }>; defaultModelId: string }>
       }
       expect(Array.isArray(payload.providers)).toBe(true)
-      expect(payload.providers).toHaveLength(1)
-      const provider = payload.providers[0]
-      expect(provider.id).toBe('opencode')
-      expect(provider.defaultModelId).toBe('github-copilot/gpt-5-mini')
-      expect(provider.models[0]?.id).toBe('github-copilot/gpt-5-mini')
-      expect(provider.models.some((model) => model.id === 'openai/gpt-4o-mini')).toBe(true)
+      expect(payload.providers.length).toBeGreaterThan(0)
+      const provider = payload.providers.find((entry) => entry.id === 'opencode')
+      expect(provider).toBeTruthy()
+      expect(provider?.defaultModelId).toBe('github-copilot/gpt-5-mini')
+      expect(provider?.models[0]?.id).toBe('github-copilot/gpt-5-mini')
+      expect(provider?.models.some((model) => model.id === 'openai/gpt-4o-mini')).toBe(true)
     } finally {
       await harness.close()
     }

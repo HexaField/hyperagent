@@ -78,14 +78,16 @@ const listGitRemotes = async (repoPath: string): Promise<string[]> => {
 }
 
 const detectPushRemote = async (repoPath: string, preferred?: string | null): Promise<string> => {
-  const candidates = Array.from(
-    new Set([
-      preferred?.trim().length ? preferred.trim() : null,
-      'rad',
-      'origin'
-    ].filter((entry): entry is string => Boolean(entry)))
-  )
-  for (const candidate of candidates) {
+  const normalizedPreferred = preferred?.trim().length ? preferred.trim() : null
+  const priority = ['rad']
+  if (normalizedPreferred && normalizedPreferred !== 'rad') {
+    priority.push(normalizedPreferred)
+  }
+  priority.push('origin')
+  const seen = new Set<string>()
+  for (const candidate of priority) {
+    if (!candidate || seen.has(candidate)) continue
+    seen.add(candidate)
     if (await remoteExists(repoPath, candidate)) {
       return candidate
     }
@@ -111,6 +113,19 @@ export const createRadicleRepoManager = ({
   const resolvedRepo = path.resolve(repoPath)
   let resolvedRemoteName: string | null = null
   const radBinary = radCliPath?.trim().length ? radCliPath.trim() : process.env.RADICLE_CLI_PATH ?? 'rad'
+  const radCliAvailable = (() => {
+    if (radCliPath?.trim().length) {
+      return isExecutable(radBinary)
+    }
+    const envBinary = process.env.RADICLE_CLI_PATH?.trim()
+    if (envBinary && envBinary.length) {
+      if (envBinary.includes(path.sep)) {
+        return isExecutable(envBinary)
+      }
+      return commandExists(envBinary)
+    }
+    return commandExists('rad')
+  })()
 
   const getRemoteName = async () => {
     if (resolvedRemoteName) return resolvedRemoteName
@@ -208,7 +223,24 @@ export const createRadicleRepoManager = ({
     }
 
     if (await shouldInvokeRadPush(pushRemote)) {
-      await runRadCli(['push', pushRemote, branchName])
+      if (radCliAvailable) {
+        try {
+          await runRadCli(['push', pushRemote, branchName])
+        } catch (error) {
+          console.warn('[radicle]', {
+            action: 'rad_cli_push_failed',
+            remote: pushRemote,
+            branch: branchName,
+            error: error instanceof Error ? error.message : String(error)
+          })
+        }
+      } else {
+        console.warn('[radicle]', {
+          action: 'skip_rad_cli_push',
+          remote: pushRemote,
+          branch: branchName
+        })
+      }
     }
   }
 

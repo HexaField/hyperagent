@@ -76,8 +76,8 @@ describe('WorkspaceNarratorWidget', () => {
     })
 
     expect(screen.getByText('Conversation thread')).toBeDefined()
-    expect(screen.getByText('Conversation conv-777')).toBeDefined()
-    const narratorHeadlines = screen.getAllByText('Narrator spoke')
+    expect(await screen.findByText('Conversation conv-777')).toBeDefined()
+    const narratorHeadlines = await screen.findAllByText('Narrator spoke')
     expect(narratorHeadlines.length).toBeGreaterThan(0)
     expect(screen.queryByText('Narrator gated')).toBeNull()
     expect(screen.getByText(/events captured for this workspace/i)).toBeDefined()
