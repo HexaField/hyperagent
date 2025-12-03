@@ -178,6 +178,8 @@ function displayRoleLabel(role: string | null | undefined): string {
   if (!normalized) return 'Message'
   if (normalized === 'user' || normalized === 'you' || normalized === 'human') return 'You'
   if (['assistant', 'agent', 'assistant-step', 'coder', 'planner', 'critic'].includes(normalized)) return 'Agent'
+  if (normalized === 'worker') return 'Worker Agent'
+  if (normalized === 'verifier') return 'Verifier Agent'
   if (normalized === 'system') return 'System'
   if (normalized === 'tool') return 'Tool'
   return role.trim()
