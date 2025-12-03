@@ -5,6 +5,7 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { promisify } from 'util'
+import { safeParseJson } from './json'
 
 export type OpencodeSessionSummary = {
   id: string
@@ -454,7 +455,7 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
   }
 
   function parseStepEventEnvelope(raw: string): StepEventPayload | null {
-    const parsed = safeParseJson(raw)
+    const parsed = safeParseJson<Record<string, any>>(raw)
     if (!parsed) return null
     const normalizedType = normalizeStepType(parsed.type ?? parsed.event ?? parsed.kind ?? parsed.name)
     if (!normalizedType) return null
@@ -477,14 +478,6 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
     )
     const snapshot = extractSnapshotHash(parsed)
     return { type: normalizedType, text, start, end, snapshot }
-  }
-
-  function safeParseJson(raw: string): any | null {
-    try {
-      return JSON.parse(raw)
-    } catch {
-      return null
-    }
   }
 
   const STEP_TEXT_KEYS = [

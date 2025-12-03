@@ -4,6 +4,7 @@ import os from 'os'
 import path from 'path'
 import { runVerifierWorkerLoop, type AgentStreamCallback } from '../modules/agent'
 import { createPersistence } from '../modules/database'
+import { runGitCommandSync } from '../modules/git'
 import { detectGitAuthorFromCli } from '../modules/gitAuthor'
 import type { Provider } from '../modules/llm'
 import { createRadicleModule } from '../modules/radicle'
@@ -14,7 +15,6 @@ import { createAgentWorkflowExecutor } from '../modules/workflowAgentExecutor'
 import { createWorkflowPolicyFromEnv } from '../modules/workflowPolicy'
 import type { WorkflowRunnerGateway } from '../modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type AgentExecutor } from '../modules/workflows'
-import { runGitCommandSync } from '../modules/git'
 
 const extendRunnerPathFromEnv = () => {
   const extraPaths = process.env.WORKFLOW_RUNNER_EXTRA_PATHS?.trim()

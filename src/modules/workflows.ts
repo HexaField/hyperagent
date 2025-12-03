@@ -208,6 +208,28 @@ export type AgentExecutorResult = {
 
 export type AgentExecutor = (args: AgentExecutorArgs) => Promise<AgentExecutorResult>
 
+export type WorkflowStepCommit = {
+  commitHash: string
+  branch: string
+  message: string
+}
+
+export function extractCommitFromWorkflowStep(step: WorkflowStepRecord): WorkflowStepCommit | null {
+  if (!step.result) return null
+  const commitPayload = (step.result as Record<string, any>).commit as Record<string, any> | undefined
+  if (!commitPayload?.commitHash) {
+    return null
+  }
+  const branch =
+    typeof commitPayload.branch === 'string' && commitPayload.branch.length ? commitPayload.branch : 'unknown'
+  const message = typeof commitPayload.message === 'string' ? commitPayload.message : ''
+  return {
+    commitHash: String(commitPayload.commitHash),
+    branch,
+    message
+  }
+}
+
 export type WorkflowRuntimeOptions = {
   persistence: WorkflowPersistenceAdapter
   agentExecutor?: AgentExecutor

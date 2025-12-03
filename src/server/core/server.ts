@@ -41,6 +41,8 @@ import { createWorkflowPolicyFromEnv } from '../../../src/modules/workflowPolicy
 import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
+import { runGitCommand } from '../../modules/git'
+import { createSseStream } from '../lib/sse'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
 import { createWorkspaceNarratorRouter, type NarratorRelay } from '../modules/workspaceNarrator/routes'
 import { seedDefaultPersonas } from '../modules/workspaceSessions/personas'
@@ -75,7 +77,6 @@ import {
 } from './services'
 import { resolveTlsMaterials, type TlsConfig } from './tls'
 import { ensureWorkspaceDirectory, initializeWorkspaceRepository, readGitMetadata } from './workspaceGit'
-import { runGitCommand } from '../../modules/git'
 import { loadWebSocketModule, type WebSocketBindings } from './ws'
 
 export type ProxyWithUpgrade = RequestHandler & {
@@ -644,19 +645,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       }
     }
 
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive'
-    })
-    res.flushHeaders?.()
-    req.socket?.setKeepAlive?.(true)
-
+    const sse = createSseStream(res, req)
     let closed = false
     let sessionId: string | null = null
     let sessionDir: string | null = null
     let shouldShutdownCodeServer = !project
-    res.on('close', () => {
+    sse.onClose(() => {
       closed = true
       if (sessionId && shouldShutdownCodeServer) {
         void shutdownCodeServerSession(sessionId)
@@ -665,11 +659,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
 
     const emit = (packet: Record<string, unknown>) => {
       if (closed) return
-      res.write(`data: ${JSON.stringify(packet)}\n\n`)
-      const maybeFlush = (res as Response & { flush?: () => void }).flush
-      if (typeof maybeFlush === 'function') {
-        maybeFlush.call(res)
-      }
+      sse.emit(packet)
     }
 
     if (project) {

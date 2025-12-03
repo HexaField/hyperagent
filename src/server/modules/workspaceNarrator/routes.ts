@@ -3,6 +3,7 @@ import { createReadStream } from 'fs'
 import fs from 'fs/promises'
 import { randomUUID } from 'node:crypto'
 import path from 'path'
+import { isPlainObject, safeParseJson } from '../../../../src/modules/json'
 import type {
   WorkspaceNarratorEvent,
   WorkspaceNarratorFeedResponse,
@@ -741,15 +742,6 @@ const readTextFile = async (filePath: string): Promise<string | null> => {
   }
 }
 
-const safeParseJson = (value: string): Record<string, unknown> | null => {
-  try {
-    const parsed = JSON.parse(value)
-    return isPlainObject(parsed) ? parsed : null
-  } catch {
-    return null
-  }
-}
-
 const fileExists = async (filePath: string): Promise<boolean> => {
   try {
     await fs.access(filePath)
@@ -758,10 +750,6 @@ const fileExists = async (filePath: string): Promise<boolean> => {
     if (isNotFound(error)) return false
     throw error
   }
-}
-
-const isPlainObject = (value: unknown): value is Record<string, any> => {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 const normalizeString = (value: unknown): string | null => {

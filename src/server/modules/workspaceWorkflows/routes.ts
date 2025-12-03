@@ -1,9 +1,16 @@
-import { Router, type Request, type RequestHandler, type Response } from 'express'
+import { Router, type Request, type RequestHandler } from 'express'
 import fs from 'fs/promises'
 import path from 'path'
 import type { Persistence } from '../../../../src/modules/database'
-import type { PlannerRun, PlannerTask, WorkflowDetail, WorkflowRuntime } from '../../../../src/modules/workflows'
+import { isPlainObject, safeParseJson } from '../../../../src/modules/json'
+import {
+  extractCommitFromWorkflowStep,
+  type PlannerRun,
+  type PlannerTask,
+  type WorkflowRuntime
+} from '../../../../src/modules/workflows'
 import type { WorkflowLogsResponse } from '../../../interfaces/workflows/logs'
+import { createSseStream } from '../../lib/sse'
 import { createWorkflowLogStream, type WorkflowLogStream } from './logStream'
 
 type WrapAsync = (handler: RequestHandler) => RequestHandler
@@ -76,10 +83,6 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
     return tasks
   }
 
-  const isPlainObject = (value: unknown): value is Record<string, unknown> => {
-    return typeof value === 'object' && value !== null && !Array.isArray(value)
-  }
-
   const readWorkspacePathFromResult = (result: Record<string, unknown> | null | undefined): string | null => {
     if (!result || typeof result !== 'object') return null
     const workspace = (result as any).workspace
@@ -87,14 +90,6 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
       return workspace.workspacePath
     }
     return null
-  }
-
-  const safeParseJson = (raw: string): unknown | null => {
-    try {
-      return JSON.parse(raw)
-    } catch {
-      return null
-    }
   }
 
   const MAX_WORKSPACE_ENTRIES = 75
@@ -141,24 +136,6 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
     if (direct) return direct
     const run = runs.find((entry) => entry.workflowStepId === step.id && typeof entry.logsPath === 'string')
     return typeof run?.logsPath === 'string' ? (run as { logsPath: string }).logsPath : null
-  }
-
-  const extractCommitFromStep = (
-    step: WorkflowDetail['steps'][number]
-  ): { commitHash: string; branch: string; message: string } | null => {
-    if (!step.result) return null
-    const commitPayload = (step.result as Record<string, any>).commit as Record<string, any> | undefined
-    if (!commitPayload?.commitHash) {
-      return null
-    }
-    const branch =
-      typeof commitPayload.branch === 'string' && commitPayload.branch.length ? commitPayload.branch : 'unknown'
-    const message = typeof commitPayload.message === 'string' ? commitPayload.message : ''
-    return {
-      commitHash: String(commitPayload.commitHash),
-      branch,
-      message
-    }
   }
 
   const listWorkflowsHandler: RequestHandler = (req, res) => {
@@ -289,11 +266,6 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
     res.json(payload)
   }
 
-  const sendSsePayload = (res: Response, event: string, data: unknown) => {
-    res.write(`event: ${event}\n`)
-    res.write(`data: ${JSON.stringify(data)}\n\n`)
-  }
-
   const workflowLogsStreamHandler: RequestHandler = (req, res) => {
     const workflowId = req.params.workflowId
     if (!workflowId) {
@@ -305,36 +277,16 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
       res.status(404).json({ error: 'Unknown workflow' })
       return
     }
-    res.setHeader('Content-Type', 'text/event-stream')
-    res.setHeader('Cache-Control', 'no-cache')
-    res.setHeader('Connection', 'keep-alive')
-    ;(res as any).flushHeaders?.()
-
-    const initial = workflowLogStream.getWorkflowLogs(workflowId)
-    initial.forEach((entry) => sendSsePayload(res, 'log', entry))
+    const sse = createSseStream(res, req)
+    workflowLogStream.getWorkflowLogs(workflowId).forEach((entry) => sse.emit(entry, 'log'))
 
     const subscriber = (entry: WorkflowLogsResponse['entries'][number]) => {
       if (entry.workflowId !== workflowId) return
-      sendSsePayload(res, 'log', entry)
+      sse.emit(entry, 'log')
     }
 
     const unsubscribe = workflowLogStream.subscribe(workflowId, subscriber)
-    const heartbeat = setInterval(() => {
-      res.write(': heartbeat\n\n')
-    }, 15000)
-
-    const cleanup = () => {
-      clearInterval(heartbeat)
-      unsubscribe()
-      try {
-        res.end()
-      } catch {
-        // ignore
-      }
-    }
-
-    req.on('close', cleanup)
-    req.on('error', cleanup)
+    sse.onClose(unsubscribe)
   }
 
   const workflowRunnerCallbackHandler: RequestHandler = async (req, res) => {
@@ -397,7 +349,7 @@ export const createWorkspaceWorkflowsRouter = (deps: WorkspaceWorkflowsDeps) => 
       res.status(404).json({ error: 'Unknown workflow step' })
       return
     }
-    const commit = extractCommitFromStep(step)
+    const commit = extractCommitFromWorkflowStep(step)
     if (!commit) {
       res.status(404).json({ error: 'No commit for this step' })
       return

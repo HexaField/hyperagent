@@ -4,8 +4,9 @@ import { spawn } from 'node:child_process'
 import path from 'path'
 import type { ProjectRecord } from '../../../../src/modules/database'
 import { listBranchCommits, listGitBranches } from '../../../../src/modules/git'
-import type { WorkflowDetail } from '../../../../src/modules/workflows'
+import { extractCommitFromWorkflowStep } from '../../../../src/modules/workflows'
 import { FILE_STASH_PREFIX, parseGitStashList } from '../../lib/git'
+import { createSseStream } from '../../lib/sse'
 import type { WorkspaceSummaryDeps } from './types'
 import { collectGitMetadata, isGitRepository } from './utils'
 
@@ -112,7 +113,7 @@ export const createProjectsRoutes = (deps: ProjectsRoutesDeps) => {
       workflows.forEach((workflow) => {
         const steps = persistence.workflowSteps.listByWorkflow(workflow.id)
         steps.forEach((step) => {
-          const commit = extractCommitFromStep(step)
+          const commit = extractCommitFromWorkflowStep(step)
           if (!commit) return
           const branchName = commit.branch === 'unknown' ? project.defaultBranch : commit.branch
           const label =
@@ -488,24 +489,6 @@ const sortCommitsByTimestamp = (entries: GraphCommitNode[]): GraphCommitNode[] =
   })
 }
 
-const extractCommitFromStep = (
-  step: WorkflowDetail['steps'][number]
-): { commitHash: string; branch: string; message: string } | null => {
-  if (!step.result) return null
-  const commitPayload = (step.result as Record<string, any>).commit as Record<string, any> | undefined
-  if (!commitPayload?.commitHash) {
-    return null
-  }
-  const branch =
-    typeof commitPayload.branch === 'string' && commitPayload.branch.length ? commitPayload.branch : 'unknown'
-  const message = typeof commitPayload.message === 'string' ? commitPayload.message : ''
-  return {
-    commitHash: String(commitPayload.commitHash),
-    branch,
-    message
-  }
-}
-
 const runCopilotPrompt = async (prompt: string, cwd: string): Promise<string> => {
   return await new Promise<string>((resolve, reject) => {
     const args = [
@@ -845,19 +828,10 @@ const createProjectFromTemplateStream = async (ctx: TemplateStreamContext): Prom
     initializeWorkspaceRepository
   } = ctx
 
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive'
-  })
-  res.flushHeaders?.()
-  req.socket?.setKeepAlive?.(true)
-
+  const sse = createSseStream(res, req, { keepAliveMs: 15000 })
   const emit = (packet: Record<string, unknown>) => {
     try {
-      res.write(`data: ${JSON.stringify(packet)}\n\n`)
-      const maybeFlush = (res as Response & { flush?: () => void }).flush
-      if (typeof maybeFlush === 'function') maybeFlush.call(res)
+      sse.emit(packet)
     } catch {
       /* ignore */
     }
@@ -873,7 +847,7 @@ const createProjectFromTemplateStream = async (ctx: TemplateStreamContext): Prom
 
   if (!requestPathRaw) {
     emit({ type: 'error', level: 'error', message: 'repositoryPath (or path) is required when creating from template' })
-    res.end()
+    sse.close()
     return null
   }
   const templateDir = path.resolve(process.cwd(), 'templates', templateId.trim())
@@ -883,7 +857,7 @@ const createProjectFromTemplateStream = async (ctx: TemplateStreamContext): Prom
     await fs.stat(templateDir)
   } catch {
     emit({ type: 'error', level: 'error', message: `Template not found: ${templateId}` })
-    res.end()
+    sse.close()
     return null
   }
 
@@ -891,7 +865,7 @@ const createProjectFromTemplateStream = async (ctx: TemplateStreamContext): Prom
     const existing = await fs.stat(targetPath)
     if (existing) {
       emit({ type: 'error', level: 'error', message: `Target path already exists: ${targetPath}` })
-      res.end()
+      sse.close()
       return null
     }
   } catch {
@@ -903,7 +877,7 @@ const createProjectFromTemplateStream = async (ctx: TemplateStreamContext): Prom
     await fs.mkdir(targetPath, { recursive: true })
   } catch (err) {
     emit({ type: 'error', level: 'error', message: String(err) })
-    res.end()
+    sse.close()
     return null
   }
 
@@ -938,7 +912,7 @@ const createProjectFromTemplateStream = async (ctx: TemplateStreamContext): Prom
         level: 'error',
         message: `Failed to clone template url: ${err instanceof Error ? err.message : String(err)}`
       })
-      res.end()
+      sse.close()
       return null
     }
   } else {
@@ -955,7 +929,7 @@ const createProjectFromTemplateStream = async (ctx: TemplateStreamContext): Prom
       }
     } catch (err) {
       emit({ type: 'error', level: 'error', message: `Failed to copy template files: ${String(err)}` })
-      res.end()
+      sse.close()
       return null
     }
   }
@@ -985,7 +959,7 @@ const createProjectFromTemplateStream = async (ctx: TemplateStreamContext): Prom
           level: 'error',
           message: `Setup command failed: ${err instanceof Error ? err.message : String(err)}`
         })
-        res.end()
+        sse.close()
         return null
       }
     }
@@ -996,7 +970,7 @@ const createProjectFromTemplateStream = async (ctx: TemplateStreamContext): Prom
     await fs.mkdir(path.join(targetPath, '.hyperagent'), { recursive: true })
   } catch (err) {
     emit({ type: 'error', level: 'error', message: `Failed to create .hyperagent: ${String(err)}` })
-    res.end()
+    sse.close()
     return null
   }
 
@@ -1027,7 +1001,7 @@ const createProjectFromTemplateStream = async (ctx: TemplateStreamContext): Prom
           level: 'error',
           message: `Failed to create initial commit: ${commitErr instanceof Error ? commitErr.message : String(commitErr)}`
         })
-        res.end()
+        sse.close()
         return null
       }
     } else {
@@ -1039,7 +1013,7 @@ const createProjectFromTemplateStream = async (ctx: TemplateStreamContext): Prom
       level: 'error',
       message: `Git initialization failed: ${err instanceof Error ? err.message : String(err)}`
     })
-    res.end()
+    sse.close()
     return null
   }
 
@@ -1078,14 +1052,14 @@ const createProjectFromTemplateStream = async (ctx: TemplateStreamContext): Prom
       repository: registration,
       repositoryName: normalizedName
     })
-    res.end()
+    sse.close()
   } catch (err) {
     emit({
       type: 'error',
       level: 'error',
       message: `Radicle registration_failed: ${err instanceof Error ? err.message : String(err)}`
     })
-    res.end()
+    sse.close()
     return null
   }
 
