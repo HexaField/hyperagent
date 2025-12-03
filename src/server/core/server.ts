@@ -74,7 +74,8 @@ import {
   type ManagedService
 } from './services'
 import { resolveTlsMaterials, type TlsConfig } from './tls'
-import { ensureWorkspaceDirectory, initializeWorkspaceRepository, readGitMetadata, runGitCommand } from './workspaceGit'
+import { ensureWorkspaceDirectory, initializeWorkspaceRepository, readGitMetadata } from './workspaceGit'
+import { runGitCommand } from '../../modules/git'
 import { loadWebSocketModule, type WebSocketBindings } from './ws'
 
 export type ProxyWithUpgrade = RequestHandler & {

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import fs from 'fs/promises'
-import { spawnSync } from 'node:child_process'
 import os from 'os'
 import path from 'path'
 import { runVerifierWorkerLoop, type AgentStreamCallback } from '../modules/agent'
@@ -15,6 +14,7 @@ import { createAgentWorkflowExecutor } from '../modules/workflowAgentExecutor'
 import { createWorkflowPolicyFromEnv } from '../modules/workflowPolicy'
 import type { WorkflowRunnerGateway } from '../modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type AgentExecutor } from '../modules/workflows'
+import { runGitCommandSync } from '../modules/git'
 
 const extendRunnerPathFromEnv = () => {
   const extraPaths = process.env.WORKFLOW_RUNNER_EXTRA_PATHS?.trim()
@@ -403,7 +403,7 @@ const createDeterministicAgentExecutor = (behavior: string): AgentExecutor => {
     const artifactPath = path.join(workspacePath, 'AGENTIC_RESULT.md')
     await fs.writeFile(artifactPath, `# PR Artifact\nworkflow=${workflow.id}\nstep=${step.id}\n`, 'utf8')
     if (behavior !== 'skip-commit') {
-      runGitCommand(['add', 'AGENTIC_RESULT.md'], workspacePath)
+      runGitCommandSync(['add', 'AGENTIC_RESULT.md'], workspacePath)
     }
     const summary = 'agentic pr workflow complete'
     return {
@@ -421,13 +421,6 @@ const createDeterministicAgentExecutor = (behavior: string): AgentExecutor => {
           : `${workflow.kind}: ${typeof step.data.title === 'string' ? step.data.title : step.id}`,
       skipCommit: behavior === 'skip-commit'
     }
-  }
-}
-
-const runGitCommand = (args: string[], cwd: string): void => {
-  const result = spawnSync('git', args, { cwd, stdio: 'inherit' })
-  if (result.status !== 0) {
-    throw new Error(`git ${args.join(' ')} failed with code ${result.status ?? -1}`)
   }
 }
 

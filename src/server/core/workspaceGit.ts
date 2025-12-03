@@ -1,8 +1,7 @@
 import fs from 'fs/promises'
-import { spawn } from 'node:child_process'
 import path from 'path'
 import type { GitFileChange, GitInfo } from '../../interfaces/core/git'
-import { listGitBranches } from '../../modules/git'
+import { listGitBranches, runGitCommand } from '../../modules/git'
 import { parseGitStashList } from '../lib/git'
 
 export const parseGitStatusOutput = (output: string | null): GitFileChange[] => {
@@ -42,29 +41,6 @@ export const parseGitStatusOutput = (output: string | null): GitFileChange[] => 
     })
   })
   return entries
-}
-
-export async function runGitCommand(args: string[], cwd: string): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn('git', args, { cwd })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (data) => {
-      stdout += data.toString()
-    })
-    child.stderr.on('data', (data) => {
-      stderr += data.toString()
-    })
-    child.once('error', reject)
-    child.once('close', (code) => {
-      if (code === 0) {
-        resolve(stdout)
-      } else {
-        const message = stderr.trim() || stdout.trim() || `git ${args.join(' ')} failed with code ${code}`
-        reject(new Error(message))
-      }
-    })
-  })
 }
 
 export async function ensureWorkspaceDirectory(dirPath: string): Promise<void> {

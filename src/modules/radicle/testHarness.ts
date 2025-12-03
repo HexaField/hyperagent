@@ -1,7 +1,7 @@
 import fs from 'fs/promises'
-import { spawnSync } from 'node:child_process'
 import os from 'os'
 import path from 'path'
+import { runGitCommandSync } from '../git'
 import type { CommitResult, RadicleModule } from './types'
 
 type TempDirFactory = (prefix: string) => Promise<string>
@@ -21,7 +21,7 @@ export function createTestRadicleModule(repoPath: string, options: TestRadicleMo
   const cleanupWorkspace = async (workspacePath: string) => {
     if (!activeWorkspaces.has(workspacePath)) return
     try {
-      runGitCommand(['worktree', 'remove', '--force', workspacePath], repoPath)
+      runGitCommandSync(['worktree', 'remove', '--force', workspacePath], repoPath)
     } catch {
       // ignore cleanup failures
     }
@@ -39,7 +39,7 @@ export function createTestRadicleModule(repoPath: string, options: TestRadicleMo
       const start = async () => {
         if (workspaceInfo) return workspaceInfo
         await fs.mkdir(workspaceRoot, { recursive: true })
-        runGitCommand(
+        runGitCommandSync(
           ['worktree', 'add', '-B', init.branchInfo.name, workspacePath, init.branchInfo.baseBranch],
           repoPath
         )
@@ -61,16 +61,16 @@ export function createTestRadicleModule(repoPath: string, options: TestRadicleMo
 
       const commit = async (message: string): Promise<CommitResult | null> => {
         const workspace = getWorkspace()
-        const status = runGitCommand(['status', '--porcelain'], workspace.workspacePath)
+        const status = runGitCommandSync(['status', '--porcelain'], workspace.workspacePath)
         if (!status.trim()) {
           return null
         }
-        runGitCommand(['config', 'user.name', init.author.name], workspace.workspacePath)
-        runGitCommand(['config', 'user.email', init.author.email], workspace.workspacePath)
-        runGitCommand(['add', '--all'], workspace.workspacePath)
-        runGitCommand(['commit', '-m', message], workspace.workspacePath)
-        const commitHash = runGitCommand(['rev-parse', 'HEAD'], workspace.workspacePath)
-        const changedFilesRaw = runGitCommand(['show', '--pretty=', '--name-only', 'HEAD'], workspace.workspacePath)
+        runGitCommandSync(['config', 'user.name', init.author.name], workspace.workspacePath)
+        runGitCommandSync(['config', 'user.email', init.author.email], workspace.workspacePath)
+        runGitCommandSync(['add', '--all'], workspace.workspacePath)
+        runGitCommandSync(['commit', '-m', message], workspace.workspacePath)
+        const commitHash = runGitCommandSync(['rev-parse', 'HEAD'], workspace.workspacePath)
+        const changedFilesRaw = runGitCommandSync(['show', '--pretty=', '--name-only', 'HEAD'], workspace.workspacePath)
         const changedFiles = changedFilesRaw
           .split('\n')
           .map((line) => line.trim())
@@ -129,13 +129,4 @@ export function createTestRadicleModule(repoPath: string, options: TestRadicleMo
     }),
     getStatus: async () => ({ reachable: true, loggedIn: true, identity: 'rad-test', alias: 'rad-test' })
   }
-}
-
-const runGitCommand = (args: string[], cwd: string): string => {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
-  if (result.status !== 0) {
-    const message = result.stderr || result.stdout || `git ${args.join(' ')} failed`
-    throw new Error(message.trim())
-  }
-  return (result.stdout ?? '').trim()
 }

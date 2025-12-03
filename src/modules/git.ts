@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import path from 'node:path'
 
 export type GitCommitInfo = {
@@ -17,9 +17,19 @@ export type GitLogOptions = {
 
 const DEFAULT_COMMIT_LIMIT = 25
 
-async function runGitCommand(args: string[], cwd: string): Promise<string> {
+export type RunGitCommandOptions = {
+  cwd?: string
+  env?: NodeJS.ProcessEnv
+}
+
+export type RunGitCommandSyncOptions = RunGitCommandOptions & {
+  stdio?: 'inherit' | 'pipe'
+}
+
+export async function runGitCommand(args: string[], cwd: string, options: RunGitCommandOptions = {}): Promise<string> {
+  const resolvedCwd = path.resolve(options.cwd ?? cwd)
   return await new Promise((resolve, reject) => {
-    const child = spawn('git', args, { cwd: path.resolve(cwd) })
+    const child = spawn('git', args, { cwd: resolvedCwd, env: options.env ?? process.env })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk) => {
@@ -37,6 +47,27 @@ async function runGitCommand(args: string[], cwd: string): Promise<string> {
       }
     })
   })
+}
+
+export function runGitCommandSync(args: string[], cwd: string, options: RunGitCommandSyncOptions = {}): string {
+  const resolvedCwd = path.resolve(options.cwd ?? cwd)
+  const stdio = options.stdio ?? 'pipe'
+  const result = spawnSync('git', args, {
+    cwd: resolvedCwd,
+    env: options.env ?? process.env,
+    stdio,
+    encoding: 'utf8'
+  })
+  if (result.error) {
+    throw result.error
+  }
+  if (typeof result.status === 'number' && result.status !== 0) {
+    const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : ''
+    const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : ''
+    const detail = stderr || stdout || `git ${args.join(' ')} failed with code ${result.status}`
+    throw new Error(detail)
+  }
+  return typeof result.stdout === 'string' ? result.stdout : ''
 }
 
 export async function listGitBranches(repoPath: string): Promise<string[]> {
