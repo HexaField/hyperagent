@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -77,6 +78,358 @@ describe('createOpencodeStorage', () => {
     expect(finishEvent).toBeDefined()
     if (startEvent && finishEvent) {
       expect(Date.parse(startEvent.time as string)).toBeLessThanOrEqual(Date.parse(finishEvent.time as string))
+    }
+  })
+
+  it('normalizes step events wrapped inside JSON text blobs', async () => {
+    const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencode-step-json-'))
+    try {
+      const storageDir = path.join(tmpRoot, 'storage')
+      const sessionDir = path.join(storageDir, 'session', 'hash-step')
+      const messageDir = path.join(storageDir, 'message', 'ses_json')
+      const partDir = path.join(storageDir, 'part', 'msg_json')
+      await fs.promises.mkdir(sessionDir, { recursive: true })
+      await fs.promises.mkdir(messageDir, { recursive: true })
+      await fs.promises.mkdir(partDir, { recursive: true })
+
+      const now = Date.now()
+      const sessionJson = {
+        id: 'ses_json',
+        directory: '/workspace/json-repo',
+        title: 'JSON Step Session',
+        time: { created: now, updated: now },
+        summary: { additions: 0, deletions: 0, files: 0 }
+      }
+      await fs.promises.writeFile(path.join(sessionDir, 'ses_json.json'), JSON.stringify(sessionJson), 'utf8')
+
+      const messageJson = {
+        id: 'msg_json',
+        sessionID: 'ses_json',
+        role: 'assistant',
+        time: { created: now, completed: now },
+        modelID: 'mock-model',
+        providerID: 'opencode'
+      }
+      await fs.promises.writeFile(path.join(messageDir, 'msg_json.json'), JSON.stringify(messageJson), 'utf8')
+
+      const stepPayload = {
+        type: 'step_start',
+        timestamp: now,
+        part: {
+          id: 'prt_ref',
+          sessionID: 'ses_json',
+          messageID: 'msg_json',
+          type: 'step-start',
+          text: 'Installing dependencies'
+        }
+      }
+      const partJson = {
+        id: 'prt_wrapped',
+        sessionID: 'ses_json',
+        messageID: 'msg_json',
+        type: 'tool',
+        text: JSON.stringify(stepPayload),
+        time: { start: now, end: now }
+      }
+      await fs.promises.writeFile(path.join(partDir, 'prt_wrapped.json'), JSON.stringify(partJson), 'utf8')
+
+      const storage = createOpencodeStorage({ rootDir: tmpRoot })
+      const detail = await storage.getSession('ses_json')
+      expect(detail).not.toBeNull()
+      if (!detail) return
+      const message = detail.messages.find((m) => m.id === 'msg_json')
+      expect(message).toBeDefined()
+      const part = message?.parts.find((p) => p.id === 'prt_wrapped')
+      expect(part).toBeDefined()
+      expect(part?.type).toBe('step-start')
+      expect(part?.text).toBe('Installing dependencies')
+    } finally {
+      await fs.promises.rm(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('adds fallback summaries for step events without explicit text', async () => {
+    const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencode-step-meta-'))
+    try {
+      const storageDir = path.join(tmpRoot, 'storage')
+      const sessionDir = path.join(storageDir, 'session', 'hash-step-meta')
+      const messageDir = path.join(storageDir, 'message', 'ses_meta')
+      const partDir = path.join(storageDir, 'part', 'msg_meta')
+      await fs.promises.mkdir(sessionDir, { recursive: true })
+      await fs.promises.mkdir(messageDir, { recursive: true })
+      await fs.promises.mkdir(partDir, { recursive: true })
+
+      const now = Date.now()
+      const sessionJson = {
+        id: 'ses_meta',
+        directory: '/workspace/meta-repo',
+        title: 'Meta Step Session',
+        time: { created: now, updated: now },
+        summary: { additions: 0, deletions: 0, files: 0 }
+      }
+      await fs.promises.writeFile(path.join(sessionDir, 'ses_meta.json'), JSON.stringify(sessionJson), 'utf8')
+
+      const messageJson = {
+        id: 'msg_meta',
+        sessionID: 'ses_meta',
+        role: 'assistant',
+        time: { created: now, completed: now },
+        modelID: 'mock-model',
+        providerID: 'opencode'
+      }
+      await fs.promises.writeFile(path.join(messageDir, 'msg_meta.json'), JSON.stringify(messageJson), 'utf8')
+
+      const partJson = {
+        id: 'prt_meta',
+        sessionID: 'ses_meta',
+        messageID: 'msg_meta',
+        type: 'step-start',
+        text: '',
+        snapshot: 'abc123',
+        time: { start: now, end: now }
+      }
+      await fs.promises.writeFile(path.join(partDir, 'prt_meta.json'), JSON.stringify(partJson), 'utf8')
+
+      const storage = createOpencodeStorage({ rootDir: tmpRoot })
+      const detail = await storage.getSession('ses_meta')
+      expect(detail).not.toBeNull()
+      if (!detail) return
+      const message = detail.messages.find((m) => m.id === 'msg_meta')
+      const part = message?.parts.find((p) => p.id === 'prt_meta')
+      expect(part?.type).toBe('step-start')
+      expect(part?.text).toBe('Snapshot: abc123')
+    } finally {
+      await fs.promises.rm(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('hydrates snapshot-backed steps when a resolver provides text', async () => {
+    const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencode-step-snapshot-'))
+    try {
+      const storageDir = path.join(tmpRoot, 'storage')
+      const sessionDir = path.join(storageDir, 'session', 'hash-step-snap')
+      const messageDir = path.join(storageDir, 'message', 'ses_snap')
+      const partDir = path.join(storageDir, 'part', 'msg_snap')
+      await fs.promises.mkdir(sessionDir, { recursive: true })
+      await fs.promises.mkdir(messageDir, { recursive: true })
+      await fs.promises.mkdir(partDir, { recursive: true })
+
+      const now = Date.now()
+      const sessionJson = {
+        id: 'ses_snap',
+        directory: '/workspace/snapshot-repo',
+        title: 'Snapshot Step Session',
+        time: { created: now, updated: now },
+        summary: { additions: 0, deletions: 0, files: 0 }
+      }
+      await fs.promises.writeFile(path.join(sessionDir, 'ses_snap.json'), JSON.stringify(sessionJson), 'utf8')
+
+      const messageJson = {
+        id: 'msg_snap',
+        sessionID: 'ses_snap',
+        role: 'assistant',
+        time: { created: now, completed: now },
+        modelID: 'mock-model',
+        providerID: 'opencode'
+      }
+      await fs.promises.writeFile(path.join(messageDir, 'msg_snap.json'), JSON.stringify(messageJson), 'utf8')
+
+      const partJson = {
+        id: 'prt_snap',
+        sessionID: 'ses_snap',
+        messageID: 'msg_snap',
+        type: 'step-start',
+        text: '',
+        snapshot: 'deadbeef',
+        time: { start: now, end: now }
+      }
+      await fs.promises.writeFile(path.join(partDir, 'prt_snap.json'), JSON.stringify(partJson), 'utf8')
+
+      const resolver = {
+        extractStepText: vi.fn().mockResolvedValue('Resolved snapshot output')
+      }
+
+      const storage = createOpencodeStorage({ rootDir: tmpRoot, snapshotResolver: resolver })
+      const detail = await storage.getSession('ses_snap')
+      expect(detail).not.toBeNull()
+      if (!detail) return
+      const message = detail.messages.find((m) => m.id === 'msg_snap')
+      const part = message?.parts.find((p) => p.id === 'prt_snap')
+      expect(part?.text).toBe('Resolved snapshot output')
+      expect(resolver.extractStepText).toHaveBeenCalledWith({
+        snapshotHash: 'deadbeef',
+        workspacePath: '/workspace/snapshot-repo',
+        stage: 'start'
+      })
+    } finally {
+      await fs.promises.rm(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('hydrates snapshot-backed steps when the snapshot hash only appears inside nested payload text', async () => {
+    const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencode-step-nested-snapshot-'))
+    try {
+      const storageDir = path.join(tmpRoot, 'storage')
+      const sessionDir = path.join(storageDir, 'session', 'hash-step-snap-nested')
+      const messageDir = path.join(storageDir, 'message', 'ses_nested_snap')
+      const partDir = path.join(storageDir, 'part', 'msg_nested_snap')
+      await fs.promises.mkdir(sessionDir, { recursive: true })
+      await fs.promises.mkdir(messageDir, { recursive: true })
+      await fs.promises.mkdir(partDir, { recursive: true })
+
+      const now = Date.now()
+      const sessionJson = {
+        id: 'ses_nested_snap',
+        directory: '/workspace/nested-snapshot',
+        title: 'Nested Snapshot Session',
+        time: { created: now, updated: now },
+        summary: { additions: 0, deletions: 0, files: 0 }
+      }
+      await fs.promises.writeFile(path.join(sessionDir, 'ses_nested_snap.json'), JSON.stringify(sessionJson), 'utf8')
+
+      const messageJson = {
+        id: 'msg_nested_snap',
+        sessionID: 'ses_nested_snap',
+        role: 'assistant',
+        time: { created: now, completed: now },
+        modelID: 'mock-model',
+        providerID: 'opencode'
+      }
+      await fs.promises.writeFile(path.join(messageDir, 'msg_nested_snap.json'), JSON.stringify(messageJson), 'utf8')
+
+      const nestedPayload = {
+        type: 'step_start',
+        timestamp: now,
+        part: {
+          id: 'prt_nested_payload',
+          sessionID: 'ses_nested_snap',
+          messageID: 'msg_nested_snap',
+          type: 'step-start',
+          snapshot: 'nestedhash'
+        }
+      }
+
+      const partJson = {
+        id: 'prt_nested_wrapper',
+        sessionID: 'ses_nested_snap',
+        messageID: 'msg_nested_snap',
+        type: 'text',
+        text: JSON.stringify(nestedPayload),
+        time: { start: now, end: now }
+      }
+      await fs.promises.writeFile(path.join(partDir, 'prt_nested_wrapper.json'), JSON.stringify(partJson), 'utf8')
+
+      const resolver = {
+        extractStepText: vi.fn().mockResolvedValue('Nested snapshot text')
+      }
+
+      const storage = createOpencodeStorage({ rootDir: tmpRoot, snapshotResolver: resolver })
+      const detail = await storage.getSession('ses_nested_snap')
+      expect(detail).not.toBeNull()
+      if (!detail) return
+      const message = detail.messages.find((m) => m.id === 'msg_nested_snap')
+      const part = message?.parts.find((p) => p.id === 'prt_nested_wrapper')
+      expect(part?.type).toBe('step-start')
+      expect(part?.text).toBe('Nested snapshot text')
+      expect(resolver.extractStepText).toHaveBeenCalledWith({
+        snapshotHash: 'nestedhash',
+        workspacePath: '/workspace/nested-snapshot',
+        stage: 'start'
+      })
+    } finally {
+      await fs.promises.rm(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('hydrates snapshot-backed steps from git repos without .hyperagent folder', async () => {
+    const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencode-snapshot-root-'))
+    try {
+      const storageDir = path.join(tmpRoot, 'storage')
+      const sessionDir = path.join(storageDir, 'session', 'hash-step-snap-root')
+      const messageDir = path.join(storageDir, 'message', 'ses_snaproot')
+      const partDir = path.join(storageDir, 'part', 'msg_snaproot')
+      await fs.promises.mkdir(sessionDir, { recursive: true })
+      await fs.promises.mkdir(messageDir, { recursive: true })
+      await fs.promises.mkdir(partDir, { recursive: true })
+
+      const snapshotRoot = path.join(tmpRoot, 'snapshot')
+      await fs.promises.mkdir(snapshotRoot, { recursive: true })
+
+      const repoWorktree = path.join(tmpRoot, 'snapshot-worktree')
+      await fs.promises.mkdir(repoWorktree, { recursive: true })
+      const gitEnv = {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_NAME: 'Test',
+        GIT_COMMITTER_EMAIL: 'test@example.com'
+      }
+      execFileSync('git', ['init'], { cwd: repoWorktree, env: gitEnv })
+
+      const now = new Date().toISOString()
+      const workerLogFile = {
+        id: 'ses-worker-root',
+        log: [
+          {
+            entryId: 'root-entry',
+            provider: 'opencode',
+            model: 'github-copilot/gpt-5-mini',
+            createdAt: now,
+            payload: { output: 'Root worker output' }
+          }
+        ],
+        createdAt: now,
+        updatedAt: now
+      }
+      await fs.promises.writeFile(path.join(repoWorktree, 'ses-worker-root.json'), JSON.stringify(workerLogFile), 'utf8')
+      execFileSync('git', ['add', 'ses-worker-root.json'], { cwd: repoWorktree, env: gitEnv })
+      execFileSync('git', ['commit', '-m', 'snapshot data'], { cwd: repoWorktree, env: gitEnv })
+      const treeHash = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: repoWorktree, env: gitEnv })
+        .toString()
+        .trim()
+
+      const snapshotRepoDir = path.join(snapshotRoot, 'demo-snapshot')
+      await fs.promises.cp(path.join(repoWorktree, '.git'), snapshotRepoDir, { recursive: true })
+
+      const sessionJson = {
+        id: 'ses_snaproot',
+        directory: '/workspace/snapshot-root-repo',
+        title: 'Snapshot Root Session',
+        time: { created: now, updated: now },
+        summary: { additions: 0, deletions: 0, files: 0 }
+      }
+      await fs.promises.writeFile(path.join(sessionDir, 'ses_snaproot.json'), JSON.stringify(sessionJson), 'utf8')
+
+      const messageJson = {
+        id: 'msg_snaproot',
+        sessionID: 'ses_snaproot',
+        role: 'assistant',
+        time: { created: now, completed: now },
+        modelID: 'mock-model',
+        providerID: 'opencode'
+      }
+      await fs.promises.writeFile(path.join(messageDir, 'msg_snaproot.json'), JSON.stringify(messageJson), 'utf8')
+
+      const partJson = {
+        id: 'prt_snaproot',
+        sessionID: 'ses_snaproot',
+        messageID: 'msg_snaproot',
+        type: 'step-start',
+        text: '',
+        snapshot: treeHash,
+        time: { start: now, end: now }
+      }
+      await fs.promises.writeFile(path.join(partDir, 'prt_snaproot.json'), JSON.stringify(partJson), 'utf8')
+
+      const storage = createOpencodeStorage({ rootDir: tmpRoot })
+      const detail = await storage.getSession('ses_snaproot')
+      expect(detail).not.toBeNull()
+      if (!detail) return
+      const message = detail.messages.find((m) => m.id === 'msg_snaproot')
+      const part = message?.parts.find((p) => p.id === 'prt_snaproot')
+      expect(part?.text).toBe('Root worker output')
+    } finally {
+      await fs.promises.rm(tmpRoot, { recursive: true, force: true })
     }
   })
 

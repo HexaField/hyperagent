@@ -4,6 +4,7 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { createOpencodeStorage, type OpencodeStorage } from '../../../../src/modules/opencodeStorage'
 
 let createWorkspaceSessionsRouter: any
 import * as agentModule from '../../../../src/modules/agent'
@@ -40,6 +41,7 @@ describe('workspace sessions routes — agent persona', () => {
   let spyRunLoop: any
   let depsUnderTest: ReturnType<typeof makeDeps>
   let storageRoot: string
+  let opencodeStorage: OpencodeStorage
 
   beforeEach(async () => {
     tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), 'ha-test-home-'))
@@ -57,10 +59,23 @@ describe('workspace sessions routes — agent persona', () => {
       'utf8'
     )
 
+    const workerChunk = JSON.stringify({
+      status: 'working',
+      plan: '1. Scan repo\n2. Update files',
+      work: 'Updated README with latest instructions.',
+      requests: ''
+    })
+    const verifierChunk = JSON.stringify({
+      verdict: 'instruct',
+      critique: 'Outline looks good but needs tests.',
+      instructions: 'Write regression tests for the new workflow.',
+      priority: 2
+    })
+
     spyRunLoop = vi.spyOn(agentModule, 'runVerifierWorkerLoop').mockImplementation(async (opts: any) => {
       if (opts?.onStream && typeof opts.onStream === 'function') {
-        opts.onStream({ role: 'worker', round: 1, chunk: 'worker-chunk-1', provider: 'opencode', model: 'm', attempt: 1 })
-        opts.onStream({ role: 'verifier', round: 1, chunk: 'verifier-chunk-1', provider: 'opencode', model: 'm', attempt: 1 })
+        opts.onStream({ role: 'worker', round: 1, chunk: workerChunk, provider: 'opencode', model: 'm', attempt: 1 })
+        opts.onStream({ role: 'verifier', round: 1, chunk: verifierChunk, provider: 'opencode', model: 'm', attempt: 1 })
       }
       return {
         outcome: 'approved',
@@ -74,9 +89,9 @@ describe('workspace sessions routes — agent persona', () => {
     createWorkspaceSessionsRouter = mod.createWorkspaceSessionsRouter
 
     storageRoot = path.join(tmpHome, 'opencode-storage')
-    await fs.mkdir(path.join(storageRoot, 'storage', 'message'), { recursive: true })
+    opencodeStorage = createOpencodeStorage({ rootDir: storageRoot })
     depsUnderTest = makeDeps({
-      codingAgentStorage: { rootDir: storageRoot, listSessions: vi.fn(async () => []), getSession: vi.fn(async () => null) }
+      codingAgentStorage: opencodeStorage
     })
     const router = createWorkspaceSessionsRouter(depsUnderTest)
 
@@ -96,6 +111,19 @@ describe('workspace sessions routes — agent persona', () => {
     vi.restoreAllMocks()
   })
 
+  const waitForStoredMessage = async (sessionId: string, role: string) => {
+    const deadline = Date.now() + 4000
+    while (Date.now() < deadline) {
+      try {
+        const detail = await opencodeStorage.getSession(sessionId)
+        const message = detail?.messages.find((msg: any) => msg.role === role)
+        if (message) return message
+      } catch {}
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    return null
+  }
+
   it('starts session and triggers multi-agent loop for the multi-agent persona', async () => {
     const workspacePath = path.join(tmpHome, 'ha-ws')
     const resp = await request(app)
@@ -112,40 +140,21 @@ describe('workspace sessions routes — agent persona', () => {
     const callArgs = spyRunLoop.mock.calls[0][0]
     expect(callArgs).toMatchObject({ userInstructions: TEST_PROMPT })
 
-    const sessionMessageDir = path.join(storageRoot, 'storage', 'message', sessionId)
-    const partRoot = path.join(storageRoot, 'storage', 'part')
-
-    const waitForMessage = async (predicate: (message: any) => boolean) => {
-      const deadline = Date.now() + 2000
-      while (Date.now() < deadline) {
-        try {
-          const files = await fs.readdir(sessionMessageDir)
-          for (const file of files.filter((name) => name.endsWith('.json'))) {
-            const messageJson = JSON.parse(await fs.readFile(path.join(sessionMessageDir, file), 'utf8'))
-            if (predicate(messageJson)) return messageJson
-          }
-        } catch {}
-        await new Promise((r) => setTimeout(r, 50))
-      }
-      return null
-    }
-
-    const readFirstPart = async (messageId: string) => {
-      const dir = path.join(partRoot, messageId)
-      const files = await fs.readdir(dir)
-      expect(files.length).toBeGreaterThan(0)
-      return JSON.parse(await fs.readFile(path.join(dir, files[0]), 'utf8'))
-    }
-
-    const userMessage = await waitForMessage((msg) => msg.role === 'user')
+    const userMessage = await waitForStoredMessage(sessionId, 'user')
     expect(userMessage, 'expected stored user prompt message').toBeTruthy()
-    const userPart = await readFirstPart(userMessage!.id)
-    expect(userPart.text).toContain(TEST_PROMPT)
+    expect(userMessage?.parts[0]?.text).toContain(TEST_PROMPT)
 
-    const workerMessage = await waitForMessage((msg) => msg.role === 'worker')
+    const workerMessage = await waitForStoredMessage(sessionId, 'worker')
     expect(workerMessage, 'expected worker stream message').toBeTruthy()
-    const workerPart = await readFirstPart(workerMessage!.id)
-    expect(workerPart.text?.length ?? 0).toBeGreaterThan(0)
+    expect(workerMessage?.parts[0]?.type).toBe('text')
+    expect(workerMessage?.parts[0]?.text).toBe('Status: working\n\nPlan:\n1. Scan repo\n2. Update files\n\nWork:\nUpdated README with latest instructions.')
+
+    const verifierMessage = await waitForStoredMessage(sessionId, 'verifier')
+    expect(verifierMessage, 'expected verifier stream message').toBeTruthy()
+    expect(verifierMessage?.parts[0]?.type).toBe('text')
+    expect(verifierMessage?.parts[0]?.text).toBe(
+      'Verdict: instruct (priority 2)\n\nCritique:\nOutline looks good but needs tests.\n\nInstructions:\nWrite regression tests for the new workflow.'
+    )
   })
 
   it('falls back to the provider runner for non multi-agent personas', async () => {
@@ -159,3 +168,4 @@ describe('workspace sessions routes — agent persona', () => {
     expect(spyRunLoop).not.toHaveBeenCalled()
   })
 })
+

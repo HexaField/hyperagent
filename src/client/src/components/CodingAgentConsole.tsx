@@ -902,7 +902,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       options?.class ??
       (isMobileVariant
         ? 'flex h-full min-h-0 flex-col'
-        : 'flex flex-col gap-4 rounded-2xl border border-[var(--border)] p-5')
+        : 'flex flex-col gap-4 rounded-2xl border border-[var(--border)] p-2')
     const transcriptContainerClass = isMobileVariant ? 'relative flex h-full min-h-0 flex-col' : 'relative'
     const transcriptScrollerClass = isMobileVariant
       ? 'flex-1 min-h-0 space-y-3 overflow-y-auto'
@@ -1101,7 +1101,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         </div>
       </div>
       <div class="flex-1 min-h-0 overflow-hidden">
-        {SessionDetail({ variant: 'mobile', class: 'flex h-full min-h-0 flex-col p-4 overflow-hidden' })}
+        {SessionDetail({ variant: 'mobile', class: 'flex h-full min-h-0 flex-col p-2 overflow-hidden' })}
       </div>
       <Show when={drawerVisible()}>
         <div class="fixed inset-0 z-40 flex bg-[var(--bg-muted)]">

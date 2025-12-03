@@ -7,6 +7,86 @@ import DiffViewer from './DiffViewer'
 import TodoList from './TodoList'
 import ToolCallList from './ToolCallList'
 
+const STEP_TYPE_LABELS: Record<string, string> = {
+  'step-start': 'Step started',
+  step_start: 'Step started',
+  'step-finish': 'Step finished',
+  step_finish: 'Step finished'
+}
+
+const safeParseJson = (raw: string): any | null => {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+const extractNestedText = (payload: any): string | null => {
+  if (!payload || typeof payload !== 'object') return null
+  const candidates = [payload.text, payload.message, payload.output, payload.summary, payload.details, payload.value]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
+  }
+  const nestedSources = [payload.part, payload.payload, payload.data]
+  for (const source of nestedSources) {
+    const nested = extractNestedText(source)
+    if (nested) return nested
+  }
+  return null
+}
+
+const normalizeStepText = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (!trimmed.startsWith('{')) return trimmed
+  const parsed = safeParseJson(trimmed)
+  if (!parsed) return null
+  const extracted = extractNestedText(parsed)
+  return extracted ?? null
+}
+
+const deriveStepDetails = (part: any): string | null => {
+  const candidates: Array<unknown> = [
+    part?.text,
+    part?.summary,
+    part?.description,
+    part?.details,
+    part?.output,
+    part?.state?.output,
+    part?.state?.message
+  ]
+  for (const entry of candidates) {
+    const text = normalizeStepText(entry)
+    if (text) return text
+  }
+  return null
+}
+
+const parseStepEventPayload = (raw: string | null): any | null => {
+  if (!raw) return null
+  const parsed = safeParseJson(raw)
+  if (!parsed) return null
+  const type = typeof parsed.type === 'string' ? parsed.type.toLowerCase() : ''
+  if (!type.startsWith('step_')) return null
+  return parsed
+}
+
+const renderStepPart = (part: any, label: string): JSX.Element => {
+  const body = deriveStepDetails(part)
+  return (
+    <div class="mb-2 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-2 text-sm">
+      <div class="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+        <span>{label}</span>
+      </div>
+      <Show when={body} fallback={<p class="mt-1 text-xs text-[var(--text-muted)]">No output captured.</p>} keyed>
+        {(content) => <p class="mt-1 whitespace-pre-wrap text-[var(--text)]">{content}</p>}
+      </Show>
+    </div>
+  )
+}
+
 export type MessageScrollerProps = {
   messages: CodingAgentMessage[]
   class?: string
@@ -364,20 +444,30 @@ export default function MessageScroller(props: MessageScrollerProps) {
     for (let index = 0; index < parts.length; index++) {
       const part = parts[index]
       if (!part) continue
+      const normalizedType = typeof part.type === 'string' ? part.type.toLowerCase() : ''
 
-      if (part.type === 'text' || part.type === 'step-finish') {
+      if (normalizedType && STEP_TYPE_LABELS[normalizedType]) {
+        elements.push(renderStepPart(part, STEP_TYPE_LABELS[normalizedType]))
+        continue
+      }
+
+      if (normalizedType === 'text' || normalizedType === 'step-finish') {
         if (typeof part.text === 'string' && part.text.trim()) {
           elements.push(<p class="mb-1 last:mb-0 break-words">{part.text.trim()}</p>)
         }
         continue
       }
 
-      if (part.type === 'tool') {
+      if (normalizedType === 'tool') {
         const toolName = String(part.tool ?? part.toolName ?? part.name ?? '')
         const title = part.title ?? part.state?.title ?? ''
         const text = typeof part.text === 'string' && part.text.trim() ? part.text.trim() : null
         const output =
           typeof (part.state?.output ?? part.output) === 'string' ? (part.state?.output ?? part.output) : null
+
+        if (!text && output && parseStepEventPayload(output)) {
+          continue
+        }
 
         // Heuristic: tool name indicates todowrite
         const nameIndicatesTodo =
@@ -577,7 +667,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
         continue
       }
 
-      if (part.type === 'file-diff' || part.type === 'diff') {
+      if (normalizedType === 'file-diff' || normalizedType === 'diff') {
         const diffText = extractDiffText(part)
         elements.push(
           <div class="mt-2 mb-2">
@@ -617,7 +707,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
     <div ref={(el) => setContainer(el ?? null)} class={props.class ?? ''}>
       <For each={groupedMessages()}>
         {(group) => (
-          <article class="rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-4">
+          <article class="rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-2">
             <header class="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
               <span class="uppercase tracking-wide">{group.role || 'Message'}</span>
               <span>{new Date(group.timestamp).toLocaleString()}</span>
@@ -626,7 +716,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
               <For each={group.messages}>
                 {(message) => (
                   <div
-                    class="relative mb-3 rounded-xl border border-transparent p-3 transition hover:border-[var(--border)] last:mb-0"
+                    class="relative mb-3 rounded-xl border border-transparent transition hover:border-[var(--border)] last:mb-0"
                     classList={{
                       'border-blue-500 bg-blue-50 dark:bg-blue-950/30': props.selectedMessageId === message.id,
                       'cursor-pointer': Boolean(props.onMessageClick)
@@ -655,10 +745,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
       </Show>
       <Show when={selectionMenu()} keyed>
         {(menu) => (
-          <div
-            class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-            onClick={closeSelectionMenu}
-          >
+          <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeSelectionMenu}>
             <div
               class="w-full max-w-sm rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-5 shadow-2xl"
               onClick={(event) => event.stopPropagation()}

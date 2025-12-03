@@ -22,7 +22,11 @@ import {
   KNOWN_CODING_AGENT_MODEL_LABELS
 } from '../../core/config'
 
-import { runVerifierWorkerLoop } from '../../../../src/modules/agent'
+import {
+  runVerifierWorkerLoop,
+  type WorkerStructuredResponse,
+  type VerifierStructuredResponse
+} from '../../../../src/modules/agent'
 import { ensureProviderConfig } from '../../../../src/modules/workflowAgentExecutor'
 import { deletePersona, listPersonas, readPersona, writePersona } from './personas'
 
@@ -140,6 +144,55 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       }
     }
 
+    const formatWorkerMessage = (payload: Partial<WorkerStructuredResponse>): string | null => {
+      if (!payload) return null
+      const sections: string[] = []
+      if (payload.status) sections.push(`Status: ${payload.status}`)
+      if (payload.plan) sections.push(`Plan:\n${payload.plan}`)
+      if (payload.work) sections.push(`Work:\n${payload.work}`)
+      if (payload.requests) sections.push(`Requests:\n${payload.requests}`)
+      const text = sections.join('\n\n').trim()
+      if (text.length) return text
+      try {
+        return JSON.stringify(payload, null, 2)
+      } catch {
+        return null
+      }
+    }
+
+    const formatVerifierMessage = (payload: Partial<VerifierStructuredResponse>): string | null => {
+      if (!payload) return null
+      const sections: string[] = []
+      if (payload.verdict) {
+        const prioritySegment = typeof payload.priority === 'number' ? ` (priority ${payload.priority})` : ''
+        sections.push(`Verdict: ${payload.verdict}${prioritySegment}`)
+      }
+      if (payload.critique) sections.push(`Critique:\n${payload.critique}`)
+      if (payload.instructions) sections.push(`Instructions:\n${payload.instructions}`)
+      const text = sections.join('\n\n').trim()
+      if (text.length) return text
+      try {
+        return JSON.stringify(payload, null, 2)
+      } catch {
+        return null
+      }
+    }
+
+    const tryFormatStreamBuffer = (role: string, buffer: string): string | null => {
+      const trimmed = buffer.trim()
+      if (!trimmed.length) return null
+      if (!trimmed.startsWith('{')) return trimmed
+      if (!trimmed.endsWith('}')) return null
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (role === 'worker') return formatWorkerMessage(parsed)
+        if (role === 'verifier') return formatVerifierMessage(parsed)
+        return null
+      } catch {
+        return trimmed
+      }
+    }
+
     try {
       if (storagePaths) {
         const sessionMetaDir = path.join(storagePaths.storageDir, 'session', 'global')
@@ -190,17 +243,49 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
 
     await primeUserPrompt()
 
+    type StreamEntry = { role: string; round: number; buffer: string; emitted: boolean }
+    const streamEntries = new Map<string, StreamEntry>()
+    const streamKey = (role: string, round: number) => `${role}:${round}`
+
+    const flushStreamEntries = async () => {
+      for (const entry of streamEntries.values()) {
+        if (entry.emitted) continue
+        const formatted = tryFormatStreamBuffer(entry.role, entry.buffer)
+        const fallbackContent = formatted ?? entry.buffer
+        await appendLogLine({ role: entry.role, content: fallbackContent, round: entry.round })
+      }
+      streamEntries.clear()
+    }
+
     ;(async () => {
       try {
         const appendChunk = async (event: { role: string; round: number; chunk: string }) => {
+          const key = streamKey(event.role, event.round)
+          const entry = streamEntries.get(key) ?? {
+            role: event.role,
+            round: event.round,
+            buffer: '',
+            emitted: false
+          }
+          entry.buffer += event.chunk
+          streamEntries.set(key, entry)
+          if (entry.emitted) return
+          const formatted = tryFormatStreamBuffer(event.role, entry.buffer)
+          if (!formatted) {
+            if (!storagePaths) {
+              await appendLogLine({ role: event.role, content: event.chunk, round: event.round })
+            }
+            return
+          }
+          entry.emitted = true
           const ok = await writeStructuredMessage({
             role: event.role,
-            text: event.chunk,
+            text: formatted,
             providerId: MULTI_AGENT_PROVIDER_ID,
             modelId: options.model ?? null
           })
           if (!ok) {
-            await appendLogLine({ role: event.role, content: event.chunk, round: event.round })
+            await appendLogLine({ role: event.role, content: formatted, round: event.round })
           }
         }
 
@@ -224,6 +309,8 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
           workspacePath: options.workspacePath,
           personaId: options.personaId ?? MULTI_AGENT_PERSONA_ID
         })
+      } finally {
+        await flushStreamEntries()
       }
     })()
 
