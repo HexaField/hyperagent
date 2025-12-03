@@ -1,9 +1,11 @@
 # Hyperagent Architecture Overview
 
 ## The Main Webapp
+
 Hyperagent's UI lives in `src/client` and is implemented with SolidJS + Vite. `src/client/src/App.tsx` boots the router, enforces the Radicle connectivity gate, and wraps every route with the canvas navigator + workspace selection providers. `WorkspacePage.tsx` renders the canvas-based workspace, storing widget layout in `localStorage` and broadcasting view events (e.g. `workspace:add-widget`) through `window`. Widgets themselves are declared in `widgets/registry.tsx` and lazily loaded so the initial bundle stays small.
 
 Key characteristics:
+
 - Canvas-first UX: `core/layout/CanvasWorkspace.tsx` manages drag/resize state, while `SingleWidgetView` mirrors any widget into a fullscreen overlay for mobile users.
 - Cross-cutting state: `CanvasNavigatorContext`, `WorkspaceSelectionProvider`, and the `WorkspaceNavigator` components coordinate which repositories are visible and persist user preferences per workspace.
 - Server integration: data loads through `fetchJson` helpers that hit `/api/projects`, `/api/workflows`, `/api/workspaces/:id/*`, etc., all backed by the Express app constructed in `src/server/core/server.ts`.
@@ -22,6 +24,7 @@ flowchart LR
 ```
 
 ## Core Modules
+
 The backend logic sits in `src/modules` and is wired up by `src/server/core/server.ts`. Major slices include:
 
 - Workflow runtime (`workflows.ts`): turns planner DAGs into executable steps, persists them via `database.ts`, and delegates real work to an `AgentExecutor` (by default `createAgentWorkflowExecutor`). It talks to Radicle for commits/pushes, emits queue metrics, and coordinates with Docker-based runner gateways.
@@ -49,6 +52,7 @@ flowchart TD
 This layering keeps the UI thin: the server exposes workspace-scoped endpoints that already aggregate git metadata, workflow provenance, narrator logs, and terminal handles so the client can focus on rendering.
 
 ## The Widgets
+
 Each widget is a self-contained Solid component paired with an API surface under `src/server/modules`. Widgets can be placed anywhere on the canvas or opened individually; the registry in `src/client/src/widgets/registry.tsx` tracks metadata such as default size, icon, and starting position.
 
 | Widget | Purpose | Key files / APIs |
