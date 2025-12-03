@@ -1,94 +1,75 @@
-# Hyperagent High-Level Architecture
+# Hyperagent Architecture Overview
 
-## 1. Architecture Goals
+## The Main Webapp
+Hyperagent's UI lives in `src/client` and is implemented with SolidJS + Vite. `src/client/src/App.tsx` boots the router, enforces the Radicle connectivity gate, and wraps every route with the canvas navigator + workspace selection providers. `WorkspacePage.tsx` renders the canvas-based workspace, storing widget layout in `localStorage` and broadcasting view events (e.g. `workspace:add-widget`) through `window`. Widgets themselves are declared in `widgets/registry.tsx` and lazily loaded so the initial bundle stays small.
 
-- Deliver a shared, infinite workspace where natural language and direct manipulation compile into a living graph of agents, data, and workflows.
-- Maintain strict modularity: every capability is an independently deployable, type-safe unit that composes through declarative graph definitions.
-- Keep the runtime functional: graphs are evaluated as pure transformations over typed inputs, with explicit state channels for side effects.
-- Ensure every surface (chat, canvas, APIs) speaks the same schema so that automation, collaboration, and governance never drift.
+Key characteristics:
+- Canvas-first UX: `core/layout/CanvasWorkspace.tsx` manages drag/resize state, while `SingleWidgetView` mirrors any widget into a fullscreen overlay for mobile users.
+- Cross-cutting state: `CanvasNavigatorContext`, `WorkspaceSelectionProvider`, and the `WorkspaceNavigator` components coordinate which repositories are visible and persist user preferences per workspace.
+- Server integration: data loads through `fetchJson` helpers that hit `/api/projects`, `/api/workflows`, `/api/workspaces/:id/*`, etc., all backed by the Express app constructed in `src/server/core/server.ts`.
+- Event-driven controls: `CanvasChrome` listens for `workspace:open-single-view`, `workspace:view-change`, and navigator open/close events to keep overlays, drawers, and widget menus in sync.
 
-## 2. Layered System Overview
+```mermaid
+flowchart LR
+  User --> AppShell[App.tsx Router]
+  AppShell --> Navigator[CanvasNavigatorContext]
+  Navigator --> WorkspaceSelection
+  WorkspaceSelection[WorkspaceSelectionProvider] --> WorkspacePage
+  WorkspacePage --> CanvasWorkspace
+  CanvasWorkspace --> WidgetRegistry[widgets/registry]
+  WidgetRegistry --> Widgets
+  Widgets -->|fetchJson| WorkspaceAPIs[/workspace* REST routes/]
+```
 
-1. **Experience Layer**
-   - _Graph Canvas_: Visual editor for nodes/edges, versioning, branching, annotations, and time-travel of workflow graphs.
-   - _Language Interface_: NL compiler that maps intent → typed graph diffs, with conversational refinement loops and contextual explanations.
-   - _Presence & Collaboration_: Real-time co-editing, comments, approvals, and human-agent assignments rendered over the workspace.
+## Core Modules
+The backend logic sits in `src/modules` and is wired up by `src/server/core/server.ts`. Major slices include:
 
-2. **Declarative Graph Plane**
-   - _Graph Schema_: Functional DAG of nodes (agents, tools, data objects, humans) connected by typed edges expressing data flow, triggers, and constraints.
-   - _State Model_: Immutable graph snapshots with lineage, diffing, and reusable subgraphs/templates; each node declares deterministic inputs/outputs and side-effect policies.
-   - _Compiler_: Validates type contracts, resolves capabilities, injects default policies, and emits executable plans for the runtime scheduler.
+- Workflow runtime (`workflows.ts`): turns planner DAGs into executable steps, persists them via `database.ts`, and delegates real work to an `AgentExecutor` (by default `createAgentWorkflowExecutor`). It talks to Radicle for commits/pushes, emits queue metrics, and coordinates with Docker-based runner gateways.
+- Agent loop (`agent.ts`, `providerRunner.ts`, `providers/*`): hosts the worker/verifier dual-agent conversation, streams LLM chunks, and wraps provider CLIs (opencode, Ollama, etc.).
+- Runner gateways (`workflowRunnerGateway.ts`, `review/runnerGateway.ts`): spawn Docker containers that execute workflow steps or review tasks, report status back via callback endpoints, and stream logs into `workspaceWorkflows/logStream` for the UI.
+- Workspace services: `workspaceSummary`, `workspaceWorkflows`, `workspaceTerminal`, `workspaceCodeServer`, `workspaceNarrator`, and `workspaceSessions` routers expose scoped APIs for the widgets. They use helpers from `git.ts`, `terminal/module.ts`, `codeServer.ts`, and narrator relays.
+- Developer surface: `codeServer.ts` manages embedded VS Code sessions, `terminal/` multiplexes shell sessions over websockets, and `workspaceTerminal/module.ts` enforces per-user limits.
+- Source control + distribution: `radicle/` handles registration and pushes, `review/*` drives automated PR reviews/diffs, and `opencode*` files proxy to the Coding Agent CLI for provenance.
 
-3. **Runtime & Orchestration Plane**
-   - _Scheduler_: Event-driven executor that supports triggers (webhooks, cron, manual), parallel fan-out/fan-in, retries, and circuit-breaking while preserving graph semantics.
-   - _Context Manager_: Provides scoped memory (run context, shared documents, vector stores) and handles state hydration/checkpointing per node.
-   - _Trace Engine_: Captures structured logs, metrics, and lineage paths for every execution; binds run artifacts back onto the workspace graph.
+```mermaid
+flowchart TD
+  Planner[Planner run] --> WorkflowRuntime[workflows.ts]
+  WorkflowRuntime --> Persistence[database.ts]
+  WorkflowRuntime --> AgentExecutor[workflowAgentExecutor]
+  AgentExecutor --> AgentLoop[agent.ts]
+  WorkflowRuntime --> RunnerGateway[docker workflow runner]
+  WorkflowRuntime --> Radicle[radicle module]
+  WorkflowRuntime --> PullRequest[pullRequest module]
+  RunnerGateway --> DockerRunner[(Docker container)]
+  AgentLoop --> Providers[LLM providers]
+  Persistence --> ServerAPI[Express routes]
+  ServerAPI --> Client[Solid webapp]
+```
 
-4. **Capability & Agent Plane**
-   - _Agent Registry_: Catalog of atomic, composite, and meta-agents with metadata (IO schemas, cost hints, safety tags, required approvals).
-   - _Adapter Layer_: Declarative wrappers around external systems (APIs, models, data sources) that expose consistent CRUD/query/action blocks.
-   - _Human Nodes_: Special agents representing people/roles with explicit permissions and approval workflows.
+This layering keeps the UI thin: the server exposes workspace-scoped endpoints that already aggregate git metadata, workflow provenance, narrator logs, and terminal handles so the client can focus on rendering.
 
-5. **Governance & Safety Plane**
-   - _Policy Engine_: Attribute- and context-aware rules that gate capability use, data movement, spending, and deployment actions.
-   - _Sandboxing_: Execution tiers (dry-run, read-only, isolated data) enforced via runtime capabilities and adapter scopes.
-   - _Audit & Compliance_: Tamper-evident log of graph edits, executions, approvals, and policy decisions, accessible through the workspace UI and APIs.
+## The Widgets
+Each widget is a self-contained Solid component paired with an API surface under `src/server/modules`. Widgets can be placed anywhere on the canvas or opened individually; the registry in `src/client/src/widgets/registry.tsx` tracks metadata such as default size, icon, and starting position.
 
-6. **Intelligence & Optimization Plane**
-   - _Meta-Agents_: Continuous analyzers that propose graph improvements (cost, performance, reliability) as structured diffs awaiting human approval.
-   - _Simulation & Testing_: Synthetic data replays and fault injection layers to validate workflows before promotion.
-   - _Knowledge Base_: Repository of reusable subgraphs, best-practice templates, and past optimizations.
+| Widget | Purpose | Key files / APIs |
+| --- | --- | --- |
+| Workspace overview (`workspace-summary`) | Git status, branch switching, commit/stash helpers, remote sync controls, and repo graph context for the selected workspace. | `widgets/workspaceSummary/index.tsx`, server router `src/server/modules/workspaceSummary/routes.ts` (hits git + workflow runtime) |
+| Workflows (`workspace-workflows`) | Lists workflow runs, launches new plans via `WorkflowLaunchModal`, and streams per-step logs/progress. | `widgets/workspaceWorkflows/index.tsx`, `src/server/modules/workspaceWorkflows/routes.ts`, `workflowAgentExecutor.ts`, `workflowRunnerGateway.ts` |
+| Terminal (`workspace-terminal`) | Manages multiplexed shell sessions over websockets using xterm.js, with session lifecycle controls. | `widgets/workspaceTerminal/index.tsx`, server `src/server/modules/workspaceTerminal/module.ts`, websocket bridge in `core/server.ts` |
+| Code workspace (`workspace-code-server`) | Embeds code-server/VS Code sessions, auto-launches Devspace environments, opens tabs externally. | `widgets/workspaceCodeServer/index.tsx`, client libs `lib/codeServer.ts` + `lib/devspace.ts`, server `workspaceCodeServer/routes.ts` |
+| Coding Agent sessions (`workspace-sessions`) | Filters the coding agent console feed to the workspace repository, showing background automation history. | `widgets/workspaceSessions/index.tsx`, `components/CodingAgentConsole.tsx`, backend `workspaceSessions/routes.ts` |
+| Narrator activity (`workspace-narrator`) | Streams LLM narration + agent updates, supports replying to the narrator and downloading raw logs. | `widgets/workspaceNarrator/index.tsx`, server `workspaceNarrator/routes.ts`, narrator relay plumbing |
 
-## 3. Functional-Declarative Workflow
+```mermaid
+flowchart LR
+  WorkspaceSummary -->|REST| SummaryRouter
+  WorkflowsWidget -->|REST+SSE| WorkflowsRouter
+  TerminalWidget -->|WS+REST| TerminalModule
+  CodeServerWidget -->|REST| CodeServerRouter
+  SessionsWidget -->|REST| SessionsRouter
+  NarratorWidget -->|REST| NarratorRouter
+  SummaryRouter & WorkflowsRouter & TerminalModule & CodeServerRouter & SessionsRouter & NarratorRouter --> ServerCore
+  ServerCore --> WorkflowRuntime & Radicle & TerminalEngine & CodeServerCtrl & NarratorRelay
+```
 
-1. **Describe**: User expresses intent in natural language or manipulates the graph directly.
-2. **Synthesize**: NL compiler produces a draft graph, referencing typed capabilities from the registry.
-3. **Validate**: Graph compiler enforces schemas, policies, dependency ordering, and cost/safety constraints.
-4. **Execute**: Scheduler evaluates the graph as a set of pure transformations, isolating side effects via adapters with explicit contracts.
-5. **Observe & Iterate**: Traces, analytics, and meta-agent suggestions feed back into the workspace for rapid refinement.
-
-## 4. Modularity & Extensibility Principles
-
-- **Everything Is a Node**: Agents, humans, datasets, documents, memories, and meta-services share the same node contract, enabling uniform tooling.
-- **Typed Ports**: Inputs/outputs define shape, semantics, and privacy tier; incompatible edges are rejected at compile time.
-- **Capabilities as Plugins**: External integrations onboard by declaring blocks + policies; no core changes required.
-- **Subgraphs as Packages**: Any graph region can be versioned, parameterized, and published to the template library.
-- **Policy-First Composition**: Governance metadata travels with nodes/subgraphs so reuse never bypasses controls.
-- **Event Sourcing**: Graph edits and executions append to an immutable log, ensuring reversible operations and reproducible states.
-
-## 5. Data & Memory Architecture
-
-- **Run Context Stores**: Ephemeral, scoped to workflow execution, supporting concurrent reads/writes with deterministic replay metadata.
-- **Persistent Memory Objects**: Documents, embedding stores, metrics, and logs represented as nodes so that data lineage stays on the graph.
-- **Versioned Artifacts**: Outputs (summaries, reports, code) persist as typed objects that downstream workflows can subscribe to.
-
-## 6. Collaboration & Human-in-the-Loop
-
-- **Presence Graph Overlay**: Shows active editors, cursor positions, and lock hints on nodes/edges.
-- **Approval Nodes**: Declarative routing to human roles triggered by policies (risk thresholds, confidence bounds, spending limits).
-- **Conversation ↔ Graph Sync**: Every chat action maps to graph diffs; explanations render as narratives sourced from graph metadata.
-
-## 7. Governance & Trust
-
-- **Capability Scopes**: Each adapter declares allowable operations, rate limits, and secrets; policies bind scopes to users, agents, and environments.
-- **Run Attestations**: Every execution produces a signed trace with inputs, outputs, approvals, and policy decisions for auditability.
-- **Safety Tags**: Nodes carry tags (read-only, destructive, financial, PII) consumed by the compiler and UI for guardrails and warnings.
-
-## 8. Deployment & Environments (Conceptual)
-
-- **Workspace Instances**: Tenant-scoped control planes hosting graphs, policies, and collaboration state.
-- **Execution Workers**: Elastic pools (containers, serverless functions, or hybrid) that pull compiled plans, execute nodes, and stream traces back.
-- **Adapter Gateways**: Secure boundary services that host integrations, enforce scopes, and provide observability per external system.
-
-## 9. Extending the Platform
-
-- **SDKs**: Declarative manifests + lightweight runtime hooks for publishing new adapters/agents without touching the core.
-- **Template Marketplace**: Curated library where teams share subgraphs, with rating, versioning, and dependency declarations.
-- **Automation APIs**: External systems can query/update graphs, trigger runs, or subscribe to events via the same typed schema the UI uses.
-
-## 10. Roadmap Framing
-
-1. Ship a unified graph + chat workspace with deterministic graph compiler and minimal agent set.
-2. Layer in persistence (subgraphs, template registry) and governance primitives.
-3. Introduce meta-agents and simulation harnesses for continuous improvement.
-4. Expand adapter ecosystem and human-role integrations while scaling collaboration features.
+Together these widgets give operators live control over repositories, workflows, and agent activity directly from the canvas without juggling multiple tabs or CLIs.
