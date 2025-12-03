@@ -6,6 +6,7 @@ import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as agentModule from '../../../../src/modules/agent'
 import { createOpencodeStorage, type OpencodeStorage } from '../../../../src/modules/opencodeStorage'
+import type { CodingAgentSessionDetail } from '../../../interfaces/core/codingAgent'
 
 let createWorkspaceSessionsRouter: any
 
@@ -14,7 +15,10 @@ const wrapAsync = (h: any) => h
 
 function makeDeps(overrides: any = {}) {
   const defaultRunner = {
-    startRun: vi.fn(async (input: any) => ({ sessionId: 'ses_test', ...input }))
+    startRun: vi.fn(async (input: any) => ({ sessionId: 'ses_test', ...input })),
+    listRuns: vi.fn(async () => []),
+    getRun: vi.fn(async () => null),
+    killRun: vi.fn(async () => false)
   }
   const defaultStorage = {
     listSessions: vi.fn(async () => []),
@@ -177,5 +181,58 @@ describe('workspace sessions routes — agent persona', () => {
     expect(resp.status).toBe(202)
     expect(depsUnderTest.codingAgentRunner.startRun).toHaveBeenCalledTimes(1)
     expect(spyRunLoop).not.toHaveBeenCalled()
+  })
+
+  it('dedupes consecutive identical messages in session detail responses', async () => {
+    const sessionId = 'ses_dedupe'
+    const timestamp = new Date(0).toISOString()
+    const basePart = { id: 'prt_a', type: 'text', text: 'hello', start: null, end: null }
+    const baseMessage = {
+      id: 'msg_a',
+      role: 'assistant',
+      createdAt: timestamp,
+      completedAt: timestamp,
+      modelId: 'm',
+      providerId: 'p',
+      text: '',
+      parts: [basePart]
+    }
+    const detail: CodingAgentSessionDetail = {
+      session: {
+        id: sessionId,
+        title: 'Dedup',
+        workspacePath: '/tmp/dedup',
+        projectId: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        summary: { additions: 0, deletions: 0, files: 0 }
+      },
+      messages: [
+        baseMessage,
+        { ...baseMessage, id: 'msg_b', parts: [{ ...basePart, id: 'prt_b' }] },
+        { ...baseMessage, id: 'msg_c', parts: [{ ...basePart, id: 'prt_c', text: 'updated' }] }
+      ]
+    }
+
+    const storageMock = {
+      listSessions: vi.fn(async () => []),
+      getSession: vi.fn(async () => detail)
+    }
+    const runnerMock = {
+      startRun: vi.fn(async () => ({ sessionId: 'fallback', pid: -1 })),
+      listRuns: vi.fn(async () => []),
+      getRun: vi.fn(async () => null),
+      killRun: vi.fn(async () => false)
+    }
+    const deps = makeDeps({ codingAgentStorage: storageMock, codingAgentRunner: runnerMock })
+    const router = createWorkspaceSessionsRouter(deps)
+    const localApp = express()
+    localApp.use(router)
+
+    const resp = await request(localApp).get(`/api/coding-agent/sessions/${sessionId}`)
+    expect(resp.status).toBe(200)
+    expect(resp.body.messages).toHaveLength(2)
+    expect(resp.body.messages[0].id).toBe('msg_a')
+    expect(resp.body.messages[1].id).toBe('msg_c')
   })
 })

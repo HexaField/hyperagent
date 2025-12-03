@@ -7,6 +7,7 @@ import type { CodingAgentRunner, CodingAgentStorage } from '../../../../src/modu
 import { runProviderInvocation } from '../../../../src/modules/providerRunner'
 import { getProviderAdapter, listProviders } from '../../../../src/modules/providers'
 import type {
+  CodingAgentMessage,
   CodingAgentProvider,
   CodingAgentProviderListResponse,
   CodingAgentRunListResponse,
@@ -34,6 +35,47 @@ const MULTI_AGENT_PERSONA_ID = 'multi-agent'
 const MULTI_AGENT_PROVIDER_ID = 'multi-agent'
 
 type WrapAsync = (handler: RequestHandler) => RequestHandler
+
+const dedupeSequentialMessages = (messages: CodingAgentMessage[]): CodingAgentMessage[] => {
+  if (!Array.isArray(messages) || messages.length <= 1) return messages ?? []
+  const result: CodingAgentMessage[] = []
+  let previousSignature: string | null = null
+  for (const message of messages) {
+    const signature = buildMessageSignature(message)
+    if (previousSignature && signature === previousSignature) {
+      continue
+    }
+    result.push(message)
+    previousSignature = signature
+  }
+  return result
+}
+
+const buildMessageSignature = (message: CodingAgentMessage): string => {
+  try {
+    return JSON.stringify({
+      role: message.role,
+      text: message.text,
+      completedAt: message.completedAt,
+      modelId: message.modelId,
+      providerId: message.providerId,
+      parts: simplifyPartsForSignature(message.parts)
+    })
+  } catch {
+    return `${message.id ?? ''}:${message.role ?? ''}:${message.completedAt ?? ''}:${message.text ?? ''}:${
+      message.parts?.length ?? 0
+    }`
+  }
+}
+
+const simplifyPartsForSignature = (parts: CodingAgentMessage['parts']): unknown[] => {
+  if (!Array.isArray(parts)) return []
+  return parts.map((part) => {
+    if (!part || typeof part !== 'object') return part
+    const { id: _id, messageID: _messageID, sessionID: _sessionID, ...rest } = part as Record<string, unknown>
+    return rest
+  })
+}
 
 export type WorkspaceSessionsDeps = {
   wrapAsync: WrapAsync
@@ -473,11 +515,13 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
         res.status(404).json({ error: 'Unknown session' })
         return
       }
+      const normalizedMessages = dedupeSequentialMessages(detail.messages ?? [])
       const run = await codingAgentRunner.getRun(sessionId)
       const providerId = run?.providerId ?? detail.session.providerId ?? null
       const modelId = run?.model ?? detail.session.modelId ?? null
       res.json({
         ...detail,
+        messages: normalizedMessages,
         session: {
           ...detail.session,
           providerId,
