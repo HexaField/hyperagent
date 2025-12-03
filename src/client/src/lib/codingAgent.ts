@@ -79,7 +79,13 @@ export type PersonaSummary = {
   permission?: Record<string, unknown>
   updatedAt: string
 }
-export type PersonaDetail = { id: string; markdown: string; frontmatter: Record<string, unknown>; body: string; updatedAt: string }
+export type PersonaDetail = {
+  id: string
+  markdown: string
+  frontmatter: Record<string, unknown>
+  body: string
+  updatedAt: string
+}
 
 export async function fetchCodingAgentPersonas(): Promise<PersonaSummary[]> {
   try {

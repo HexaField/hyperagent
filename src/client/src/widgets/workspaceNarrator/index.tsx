@@ -285,9 +285,7 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
       <Show when={showRawLog()}>
         <section class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
           <h3 class="text-sm font-semibold text-[var(--text)]">Raw narrator stream</h3>
-          <Show when={rawLogError()}>
-            {(message) => <p class="mt-2 text-xs text-red-500">{message()}</p>}
-          </Show>
+          <Show when={rawLogError()}>{(message) => <p class="mt-2 text-xs text-red-500">{message()}</p>}</Show>
           <Show when={rawLogLoading()}>
             <p class="mt-2 text-xs text-[var(--text-muted)]">Loading raw narrator stream…</p>
           </Show>

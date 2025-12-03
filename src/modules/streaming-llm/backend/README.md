@@ -16,6 +16,7 @@ This document captures the Phase 1 inventory for the StreamingLLM sidecar backen
 Plain-text summary: `GET /healthz`, `GET /agents`, `GET /agents/{id}`, `PUT /agents/{id}`, `DELETE /agents/{id}`, `WS /ws/chat`.
 
 ### WebSocket Event Semantics
+
 - `token`: `{ "type": "token", "token": string, "conversation_id"?: string }` emitted for each generated token.
 - `done`: `{ "type": "done", "conversation_id"?: string }` marks completion; socket stays open for additional turns until the client disconnects.
 - `error`: `{ "type": "error", "message": string }` followed by socket close.
@@ -24,11 +25,11 @@ Clients should preserve the latest `conversation_id` returned in either `token` 
 
 ## Pydantic Models
 
-| Model | Shape |
-| --- | --- |
-| `AgentPayload` | `{ id: string, name: string, system_prompt: string, markdown_context: string }` |
-| `AgentUpdateRequest` | `{ name: string, system_prompt: string, markdown_context: string }` |
-| `AgentListResponse` | `{ agents: AgentPayload[] }` |
+| Model                | Shape                                                                           |
+| -------------------- | ------------------------------------------------------------------------------- |
+| `AgentPayload`       | `{ id: string, name: string, system_prompt: string, markdown_context: string }` |
+| `AgentUpdateRequest` | `{ name: string, system_prompt: string, markdown_context: string }`             |
+| `AgentListResponse`  | `{ agents: AgentPayload[] }`                                                    |
 
 ## Settings & Environment Variables
 
@@ -46,5 +47,6 @@ These environment variables feed `backend/settings.py`:
 | `STREAMING_LLM_PORT` | `8000` | (Operational) Port used when running `uvicorn backend.server:app`. |
 
 ## Development Notes
+
 - Run `uvicorn backend.server:app --host 0.0.0.0 --port ${STREAMING_LLM_PORT}` to launch the sidecar.
 - Agent fixtures live under `.agents-test/` for integration tests; the `AgentStore` seeds defaults when empty.

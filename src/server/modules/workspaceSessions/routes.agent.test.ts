@@ -1,13 +1,13 @@
 import express from 'express'
-import request from 'supertest'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest'
+import request from 'supertest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as agentModule from '../../../../src/modules/agent'
 import { createOpencodeStorage, type OpencodeStorage } from '../../../../src/modules/opencodeStorage'
 
 let createWorkspaceSessionsRouter: any
-import * as agentModule from '../../../../src/modules/agent'
 
 // Minimal mocked dependencies
 const wrapAsync = (h: any) => h
@@ -25,9 +25,11 @@ function makeDeps(overrides: any = {}) {
     codingAgentRunner: overrides.codingAgentRunner ?? defaultRunner,
     codingAgentStorage: overrides.codingAgentStorage ?? defaultStorage,
     codingAgentCommandRunner: overrides.codingAgentCommandRunner ?? (async () => ({})),
-    ensureWorkspaceDirectory: overrides.ensureWorkspaceDirectory ?? (async (dir: string) => {
-      await fs.mkdir(dir, { recursive: true })
-    })
+    ensureWorkspaceDirectory:
+      overrides.ensureWorkspaceDirectory ??
+      (async (dir: string) => {
+        await fs.mkdir(dir, { recursive: true })
+      })
   }
 }
 
@@ -75,7 +77,14 @@ describe('workspace sessions routes — agent persona', () => {
     spyRunLoop = vi.spyOn(agentModule, 'runVerifierWorkerLoop').mockImplementation(async (opts: any) => {
       if (opts?.onStream && typeof opts.onStream === 'function') {
         opts.onStream({ role: 'worker', round: 1, chunk: workerChunk, provider: 'opencode', model: 'm', attempt: 1 })
-        opts.onStream({ role: 'verifier', round: 1, chunk: verifierChunk, provider: 'opencode', model: 'm', attempt: 1 })
+        opts.onStream({
+          role: 'verifier',
+          round: 1,
+          chunk: verifierChunk,
+          provider: 'opencode',
+          model: 'm',
+          attempt: 1
+        })
       }
       return {
         outcome: 'approved',
@@ -147,7 +156,9 @@ describe('workspace sessions routes — agent persona', () => {
     const workerMessage = await waitForStoredMessage(sessionId, 'worker')
     expect(workerMessage, 'expected worker stream message').toBeTruthy()
     expect(workerMessage?.parts[0]?.type).toBe('text')
-    expect(workerMessage?.parts[0]?.text).toBe('Status: working\n\nPlan:\n1. Scan repo\n2. Update files\n\nWork:\nUpdated README with latest instructions.')
+    expect(workerMessage?.parts[0]?.text).toBe(
+      'Status: working\n\nPlan:\n1. Scan repo\n2. Update files\n\nWork:\nUpdated README with latest instructions.'
+    )
 
     const verifierMessage = await waitForStoredMessage(sessionId, 'verifier')
     expect(verifierMessage, 'expected verifier stream message').toBeTruthy()
@@ -168,4 +179,3 @@ describe('workspace sessions routes — agent persona', () => {
     expect(spyRunLoop).not.toHaveBeenCalled()
   })
 })
-

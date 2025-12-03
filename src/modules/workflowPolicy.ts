@@ -59,7 +59,9 @@ export const createWorkflowPolicyFromEnv = (env: NodeJS.ProcessEnv, config: EnvC
     authorizeStep: async ({ branchInfo, workflow }) => {
       const normalizedBranch = branchInfo.name.toLowerCase()
       const normalizedBase = branchInfo.baseBranch.toLowerCase()
-      const branchIsProtected = protectedBranches.some((entry) => entry === normalizedBranch || entry === normalizedBase)
+      const branchIsProtected = protectedBranches.some(
+        (entry) => entry === normalizedBranch || entry === normalizedBase
+      )
       if (!branchIsProtected) {
         return {
           allowed: true,

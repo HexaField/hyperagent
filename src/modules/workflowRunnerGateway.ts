@@ -281,11 +281,7 @@ async function runDockerCommand(
       })
     }
 
-    const processChunk = (
-      buffer: string,
-      chunk: Buffer,
-      stream: 'stdout' | 'stderr'
-    ): string => {
+    const processChunk = (buffer: string, chunk: Buffer, stream: 'stdout' | 'stderr'): string => {
       buffer += chunk.toString()
       let newlineIndex = buffer.indexOf('\n')
       while (newlineIndex >= 0) {

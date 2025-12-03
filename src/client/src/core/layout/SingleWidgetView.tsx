@@ -1,7 +1,7 @@
 import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import ThemeToggle from '../../components/ThemeToggle'
-import HeaderWidgetMenu from './HeaderWidgetMenu'
 import type { CanvasWidgetConfig } from './CanvasWorkspace'
+import HeaderWidgetMenu from './HeaderWidgetMenu'
 
 export type SingleWidgetViewProps = {
   storageKey: string

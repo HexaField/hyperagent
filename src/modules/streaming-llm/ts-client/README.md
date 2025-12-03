@@ -39,13 +39,16 @@ handle.sendMessage({ message: 'Summarize the repo in one sentence.' })
 ```
 
 ### Using `socketFactory`
+
 - Browsers automatically supply `window.WebSocket`, so you can omit `socketFactory`.
 - In Node.js (tests, CLIs, SSR) pass a factory that returns a `WebSocket` compatible client—`ws` is what the repo uses internally.
 - The SDK buffers messages while the socket connects and reuses `conversationId` across turns, so you can call `handle.sendMessage` multiple times before invoking `handle.stop()`.
 
 ## Error Handling
+
 - REST helpers throw with the raw text body when the response code is not `2xx`.
 - `streamChat` raises if the socket closes before `onopen` fires or when `sendMessage` is invoked after `stop()`.
 
 ## Testing
+
 Run `npm run test:streaming-llm` from the package root to execute both the unit and integration suites (which spawn the FastAPI backend automatically when `STREAMING_LLM_TEST_BACKEND_URL` is not set).

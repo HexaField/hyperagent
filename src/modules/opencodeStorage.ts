@@ -389,8 +389,10 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
       extractSnapshotHash(raw)
     if (!snapshotHash) return
     if (hasMeaningfulStepText(part.text, snapshotHash)) return
-    const stage: SnapshotStage = part.type === 'step-start' ? 'start' : part.type === 'step-finish' ? 'finish' : 'unknown'
-    const actor = ctx.actor ??
+    const stage: SnapshotStage =
+      part.type === 'step-start' ? 'start' : part.type === 'step-finish' ? 'finish' : 'unknown'
+    const actor =
+      ctx.actor ??
       normalizeActorRole((raw as any)?.role) ??
       normalizeActorRole((raw as any)?.actor) ??
       normalizeActorRole((raw as any)?.agent)
@@ -458,10 +460,20 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
     if (!normalizedType) return null
     const text = extractStepEventText(parsed) ?? buildStepFallbackText(parsed)
     const start = coerceIsoOrNull(
-      parsed.time?.start ?? parsed.startedAt ?? parsed.timestamp ?? parsed.time ?? parsed.part?.time?.start ?? parsed.part?.start
+      parsed.time?.start ??
+        parsed.startedAt ??
+        parsed.timestamp ??
+        parsed.time ??
+        parsed.part?.time?.start ??
+        parsed.part?.start
     )
     const end = coerceIsoOrNull(
-      parsed.time?.end ?? parsed.completedAt ?? parsed.timestamp ?? parsed.time ?? parsed.part?.time?.end ?? parsed.part?.end
+      parsed.time?.end ??
+        parsed.completedAt ??
+        parsed.timestamp ??
+        parsed.time ??
+        parsed.part?.time?.end ??
+        parsed.part?.end
     )
     const snapshot = extractSnapshotHash(parsed)
     return { type: normalizedType, text, start, end, snapshot }
@@ -540,7 +552,7 @@ export function createOpencodeStorage(options: StorageOptions = {}): OpencodeSto
       if (depth >= MAX_DEPTH) continue
       if (Array.isArray(value)) {
         for (const entry of value) {
-          if (entry && (typeof entry === 'object')) {
+          if (entry && typeof entry === 'object') {
             queue.push({ value: entry, depth: depth + 1 })
           }
         }
@@ -897,7 +909,10 @@ class SnapshotGitResolver implements SnapshotResolver {
     return null
   }
 
-  private async resolveLogTree(meta: SnapshotRepoMeta, treeHash: string): Promise<{ logTreeHash: string; prefix: string | null }> {
+  private async resolveLogTree(
+    meta: SnapshotRepoMeta,
+    treeHash: string
+  ): Promise<{ logTreeHash: string; prefix: string | null }> {
     const hyperTreeHash = await this.lookupTree(meta, treeHash, '.hyperagent')
     if (hyperTreeHash) {
       return { logTreeHash: hyperTreeHash, prefix: '.hyperagent' }
@@ -908,7 +923,10 @@ class SnapshotGitResolver implements SnapshotResolver {
   private async lookupTree(meta: SnapshotRepoMeta, treeHash: string, subPath: string): Promise<string | null> {
     try {
       const output = await this.runGit(meta.repoPath, ['ls-tree', treeHash, subPath])
-      const entry = output.split('\n').map((line) => line.trim()).filter(Boolean)[0]
+      const entry = output
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)[0]
       if (!entry) return null
       const parts = entry.split(/\s+/)
       if (parts.length < 3 || parts[1] !== 'tree') return null
@@ -936,7 +954,12 @@ class SnapshotGitResolver implements SnapshotResolver {
     }
   }
 
-  private async readLogEntries(meta: SnapshotRepoMeta, treeHash: string, entries: SnapshotTreeEntry[], prefix: string | null) {
+  private async readLogEntries(
+    meta: SnapshotRepoMeta,
+    treeHash: string,
+    entries: SnapshotTreeEntry[],
+    prefix: string | null
+  ) {
     const results: any[] = []
     for (const entry of entries) {
       const relPath = prefix ? path.posix.join(prefix, entry.name) : entry.name
@@ -967,16 +990,18 @@ function extractWorktree(config: string): string | null {
 
 function buildLogSummary(entries: any[], formatter: (entry: any) => string | null): SnapshotLogSummary | undefined {
   if (!entries || entries.length === 0) return undefined
-  const sorted = entries
-    .slice()
-    .sort((a, b) => {
-      const aTime = Date.parse(a?.createdAt ?? '') || 0
-      const bTime = Date.parse(b?.createdAt ?? '') || 0
-      return aTime - bTime
-    })
+  const sorted = entries.slice().sort((a, b) => {
+    const aTime = Date.parse(a?.createdAt ?? '') || 0
+    const bTime = Date.parse(b?.createdAt ?? '') || 0
+    return aTime - bTime
+  })
   const startText = formatter(sorted[0])
   const finishText = formatter(sorted[sorted.length - 1])
-  const anyText = finishText ?? startText ?? sorted.map((entry) => formatter(entry)).find((value): value is string => Boolean(value)) ?? null
+  const anyText =
+    finishText ??
+    startText ??
+    sorted.map((entry) => formatter(entry)).find((value): value is string => Boolean(value)) ??
+    null
   return { startText, finishText, anyText }
 }
 

@@ -527,12 +527,22 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
           }
         }
 
-        emit({ type: 'start', level: 'info', message: 'Create from template started', templateId, path: requestPathRaw ?? null })
+        emit({
+          type: 'start',
+          level: 'info',
+          message: 'Create from template started',
+          templateId,
+          path: requestPathRaw ?? null
+        })
 
         const templateDir = path.resolve(process.cwd(), 'templates', templateId.trim())
         const targetPathRaw = requestPathRaw
         if (!targetPathRaw) {
-          emit({ type: 'error', level: 'error', message: 'repositoryPath (or path) is required when creating from template' })
+          emit({
+            type: 'error',
+            level: 'error',
+            message: 'repositoryPath (or path) is required when creating from template'
+          })
           res.end()
           return
         }
@@ -587,15 +597,23 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
           try {
             await new Promise<void>((resolve, reject) => {
               const child = spawn('git', ['clone', cloneUrl, targetPath], { stdio: ['ignore', 'pipe', 'pipe'] })
-              child.stdout?.on('data', (chunk) => emit({ type: 'stdout', level: 'info', chunk: String(chunk), message: String(chunk) }))
-              child.stderr?.on('data', (chunk) => emit({ type: 'stderr', level: 'warn', chunk: String(chunk), message: String(chunk) }))
+              child.stdout?.on('data', (chunk) =>
+                emit({ type: 'stdout', level: 'info', chunk: String(chunk), message: String(chunk) })
+              )
+              child.stderr?.on('data', (chunk) =>
+                emit({ type: 'stderr', level: 'warn', chunk: String(chunk), message: String(chunk) })
+              )
               child.once('error', reject)
               child.once('close', (code) =>
                 code === 0 ? resolve() : reject(new Error(`git clone failed with ${code}`))
               )
             })
           } catch (err) {
-            emit({ type: 'error', level: 'error', message: `Failed to clone template url: ${err instanceof Error ? err.message : String(err)}` })
+            emit({
+              type: 'error',
+              level: 'error',
+              message: `Failed to clone template url: ${err instanceof Error ? err.message : String(err)}`
+            })
             res.end()
             return
           }
@@ -626,8 +644,12 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
             try {
               await new Promise<void>((resolve, reject) => {
                 const child = spawn(cmd, { shell: true, cwd: targetPath, env: process.env })
-                child.stdout?.on('data', (chunk) => emit({ type: 'stdout', level: 'info', chunk: String(chunk), message: String(chunk) }))
-                child.stderr?.on('data', (chunk) => emit({ type: 'stderr', level: 'warn', chunk: String(chunk), message: String(chunk) }))
+                child.stdout?.on('data', (chunk) =>
+                  emit({ type: 'stdout', level: 'info', chunk: String(chunk), message: String(chunk) })
+                )
+                child.stderr?.on('data', (chunk) =>
+                  emit({ type: 'stderr', level: 'warn', chunk: String(chunk), message: String(chunk) })
+                )
                 child.once('error', (err2) => reject(err2))
                 child.once('close', (code) => {
                   if (code === 0) resolve()
@@ -635,7 +657,11 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
                 })
               })
             } catch (err) {
-              emit({ type: 'error', level: 'error', message: `Setup command failed: ${err instanceof Error ? err.message : String(err)}` })
+              emit({
+                type: 'error',
+                level: 'error',
+                message: `Setup command failed: ${err instanceof Error ? err.message : String(err)}`
+              })
               res.end()
               return
             }
@@ -675,7 +701,11 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
               )
               emit({ type: 'info', level: 'info', message: 'Initial commit created' })
             } catch (commitErr) {
-              emit({ type: 'error', level: 'error', message: `Failed to create initial commit: ${commitErr instanceof Error ? commitErr.message : String(commitErr)}` })
+              emit({
+                type: 'error',
+                level: 'error',
+                message: `Failed to create initial commit: ${commitErr instanceof Error ? commitErr.message : String(commitErr)}`
+              })
               res.end()
               return
             }
@@ -683,7 +713,11 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
             emit({ type: 'info', level: 'info', message: 'Repository already has commits' })
           }
         } catch (err) {
-          emit({ type: 'error', level: 'error', message: `Git initialization failed: ${err instanceof Error ? err.message : String(err)}` })
+          emit({
+            type: 'error',
+            level: 'error',
+            message: `Git initialization failed: ${err instanceof Error ? err.message : String(err)}`
+          })
           res.end()
           return
         }
@@ -695,7 +729,8 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
           let normalizedName = rawName.replace(/[^A-Za-z0-9._-]+/g, '-')
           normalizedName = normalizedName.replace(/^[._-]+|[._-]+$/g, '')
           if (!normalizedName.length) normalizedName = rawName
-          if (normalizedName !== rawName) emit({ type: 'info', level: 'info', message: `Template name sanitized to '${normalizedName}'` })
+          if (normalizedName !== rawName)
+            emit({ type: 'info', level: 'info', message: `Template name sanitized to '${normalizedName}'` })
 
           const registration = await radicleModule.registerRepository({
             repositoryPath: targetPath,
@@ -716,11 +751,21 @@ export const createWorkspaceSummaryRouter = (deps: WorkspaceSummaryDeps) => {
             console.warn('Failed to persist radicle registration', { error: err })
           }
 
-          emit({ type: 'done', level: 'info', message: 'Template creation complete', repository: registration, repositoryName: normalizedName })
+          emit({
+            type: 'done',
+            level: 'info',
+            message: 'Template creation complete',
+            repository: registration,
+            repositoryName: normalizedName
+          })
           res.end()
           return
         } catch (err) {
-          emit({ type: 'error', level: 'error', message: `Radicle registration_failed: ${err instanceof Error ? err.message : String(err)}` })
+          emit({
+            type: 'error',
+            level: 'error',
+            message: `Radicle registration_failed: ${err instanceof Error ? err.message : String(err)}`
+          })
           res.end()
           return
         }

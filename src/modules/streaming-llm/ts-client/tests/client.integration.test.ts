@@ -1,8 +1,8 @@
-import { beforeAll, afterAll, describe, expect, it } from 'vitest'
-import NodeWebSocket from 'ws'
-import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
+import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import NodeWebSocket from 'ws'
 
 import { listAgents, streamChat, type Agent, type ChatEvent } from '../src'
 
@@ -26,15 +26,7 @@ beforeAll(async () => {
   if (!process.env.STREAMING_LLM_TEST_BACKEND_URL) {
     backendProcess = spawn(
       process.env.STREAMING_LLM_TEST_PYTHON || 'python3',
-      [
-        '-m',
-        'uvicorn',
-        'backend.server:app',
-        '--host',
-        '127.0.0.1',
-        '--port',
-        '38080'
-      ],
+      ['-m', 'uvicorn', 'backend.server:app', '--host', '127.0.0.1', '--port', '38080'],
       {
         cwd: moduleRoot,
         env: {
@@ -72,96 +64,88 @@ describe('streaming-llm TypeScript client – integration', () => {
     expect(agents.some((agent) => agent.id === 'planner')).toBe(true)
   })
 
-  it(
-    'streams tokens from the backend using a real LLM',
-    async () => {
-      const primary = agents[0]
-      const events: ChatEvent[] = []
-      const tokens: string[] = []
-      const done = deferred<string | undefined>()
+  it('streams tokens from the backend using a real LLM', async () => {
+    const primary = agents[0]
+    const events: ChatEvent[] = []
+    const tokens: string[] = []
+    const done = deferred<string | undefined>()
 
-      const handle = await streamChat({
-        backendUrl: backendWsUrl,
-        agentId: primary.id,
-        options: { maxNewTokens, temperature: 0 },
-        onEvent: (event) => {
-          events.push(event)
-          if (event.type === 'token') {
-            tokens.push(event.token)
-          }
-          if (event.type === 'error') {
-            done.reject(new Error(event.message))
-          }
-          if (event.type === 'done') {
-            done.resolve(event.conversationId)
-          }
+    const handle = await streamChat({
+      backendUrl: backendWsUrl,
+      agentId: primary.id,
+      options: { maxNewTokens, temperature: 0 },
+      onEvent: (event) => {
+        events.push(event)
+        if (event.type === 'token') {
+          tokens.push(event.token)
         }
-      })
-
-      handle.sendMessage({ message: 'Respond with a single concise sentence.' })
-      const conversationId = await done.promise
-      handle.stop()
-
-      expect(conversationId).toBeDefined()
-      expect(tokens.join('').trim().length).toBeGreaterThan(0)
-      expect(events.some((event) => event.type === 'token')).toBe(true)
-      const lastEvent = events.length ? events[events.length - 1] : undefined
-      expect(lastEvent?.type).toBe('done')
-    },
-    120_000
-  )
-
-  it(
-    'supports multi-turn chat on a single socket',
-    async () => {
-      const primary = agents[0]
-      const doneIds: Array<string | undefined> = []
-      const errors: Error[] = []
-      const tokenCounts: number[] = []
-      let tokenCounter = 0
-      const tokens = []
-
-      const handle = await streamChat({
-        backendUrl: backendWsUrl,
-        agentId: primary.id,
-        options: { maxNewTokens, temperature: 0.1 },
-        onEvent: (event) => {
-          if (event.type === 'token') {
-            tokenCounter += 1
-            tokens.push(event.token)
-          }
-          if (event.type === 'done') {
-            doneIds.push(event.conversationId)
-            tokenCounts.push(tokenCounter)
-            tokenCounter = 0
-          }
-          if (event.type === 'error') {
-            errors.push(new Error(event.message))
-          }
+        if (event.type === 'error') {
+          done.reject(new Error(event.message))
         }
-      })
-
-      handle.sendMessage({ message: 'Give me one-sentence summary of the Hyperagent project.' })
-      await waitFor(() => doneIds.length >= 1, 60_000)
-      if (errors.length) {
-        throw errors[0]
+        if (event.type === 'done') {
+          done.resolve(event.conversationId)
+        }
       }
+    })
 
-      handle.sendMessage({ message: 'Now acknowledge that previous answer in two words.' })
-      await waitFor(() => doneIds.length >= 2, 60_000)
-      if (errors.length) {
-        throw errors[0]
+    handle.sendMessage({ message: 'Respond with a single concise sentence.' })
+    const conversationId = await done.promise
+    handle.stop()
+
+    expect(conversationId).toBeDefined()
+    expect(tokens.join('').trim().length).toBeGreaterThan(0)
+    expect(events.some((event) => event.type === 'token')).toBe(true)
+    const lastEvent = events.length ? events[events.length - 1] : undefined
+    expect(lastEvent?.type).toBe('done')
+  }, 120_000)
+
+  it('supports multi-turn chat on a single socket', async () => {
+    const primary = agents[0]
+    const doneIds: Array<string | undefined> = []
+    const errors: Error[] = []
+    const tokenCounts: number[] = []
+    let tokenCounter = 0
+    const tokens = []
+
+    const handle = await streamChat({
+      backendUrl: backendWsUrl,
+      agentId: primary.id,
+      options: { maxNewTokens, temperature: 0.1 },
+      onEvent: (event) => {
+        if (event.type === 'token') {
+          tokenCounter += 1
+          tokens.push(event.token)
+        }
+        if (event.type === 'done') {
+          doneIds.push(event.conversationId)
+          tokenCounts.push(tokenCounter)
+          tokenCounter = 0
+        }
+        if (event.type === 'error') {
+          errors.push(new Error(event.message))
+        }
       }
+    })
 
-      handle.stop()
+    handle.sendMessage({ message: 'Give me one-sentence summary of the Hyperagent project.' })
+    await waitFor(() => doneIds.length >= 1, 60_000)
+    if (errors.length) {
+      throw errors[0]
+    }
 
-      expect(doneIds[0]).toBeDefined()
-      expect(doneIds[1]).toBe(doneIds[0])
-      expect(tokenCounts[0]).toBeGreaterThan(0)
-      expect(tokenCounts[1]).toBeGreaterThan(0)
-    },
-    120_000
-  )
+    handle.sendMessage({ message: 'Now acknowledge that previous answer in two words.' })
+    await waitFor(() => doneIds.length >= 2, 60_000)
+    if (errors.length) {
+      throw errors[0]
+    }
+
+    handle.stop()
+
+    expect(doneIds[0]).toBeDefined()
+    expect(doneIds[1]).toBe(doneIds[0])
+    expect(tokenCounts[0]).toBeGreaterThan(0)
+    expect(tokenCounts[1]).toBeGreaterThan(0)
+  }, 120_000)
 
   it('throws when sending after the socket has been stopped', async () => {
     const primary = agents[0]
@@ -181,9 +165,9 @@ describe('streaming-llm TypeScript client – integration', () => {
     await waitFor(() => doneIds.length >= 1, 60_000)
     handle.stop()
 
-    expect(() =>
-      handle.sendMessage({ message: 'This should fail because the socket is closed.' })
-    ).toThrow('Cannot send message: socket already closed')
+    expect(() => handle.sendMessage({ message: 'This should fail because the socket is closed.' })).toThrow(
+      'Cannot send message: socket already closed'
+    )
   })
 })
 

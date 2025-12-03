@@ -1,10 +1,5 @@
-import {
-  appendLogEntry,
-  loadSessionMeta,
-  outClean,
-  runCLI
-} from '../../llm.shared'
 import type { ProviderAdapter, ProviderInvocationContext } from '..'
+import { appendLogEntry, loadSessionMeta, outClean, runCLI } from '../../llm.shared'
 import { registerProvider } from '../registry'
 
 async function invokeGoose(ctx: ProviderInvocationContext): Promise<string> {

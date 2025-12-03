@@ -65,9 +65,7 @@ export default function HeaderWidgetMenu(props: HeaderWidgetMenuProps) {
                 >
                   <div class="flex items-center justify-between gap-2">
                     <span class="font-medium">{workspace.name}</span>
-                    {isActive() && (
-                      <span class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Active</span>
-                    )}
+                    {isActive() && <span class="text-xs uppercase tracking-wide text-[var(--text-muted)]">Active</span>}
                   </div>
                   {workspace.repositoryPath && (
                     <p class="text-xs text-[var(--text-muted)]">{workspace.repositoryPath}</p>
@@ -89,9 +87,7 @@ export default function HeaderWidgetMenu(props: HeaderWidgetMenuProps) {
                 onClick={() => handleWidgetSelect(template.id)}
               >
                 <p class="font-medium">{template.label}</p>
-                {template.description && (
-                  <p class="text-xs text-[var(--text-muted)]">{template.description}</p>
-                )}
+                {template.description && <p class="text-xs text-[var(--text-muted)]">{template.description}</p>}
               </button>
             )}
           </For>

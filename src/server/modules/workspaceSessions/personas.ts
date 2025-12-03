@@ -184,7 +184,11 @@ export async function seedDefaultPersonas(): Promise<void> {
       const existing = await readPersona(def.id)
       if (!existing) {
         // defensively strip an outer fenced-code block (some fixtures include ```markdown)
-        const sanitize = (m: string) => m.replace(/^\s*```(?:markdown)?\s*\n/, '').replace(/\n\s*```\s*$/,'').trim()
+        const sanitize = (m: string) =>
+          m
+            .replace(/^\s*```(?:markdown)?\s*\n/, '')
+            .replace(/\n\s*```\s*$/, '')
+            .trim()
         const markdown = sanitize(def.markdown)
         await writePersona(def.id, markdown)
       }

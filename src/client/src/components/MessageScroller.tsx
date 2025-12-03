@@ -103,9 +103,7 @@ const CollapsibleSection = (props: { title: string; defaultOpen?: boolean; child
           <path fill="currentColor" d="M9 6l6 6-6 6" />
         </svg>
       </summary>
-      <div class="border-t border-[var(--border)] px-3 py-2">
-        {props.children}
-      </div>
+      <div class="border-t border-[var(--border)] px-3 py-2">{props.children}</div>
     </details>
   )
 }
@@ -168,9 +166,7 @@ const renderStructuredSections = (body: string | null, role?: string | null): JS
     if (!hasAnySection) continue
     return (
       <div class="space-y-2">
-        {extraction.prefix ? (
-          <p class="whitespace-pre-wrap text-sm text-[var(--text)]">{extraction.prefix}</p>
-        ) : null}
+        {extraction.prefix ? <p class="whitespace-pre-wrap text-sm text-[var(--text)]">{extraction.prefix}</p> : null}
         <For each={config.labels}>
           {(label) => {
             const content = extraction.sections[label]

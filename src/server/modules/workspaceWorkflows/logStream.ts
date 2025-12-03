@@ -1,5 +1,9 @@
+import type {
+  WorkflowAgentLogEntry,
+  WorkflowLogEntry,
+  WorkflowRunnerLogEntry
+} from '../../../interfaces/workflows/logs'
 import type { AgentStreamEvent } from '../../../modules/agent'
-import type { WorkflowAgentLogEntry, WorkflowLogEntry, WorkflowRunnerLogEntry } from '../../../interfaces/workflows/logs'
 
 const AGENT_STREAM_PREFIX = '[agent-stream]'
 const MAX_EVENTS_PER_WORKFLOW = 1000

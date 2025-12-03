@@ -1,5 +1,5 @@
-import { spawnSync } from 'node:child_process'
 import fs from 'fs/promises'
+import { spawnSync } from 'node:child_process'
 import os from 'os'
 import path from 'path'
 import type { CommitResult, RadicleModule } from './types'
@@ -14,10 +14,7 @@ const defaultMakeTempDir: TempDirFactory = async (prefix) => {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix))
 }
 
-export function createTestRadicleModule(
-  repoPath: string,
-  options: TestRadicleModuleOptions = {}
-): RadicleModule {
+export function createTestRadicleModule(repoPath: string, options: TestRadicleModuleOptions = {}): RadicleModule {
   const activeWorkspaces = new Map<string, string>()
   const makeTempDir = options.makeTempDir ?? defaultMakeTempDir
 
@@ -42,7 +39,10 @@ export function createTestRadicleModule(
       const start = async () => {
         if (workspaceInfo) return workspaceInfo
         await fs.mkdir(workspaceRoot, { recursive: true })
-        runGitCommand(['worktree', 'add', '-B', init.branchInfo.name, workspacePath, init.branchInfo.baseBranch], repoPath)
+        runGitCommand(
+          ['worktree', 'add', '-B', init.branchInfo.name, workspacePath, init.branchInfo.baseBranch],
+          repoPath
+        )
         workspaceInfo = {
           workspacePath,
           branchName: init.branchInfo.name,

@@ -110,14 +110,16 @@ export type AgentStreamCallback = (event: AgentStreamEvent) => void
 const PROVIDER_SESSION_PREFIX = 'ses'
 
 const sanitizeSessionSegment = (value: string): string => {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .replace(/-{2,}/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .trim() || 'session'
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .replace(/-{2,}/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .trim() || 'session'
+  )
 }
 
 const ensureProviderSessionId = (candidate: string | undefined, role: string): string => {

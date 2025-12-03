@@ -62,7 +62,13 @@ describe('coding agent client helpers', () => {
   it('manages personas via the API', async () => {
     // list
     fetchJsonMock.mockResolvedValue({ personas: [{ id: 'p1', label: 'P1', updatedAt: 'now' }] })
-    const { fetchCodingAgentPersonas, getCodingAgentPersona, createCodingAgentPersona, updateCodingAgentPersona, deleteCodingAgentPersona } = await import('./codingAgent')
+    const {
+      fetchCodingAgentPersonas,
+      getCodingAgentPersona,
+      createCodingAgentPersona,
+      updateCodingAgentPersona,
+      deleteCodingAgentPersona
+    } = await import('./codingAgent')
     const list = await fetchCodingAgentPersonas()
     expect(list.length).toBeGreaterThan(0)
 

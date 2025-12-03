@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
-import fs from 'fs/promises'
 import crypto from 'crypto'
+import fs from 'fs/promises'
 import path from 'path'
 import type { AgentRunRecord, AgentRunsRepository } from './agent'
 import type { PersistenceContext, PersistenceModule, Timestamp } from './database'
@@ -12,9 +12,9 @@ import type {
   WorkspaceInfo as RadicleWorkspaceInfo
 } from './radicle/types'
 import type { PullRequestModule } from './review/pullRequest'
-import type { WorkflowRunnerGateway } from './workflowRunnerGateway'
-import { allowAllWorkflowPolicy, type WorkflowPolicy, type WorkflowPolicyDecision } from './workflowPolicy'
 import { createAgentWorkflowExecutor, type AgentWorkflowExecutorOptions } from './workflowAgentExecutor'
+import { allowAllWorkflowPolicy, type WorkflowPolicy, type WorkflowPolicyDecision } from './workflowPolicy'
+import type { WorkflowRunnerGateway } from './workflowRunnerGateway'
 
 export type WorkflowStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
 export type WorkflowKind = 'new_project' | 'refactor' | 'bugfix' | 'custom'
@@ -78,9 +78,7 @@ export type WorkflowStepsRepository = {
   claim: (stepId: string) => boolean
   update: (
     stepId: string,
-    patch: Partial<
-      Pick<WorkflowStepRecord, 'status' | 'result' | 'runnerInstanceId' | 'runnerAttempts' | 'readyAt'>
-    >
+    patch: Partial<Pick<WorkflowStepRecord, 'status' | 'result' | 'runnerInstanceId' | 'runnerAttempts' | 'readyAt'>>
   ) => void
   getById: (stepId: string) => WorkflowStepRecord | null
   getQueueMetrics: () => WorkflowQueueMetrics
@@ -622,11 +620,7 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
       if (awaited) {
         step = awaited
       }
-      if (
-        step &&
-        step.status === 'pending' &&
-        (!step.runnerInstanceId || step.runnerInstanceId === runnerInstanceId)
-      ) {
+      if (step && step.status === 'pending' && (!step.runnerInstanceId || step.runnerInstanceId === runnerInstanceId)) {
         persistence.workflowSteps.update(step.id, { status: 'running', runnerInstanceId, readyAt: null })
         checkpointPersistence()
         const reassigned = persistence.workflowSteps.getById(step.id)
@@ -716,10 +710,14 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
       return
     }
     if (workflow.status === 'cancelled') {
-      finalizeStepWithoutExecution(step, {
-        status: 'skipped',
-        result: { note: 'Workflow was cancelled before the runner executed.' }
-      }, workflow.id)
+      finalizeStepWithoutExecution(
+        step,
+        {
+          status: 'skipped',
+          result: { note: 'Workflow was cancelled before the runner executed.' }
+        },
+        workflow.id
+      )
       logExecutionState('skipped', { reason: 'workflow_cancelled' })
       return
     }
@@ -942,10 +940,7 @@ export function createWorkflowRuntime(options: WorkflowRuntimeOptions): Workflow
   }
 }
 
-function resolvePersistenceFilePath(
-  provided: string | undefined,
-  persistence: WorkflowPersistenceAdapter
-): string {
+function resolvePersistenceFilePath(provided: string | undefined, persistence: WorkflowPersistenceAdapter): string {
   if (provided && provided.trim().length) {
     return normalizePersistencePath(provided.trim())
   }
@@ -965,9 +960,7 @@ function normalizePersistencePath(candidate: string): string {
 
 function isSqliteIoError(error: unknown): error is Database.SqliteError {
   return (
-    error instanceof Database.SqliteError &&
-    typeof error.code === 'string' &&
-    error.code.startsWith('SQLITE_IOERR')
+    error instanceof Database.SqliteError && typeof error.code === 'string' && error.code.startsWith('SQLITE_IOERR')
   )
 }
 
@@ -1314,25 +1307,25 @@ function createWorkflowsRepository(db: Database.Database): WorkflowsRepository {
 function createWorkflowStepsRepository(db: Database.Database): WorkflowStepsRepository {
   return {
     insertMany: (workflowId, steps) => {
-        const insert = db.prepare(
-         `INSERT INTO workflow_steps (id, workflow_id, task_id, status, sequence, depends_on, data, result, runner_instance_id, runner_attempts, ready_at, updated_at)
+      const insert = db.prepare(
+        `INSERT INTO workflow_steps (id, workflow_id, task_id, status, sequence, depends_on, data, result, runner_instance_id, runner_attempts, ready_at, updated_at)
           VALUES (@id, @workflowId, @taskId, @status, @sequence, @dependsOn, @data, NULL, NULL, @runnerAttempts, @readyAt, @updatedAt)`
-        )
+      )
       const now = new Date().toISOString()
       const records: WorkflowStepRecord[] = []
       const tx = db.transaction((batch: WorkflowStepInput[]) => {
         for (const step of batch) {
           const id = step.id ?? crypto.randomUUID()
-            insert.run({
+          insert.run({
             id,
             workflowId,
             taskId: step.taskId ?? null,
             status: 'pending',
             sequence: step.sequence,
             dependsOn: JSON.stringify(step.dependsOn ?? []),
-              data: JSON.stringify(step.data ?? {}),
-              runnerAttempts: 0,
-              readyAt: now,
+            data: JSON.stringify(step.data ?? {}),
+            runnerAttempts: 0,
+            readyAt: now,
             updatedAt: now
           })
           const row = db.prepare('SELECT * FROM workflow_steps WHERE id = ?').get(id)
@@ -1401,13 +1394,21 @@ function createWorkflowStepsRepository(db: Database.Database): WorkflowStepsRepo
       const nextRunnerInstanceId =
         patch.runnerInstanceId === undefined ? (current.runner_instance_id ?? null) : patch.runnerInstanceId
       const nextRunnerAttempts =
-        patch.runnerAttempts === undefined ? current.runner_attempts ?? 0 : patch.runnerAttempts
+        patch.runnerAttempts === undefined ? (current.runner_attempts ?? 0) : patch.runnerAttempts
       const nextReadyAt = patch.readyAt === undefined ? (current.ready_at ?? null) : patch.readyAt
       db.prepare(
         `UPDATE workflow_steps
          SET status = ?, result = ?, runner_instance_id = ?, runner_attempts = ?, ready_at = ?, updated_at = ?
          WHERE id = ?`
-      ).run(nextStatus, nextResult, nextRunnerInstanceId, nextRunnerAttempts, nextReadyAt, new Date().toISOString(), stepId)
+      ).run(
+        nextStatus,
+        nextResult,
+        nextRunnerInstanceId,
+        nextRunnerAttempts,
+        nextReadyAt,
+        new Date().toISOString(),
+        stepId
+      )
     },
     getById: (stepId) => {
       const row = db.prepare('SELECT * FROM workflow_steps WHERE id = ?').get(stepId)
@@ -1430,9 +1431,7 @@ function createWorkflowStepsRepository(db: Database.Database): WorkflowStepsRepo
       }
       const staleThreshold = new Date(Date.now() - 15 * 60 * 1000).toISOString()
       const stuckRow = db
-        .prepare(
-          `SELECT COUNT(1) as count FROM workflow_steps WHERE status = 'running' AND updated_at <= ?`
-        )
+        .prepare(`SELECT COUNT(1) as count FROM workflow_steps WHERE status = 'running' AND updated_at <= ?`)
         .get(staleThreshold) as { count?: number }
       const heartbeatRow = db
         .prepare(`SELECT MAX(updated_at) as last FROM workflow_steps WHERE status = 'running'`)
@@ -1468,9 +1467,7 @@ function createWorkflowRunnerDeadLettersRepository(db: Database.Database): Workf
       return mapWorkflowRunnerDeadLetter(row)
     },
     listRecent: (limit = 25) => {
-      const rows = db
-        .prepare('SELECT * FROM workflow_runner_dead_letters ORDER BY created_at DESC LIMIT ?')
-        .all(limit)
+      const rows = db.prepare('SELECT * FROM workflow_runner_dead_letters ORDER BY created_at DESC LIMIT ?').all(limit)
       return rows.map(mapWorkflowRunnerDeadLetter)
     }
   }
@@ -1500,16 +1497,12 @@ function createWorkflowRunnerEventsRepository(db: Database.Database): WorkflowRu
       return mapWorkflowRunnerEvent(row)
     },
     listRecent: (limit = 100) => {
-      const rows = db
-        .prepare('SELECT * FROM workflow_runner_events ORDER BY created_at DESC LIMIT ?')
-        .all(limit)
+      const rows = db.prepare('SELECT * FROM workflow_runner_events ORDER BY created_at DESC LIMIT ?').all(limit)
       return rows.map(mapWorkflowRunnerEvent)
     },
     listByWorkflow: (workflowId, limit = 100) => {
       const rows = db
-        .prepare(
-          'SELECT * FROM workflow_runner_events WHERE workflow_id = ? ORDER BY created_at DESC LIMIT ?'
-        )
+        .prepare('SELECT * FROM workflow_runner_events WHERE workflow_id = ? ORDER BY created_at DESC LIMIT ?')
         .all(workflowId, limit)
       return rows.map(mapWorkflowRunnerEvent)
     }
@@ -1567,7 +1560,8 @@ function mapWorkflowRunnerEvent(row: any): WorkflowRunnerEventRecord {
     status: row.status,
     runnerInstanceId: row.runner_instance_id ?? null,
     attempts: typeof row.attempts === 'number' ? row.attempts : 0,
-    latencyMs: typeof row.latency_ms === 'number' ? row.latency_ms : row.latency_ms == null ? null : Number(row.latency_ms),
+    latencyMs:
+      typeof row.latency_ms === 'number' ? row.latency_ms : row.latency_ms == null ? null : Number(row.latency_ms),
     metadata: row.metadata ? parseJsonField<Record<string, unknown>>(row.metadata, {}) : null,
     createdAt: row.created_at
   }

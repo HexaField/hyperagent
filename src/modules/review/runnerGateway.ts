@@ -50,7 +50,18 @@ async function enqueueRun(
     logsPath: buildLogsPath(options.logsDir, payload.run.id)
   })
 
-  const args = ['run', '--rm', image, '-sS', '--fail-with-body', '-X', 'POST', callbackUrl, '-H', 'Content-Type: application/json']
+  const args = [
+    'run',
+    '--rm',
+    image,
+    '-sS',
+    '--fail-with-body',
+    '-X',
+    'POST',
+    callbackUrl,
+    '-H',
+    'Content-Type: application/json'
+  ]
 
   if (options.callbackToken) {
     args.push('-H', `X-Review-Runner-Token: ${options.callbackToken}`)

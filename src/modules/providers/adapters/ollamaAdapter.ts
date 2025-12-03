@@ -1,12 +1,12 @@
 import ollama from 'ollama'
+import type { ProviderAdapter, ProviderInvocationContext } from '..'
 import {
   appendLogEntry,
+  DEFAULT_MODEL_MAX_CTX,
   findLatestLogEntry,
   loadSessionMeta,
-  type ChatMessage,
-  DEFAULT_MODEL_MAX_CTX
+  type ChatMessage
 } from '../../llm.shared'
-import type { ProviderAdapter, ProviderInvocationContext } from '..'
 import { registerProvider } from '../registry'
 
 const modelSettings: Record<string, { maxContext: number }> = {

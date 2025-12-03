@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process'
 import fs from 'fs/promises'
+import { spawnSync } from 'node:child_process'
 import os from 'os'
 import path from 'path'
 import { runVerifierWorkerLoop, type AgentStreamCallback } from '../modules/agent'
@@ -11,10 +11,10 @@ import { createRadicleModule } from '../modules/radicle'
 import { createTestRadicleModule } from '../modules/radicle/testHarness'
 import type { RadicleModule } from '../modules/radicle/types'
 import { createPullRequestModule } from '../modules/review/pullRequest'
-import type { WorkflowRunnerGateway } from '../modules/workflowRunnerGateway'
 import { createAgentWorkflowExecutor } from '../modules/workflowAgentExecutor'
-import { createWorkflowRuntime, type AgentExecutor } from '../modules/workflows'
 import { createWorkflowPolicyFromEnv } from '../modules/workflowPolicy'
+import type { WorkflowRunnerGateway } from '../modules/workflowRunnerGateway'
+import { createWorkflowRuntime, type AgentExecutor } from '../modules/workflows'
 
 const extendRunnerPathFromEnv = () => {
   const extraPaths = process.env.WORKFLOW_RUNNER_EXTRA_PATHS?.trim()
@@ -135,11 +135,7 @@ const runnerLogger = (event: string, metadata?: Record<string, unknown>) => {
 
 const AGENT_STREAM_PREFIX = '[agent-stream]'
 
-const createAgentStreamLogger = (
-  workflowId: string,
-  stepId: string,
-  runnerInstanceId: string
-): AgentStreamCallback => {
+const createAgentStreamLogger = (workflowId: string, stepId: string, runnerInstanceId: string): AgentStreamCallback => {
   return (event) => {
     try {
       const payload = {
@@ -405,11 +401,7 @@ const createDeterministicAgentExecutor = (behavior: string): AgentExecutor => {
   return async ({ workflow, step, workspace, project }) => {
     const workspacePath = workspace?.workspacePath ?? project.repositoryPath
     const artifactPath = path.join(workspacePath, 'AGENTIC_RESULT.md')
-    await fs.writeFile(
-      artifactPath,
-      `# PR Artifact\nworkflow=${workflow.id}\nstep=${step.id}\n`,
-      'utf8'
-    )
+    await fs.writeFile(artifactPath, `# PR Artifact\nworkflow=${workflow.id}\nstep=${step.id}\n`, 'utf8')
     if (behavior !== 'skip-commit') {
       runGitCommand(['add', 'AGENTIC_RESULT.md'], workspacePath)
     }

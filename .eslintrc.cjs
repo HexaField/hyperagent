@@ -3,15 +3,15 @@ module.exports = {
   env: {
     browser: true,
     node: true,
-    es2021: true,
+    es2021: true
   },
   parserOptions: {
     ecmaVersion: 'latest',
-    sourceType: 'module',
+    sourceType: 'module'
   },
   ignorePatterns: ['dist/', 'node_modules/', '.hyperagent/'],
   rules: {
-    'no-unused-vars': 'warn',
+    'no-unused-vars': 'warn'
   },
   overrides: [
     {
@@ -20,8 +20,8 @@ module.exports = {
       plugins: ['@typescript-eslint'],
       rules: {
         'no-unused-vars': 'off',
-        '@typescript-eslint/no-unused-vars': 'warn',
-      },
-    },
-  ],
+        '@typescript-eslint/no-unused-vars': 'warn'
+      }
+    }
+  ]
 }

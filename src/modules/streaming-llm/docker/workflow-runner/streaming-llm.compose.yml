@@ -2,7 +2,7 @@
 #   docker compose -f docker/workflow-runner/streaming-llm.compose.yml up streaming-llm
 # or by referencing it as an override file from the repo root.
 
-version: "3.9"
+version: '3.9'
 
 services:
   streaming-llm:
@@ -16,8 +16,9 @@ services:
       STREAMING_LLM_OLLAMA_URL: ${STREAMING_LLM_OLLAMA_URL:-http://host.docker.internal:11434}
     command: >-
       bash -c "pip install -r backend/requirements.txt && uvicorn backend.server:app --host 0.0.0.0 --port ${STREAMING_LLM_PORT:-8000}"
+
     ports:
-      - "${STREAMING_LLM_PORT:-8000}:8000"
+      - '${STREAMING_LLM_PORT:-8000}:8000'
     volumes:
       - ../..:/app:rw
       - ../../data:/app/data:rw

@@ -3,8 +3,8 @@ import fs from 'fs/promises'
 import path from 'path'
 import type { Persistence } from '../../../../src/modules/database'
 import type { PlannerRun, PlannerTask, WorkflowDetail, WorkflowRuntime } from '../../../../src/modules/workflows'
-import { createWorkflowLogStream, type WorkflowLogStream } from './logStream'
 import type { WorkflowLogsResponse } from '../../../interfaces/workflows/logs'
+import { createWorkflowLogStream, type WorkflowLogStream } from './logStream'
 
 type WrapAsync = (handler: RequestHandler) => RequestHandler
 

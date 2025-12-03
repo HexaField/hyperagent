@@ -1,8 +1,8 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup } from 'solid-js'
+import type { WorkflowLogEntry } from '../../../interfaces/workflows/logs'
 import { fetchJson } from '../shared/api/httpClient'
 import DiffViewer from './DiffViewer'
-import type { WorkflowLogEntry } from '../../../interfaces/workflows/logs'
 
 const MAX_LIVE_LOGS = 400
 
@@ -291,9 +291,9 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
   const selectedWorkspace = createMemo<WorkspaceInfo | null>(() => selectedResult()?.workspace ?? null)
   const selectedPolicyAudit = createMemo(() => selectedResult()?.policyAudit ?? null)
   const selectedPullRequest = createMemo(() => selectedResult()?.pullRequest ?? null)
-    const plannerSteps = createMemo(() => detail()?.steps ?? [])
-    const describeDependencies = (step: WorkflowStep) =>
-      step.dependsOn && step.dependsOn.length ? step.dependsOn.join(', ') : 'None'
+  const plannerSteps = createMemo(() => detail()?.steps ?? [])
+  const describeDependencies = (step: WorkflowStep) =>
+    step.dependsOn && step.dependsOn.length ? step.dependsOn.join(', ') : 'None'
   const agentProviderMeta = createMemo(() => {
     const agent = selectedAgent()
     if (!agent) return null
@@ -471,7 +471,14 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
 
         <section class="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
           <h2 class="mb-3 text-lg font-semibold text-[var(--text)]">Planner timeline</h2>
-          <Show when={plannerSteps().length > 0} fallback={<p class="text-sm text-[var(--text-muted)]">Planner tasks will appear after a plan is attached to this workflow.</p>}>
+          <Show
+            when={plannerSteps().length > 0}
+            fallback={
+              <p class="text-sm text-[var(--text-muted)]">
+                Planner tasks will appear after a plan is attached to this workflow.
+              </p>
+            }
+          >
             <ol class="flex flex-col gap-3">
               <For each={plannerSteps()}>
                 {(step) => (
@@ -523,7 +530,11 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
             </header>
             <Show
               when={selectedCommit()}
-              fallback={<p class="text-sm text-[var(--text-muted)]">Commit metadata will appear once this step finishes with a git update.</p>}
+              fallback={
+                <p class="text-sm text-[var(--text-muted)]">
+                  Commit metadata will appear once this step finishes with a git update.
+                </p>
+              }
             >
               {(commit) => (
                 <div class="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-4 text-sm text-[var(--text)]">
@@ -548,9 +559,7 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                   </Show>
                   <Show when={selectedPullRequest()}>
                     {(pullRequest) => (
-                      <p class="text-xs text-[var(--text-muted)]">
-                        Pull request queued · ID {pullRequest().id}
-                      </p>
+                      <p class="text-xs text-[var(--text-muted)]">Pull request queued · ID {pullRequest().id}</p>
                     )}
                   </Show>
                 </div>
@@ -562,7 +571,9 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
             <header class="space-y-1">
               <h2 class="text-lg font-semibold text-[var(--text)]">Runner telemetry</h2>
               <Show when={selectedRunnerEvents().length === 0}>
-                <p class="text-xs text-[var(--text-muted)]">Runner heartbeats will appear while this step is enqueued or executing.</p>
+                <p class="text-xs text-[var(--text-muted)]">
+                  Runner heartbeats will appear while this step is enqueued or executing.
+                </p>
               </Show>
             </header>
             <Show when={selectedRunnerEvents().length > 0}>
@@ -583,11 +594,11 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                         <span class="text-[var(--text-muted)]">{formatTimestamp(event.createdAt)}</span>
                       </div>
                       <div class="flex flex-wrap gap-3 text-[var(--text-muted)]">
-                        <Show when={event.runnerInstanceId}>
-                          {(id) => <span>Runner {shortToken(id())}</span>}
-                        </Show>
+                        <Show when={event.runnerInstanceId}>{(id) => <span>Runner {shortToken(id())}</span>}</Show>
                         <span>Attempts {event.attempts}</span>
-                        <Show when={formatLatency(event.latencyMs)}>{(latency) => <span>Latency {latency()}</span>}</Show>
+                        <Show when={formatLatency(event.latencyMs)}>
+                          {(latency) => <span>Latency {latency()}</span>}
+                        </Show>
                       </div>
                       <Show when={event.metadata?.error}>
                         {(message) => <p class="mt-1 text-red-500">{String(message())}</p>}
@@ -608,7 +619,9 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
             </header>
             <Show
               when={selectedLogs().length > 0}
-              fallback={<p class="text-sm text-[var(--text-muted)]">Logs will appear when the runner container starts.</p>}
+              fallback={
+                <p class="text-sm text-[var(--text-muted)]">Logs will appear when the runner container starts.</p>
+              }
             >
               <div class="h-64 overflow-auto rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-3">
                 <ul class="flex flex-col gap-2 text-xs font-mono">
@@ -627,9 +640,7 @@ export default function WorkflowDetailView(props: WorkflowDetailViewProps) {
                             {describeLogBadge(entry)}
                           </span>
                         </div>
-                        <p class="whitespace-pre-wrap text-[var(--text)]">
-                          {entryMessage(entry)}
-                        </p>
+                        <p class="whitespace-pre-wrap text-[var(--text)]">{entryMessage(entry)}</p>
                       </li>
                     )}
                   </For>

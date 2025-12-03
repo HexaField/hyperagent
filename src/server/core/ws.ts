@@ -1,5 +1,5 @@
-import { pathToFileURL } from 'node:url'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type WebSocketType from 'ws'
 import type { WebSocketServer as WebSocketServerType } from 'ws'
 

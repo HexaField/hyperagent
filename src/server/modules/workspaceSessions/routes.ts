@@ -24,8 +24,8 @@ import {
 
 import {
   runVerifierWorkerLoop,
-  type WorkerStructuredResponse,
-  type VerifierStructuredResponse
+  type VerifierStructuredResponse,
+  type WorkerStructuredResponse
 } from '../../../../src/modules/agent'
 import { ensureProviderConfig } from '../../../../src/modules/workflowAgentExecutor'
 import { deletePersona, listPersonas, readPersona, writePersona } from './personas'
@@ -125,7 +125,11 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
           modelID: payload.modelId ?? null,
           providerID: payload.providerId ?? null
         }
-        await fs.writeFile(path.join(sessionMessageDir, `${messageId}.json`), JSON.stringify(messageJson, null, 2), 'utf8')
+        await fs.writeFile(
+          path.join(sessionMessageDir, `${messageId}.json`),
+          JSON.stringify(messageJson, null, 2),
+          'utf8'
+        )
         const partDirPath = path.join(storagePaths.partRoot, messageId)
         await fs.mkdir(partDirPath, { recursive: true })
         const partJson = {

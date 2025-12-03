@@ -4,14 +4,6 @@ import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
 import { createPersistence, type Persistence } from './database'
 import type { ProjectRecord } from './projects'
-import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from './workflowRunnerGateway'
-import type { WorkflowPolicy } from './workflowPolicy'
-import {
-  createWorkflowRuntime,
-  type AgentExecutor,
-  type PlannerRun,
-  type WorkflowRuntimeOptions
-} from './workflows'
 import type {
   CommitResult,
   RadicleModule,
@@ -21,6 +13,9 @@ import type {
 } from './radicle/types'
 import type { PullRequestModule } from './review/pullRequest'
 import type { PullRequestRecord } from './review/types'
+import type { WorkflowPolicy } from './workflowPolicy'
+import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from './workflowRunnerGateway'
+import { createWorkflowRuntime, type AgentExecutor, type PlannerRun, type WorkflowRuntimeOptions } from './workflows'
 
 const commitAuthor = { name: 'Test Workflow', email: 'workflow@test.local' }
 

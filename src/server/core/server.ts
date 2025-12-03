@@ -16,8 +16,8 @@ import {
   type CodeServerOptions
 } from '../../../src/modules/codeServer'
 import { createPersistence, type Persistence, type ProjectRecord } from '../../../src/modules/database'
-import { detectGitAuthorFromCli } from '../../../src/modules/gitAuthor'
 import { listGitBranches } from '../../../src/modules/git'
+import { detectGitAuthorFromCli } from '../../../src/modules/gitAuthor'
 import type { Provider } from '../../../src/modules/llm'
 import type {
   CodingAgentCommandOptions,
@@ -38,20 +38,20 @@ import { createDockerReviewRunnerGateway } from '../../../src/modules/review/run
 import { createReviewSchedulerModule } from '../../../src/modules/review/scheduler'
 import type { ReviewRunTrigger } from '../../../src/modules/review/types'
 import { createTerminalModule, type TerminalModule } from '../../../src/modules/terminal'
+import { createWorkflowPolicyFromEnv } from '../../../src/modules/workflowPolicy'
 import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
-import { createWorkflowPolicyFromEnv } from '../../../src/modules/workflowPolicy'
 import type { GitFileChange, GitInfo } from '../../interfaces/core/git'
 import { parseGitStashList } from '../lib/git'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
-import { createWorkspaceSessionsRouter } from '../modules/workspaceSessions/routes'
-import { seedDefaultPersonas } from '../modules/workspaceSessions/personas'
 import { createWorkspaceNarratorRouter, type NarratorRelay } from '../modules/workspaceNarrator/routes'
+import { seedDefaultPersonas } from '../modules/workspaceSessions/personas'
+import { createWorkspaceSessionsRouter } from '../modules/workspaceSessions/routes'
 import { createWorkspaceSummaryRouter } from '../modules/workspaceSummary/routes'
 import { createWorkspaceTerminalModule } from '../modules/workspaceTerminal/module'
-import { createWorkspaceWorkflowsRouter } from '../modules/workspaceWorkflows/routes'
 import { createWorkflowLogStream } from '../modules/workspaceWorkflows/logStream'
+import { createWorkspaceWorkflowsRouter } from '../modules/workspaceWorkflows/routes'
 import {
   CODE_SERVER_HOST,
   DEFAULT_PORT,
@@ -1480,8 +1480,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     })
   )
 
-  
-
   app.get(
     '/api/templates',
     wrapAsync(async (_req, res) => {
@@ -1513,7 +1511,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         } catch (err) {
           serverLogger.warn('Failed to read template manifest', { id, manifestPath, error: toErrorMeta(err) })
         }
-        templates.push({ id, name: (manifest && (manifest.name as string)) ?? id, description: (manifest && (manifest.description as string)) ?? null, manifest })
+        templates.push({
+          id,
+          name: (manifest && (manifest.name as string)) ?? id,
+          description: (manifest && (manifest.description as string)) ?? null,
+          manifest
+        })
       }
 
       res.json({ templates })
@@ -1613,4 +1616,3 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 }
-

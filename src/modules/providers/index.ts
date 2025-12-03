@@ -2,8 +2,8 @@ import './adapters/gooseAdapter'
 import './adapters/ollamaAdapter'
 import './adapters/ollamaCliAdapter'
 import './adapters/opencodeAdapter'
-export { getProviderAdapter, listProviders, registerProvider } from './registry'
 import type { ConversationMessage, SessionDetail } from './types'
+export { getProviderAdapter, listProviders, registerProvider } from './registry'
 
 export type ProviderInvocationContext = {
   providerId: string
@@ -46,4 +46,3 @@ export type ProviderAdapter = {
     session?: SessionDetail | null
   }) => { cliArgs?: string[]; payload?: unknown; command?: string }
 }
-

@@ -163,6 +163,7 @@ stop()
 ```
 
 Notes:
+
 - `streamChat` resolves once the WebSocket is established and returns `{ sendMessage, stop }`.
 - Use `socketFactory` in Node tests/environments where `WebSocket` is not available globally.
 

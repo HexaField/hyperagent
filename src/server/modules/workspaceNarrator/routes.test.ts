@@ -143,9 +143,7 @@ describe('workspace narrator routes', () => {
     const relay: NarratorRelay = vi.fn(async () => ({ narration: 'All systems go.' }))
     app = buildApp(relay)
 
-    const postRes = await request(app)
-      .post('/api/workspaces/ws-send/narrator/messages')
-      .send({ message: 'Ship it' })
+    const postRes = await request(app).post('/api/workspaces/ws-send/narrator/messages').send({ message: 'Ship it' })
 
     expect(postRes.status).toBe(202)
     expect(postRes.body.workspaceId).toBe('ws-send')

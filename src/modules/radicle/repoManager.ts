@@ -112,7 +112,7 @@ export const createRadicleRepoManager = ({
 }) => {
   const resolvedRepo = path.resolve(repoPath)
   let resolvedRemoteName: string | null = null
-  const radBinary = radCliPath?.trim().length ? radCliPath.trim() : process.env.RADICLE_CLI_PATH ?? 'rad'
+  const radBinary = radCliPath?.trim().length ? radCliPath.trim() : (process.env.RADICLE_CLI_PATH ?? 'rad')
   const radCliAvailable = (() => {
     if (radCliPath?.trim().length) {
       return isExecutable(radBinary)

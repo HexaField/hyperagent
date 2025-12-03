@@ -1,8 +1,8 @@
 import { Router, type RequestHandler } from 'express'
 import { createReadStream } from 'fs'
 import fs from 'fs/promises'
-import path from 'path'
 import { randomUUID } from 'node:crypto'
+import path from 'path'
 import type {
   WorkspaceNarratorEvent,
   WorkspaceNarratorFeedResponse,
@@ -229,7 +229,9 @@ export const createWorkspaceNarratorRouter = ({ wrapAsync, narratorRelay }: Work
         await failWorkspaceNarratorTask({ taskId: task.id, dataDir, reason: error })
         const failureEvent = await appendRelayFailureEvent({ conversationId, taskId: task.id, dataDir, error })
         const failureDetail =
-          typeof failureEvent.payload?.['detail'] === 'string' ? (failureEvent.payload['detail'] as string) : formatError(error)
+          typeof failureEvent.payload?.['detail'] === 'string'
+            ? (failureEvent.payload['detail'] as string)
+            : formatError(error)
         res.status(502).json({ error: 'relay_failed', detail: failureDetail })
       }
     })
@@ -259,7 +261,8 @@ const parseWorkspaceId = (value: unknown): string | null => {
 }
 
 const resolveDataDir = (): string => {
-  const explicit = typeof process.env.STREAMING_LLM_DATA_DIR === 'string' ? process.env.STREAMING_LLM_DATA_DIR.trim() : ''
+  const explicit =
+    typeof process.env.STREAMING_LLM_DATA_DIR === 'string' ? process.env.STREAMING_LLM_DATA_DIR.trim() : ''
   return explicit.length ? path.resolve(explicit) : DEFAULT_DATA_DIR
 }
 
@@ -276,11 +279,7 @@ const clampLimit = (raw: unknown): number => {
   return Math.min(MAX_LIMIT, candidate)
 }
 
-const resolveConversationId = async (
-  workspaceId: string,
-  explicit: unknown,
-  dataDir: string
-): Promise<string> => {
+const resolveConversationId = async (workspaceId: string, explicit: unknown, dataDir: string): Promise<string> => {
   const override = normalizeString(explicit)
   if (override) return override
   const inferred = await inferConversationIdFromGraph(workspaceId, dataDir)
@@ -677,8 +676,7 @@ const normalizeEvent = (input: unknown): NormalizedEvent | null => {
       normalizeString(payload['summary_ref'] ?? payload['summaryRef'] ?? payload['summaryPath']) ?? null
   } else if (upperType === 'ERROR') {
     baseEvent.type = 'error'
-    baseEvent.headline =
-      normalizeString(payload['headline']) ?? normalizeString(payload['reason']) ?? 'Narrator error'
+    baseEvent.headline = normalizeString(payload['headline']) ?? normalizeString(payload['reason']) ?? 'Narrator error'
     baseEvent.detail = normalizeString(payload['detail']) ?? normalizeString(payload['message'])
     baseEvent.source = 'system'
     baseEvent.severity = 'error'
@@ -780,5 +778,7 @@ const extractSortKey = (value: unknown): number => {
 }
 
 const isNotFound = (error: unknown): boolean => {
-  return Boolean(error && typeof error === 'object' && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT')
+  return Boolean(
+    error && typeof error === 'object' && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT'
+  )
 }

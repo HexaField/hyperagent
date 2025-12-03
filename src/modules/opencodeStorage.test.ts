@@ -397,7 +397,11 @@ describe('createOpencodeStorage', () => {
       const verifierPartDir = path.join(partRoot, 'msg_verifier')
       await fs.promises.mkdir(workerPartDir, { recursive: true })
       await fs.promises.mkdir(verifierPartDir, { recursive: true })
-      await fs.promises.writeFile(path.join(workerPartDir, 'prt_worker.json'), JSON.stringify(makePart('prt_worker')), 'utf8')
+      await fs.promises.writeFile(
+        path.join(workerPartDir, 'prt_worker.json'),
+        JSON.stringify(makePart('prt_worker')),
+        'utf8'
+      )
       await fs.promises.writeFile(
         path.join(verifierPartDir, 'prt_verifier.json'),
         JSON.stringify(makePart('prt_verifier')),
@@ -405,9 +409,15 @@ describe('createOpencodeStorage', () => {
       )
 
       const resolver = {
-        extractStepText: vi.fn().mockImplementation(async ({ actor }) =>
-          actor === 'verifier' ? 'Verifier snapshot text' : actor === 'worker' ? 'Worker snapshot text' : 'Unknown snapshot'
-        )
+        extractStepText: vi
+          .fn()
+          .mockImplementation(async ({ actor }) =>
+            actor === 'verifier'
+              ? 'Verifier snapshot text'
+              : actor === 'worker'
+                ? 'Worker snapshot text'
+                : 'Unknown snapshot'
+          )
       }
 
       const storage = createOpencodeStorage({ rootDir: tmpRoot, snapshotResolver: resolver })
@@ -478,7 +488,11 @@ describe('createOpencodeStorage', () => {
         createdAt: now,
         updatedAt: now
       }
-      await fs.promises.writeFile(path.join(repoWorktree, 'ses-worker-root.json'), JSON.stringify(workerLogFile), 'utf8')
+      await fs.promises.writeFile(
+        path.join(repoWorktree, 'ses-worker-root.json'),
+        JSON.stringify(workerLogFile),
+        'utf8'
+      )
       execFileSync('git', ['add', 'ses-worker-root.json'], { cwd: repoWorktree, env: gitEnv })
       execFileSync('git', ['commit', '-m', 'snapshot data'], { cwd: repoWorktree, env: gitEnv })
       const treeHash = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: repoWorktree, env: gitEnv })

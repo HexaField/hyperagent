@@ -47,7 +47,7 @@ export async function postNarratorMessage(params: {
     let detail = 'Failed to send narrator message'
     try {
       const payload = await response.json()
-      detail = typeof payload?.detail === 'string' ? payload.detail : payload?.error ?? detail
+      detail = typeof payload?.detail === 'string' ? payload.detail : (payload?.error ?? detail)
     } catch {
       const fallback = await response.text()
       if (fallback.trim().length) {

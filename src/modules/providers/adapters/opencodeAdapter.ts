@@ -1,12 +1,6 @@
-import { runProviderInvocation, runProviderInvocationStream } from '../../providerRunner'
-import {
-  appendLogEntry,
-  extractOrCreateJSON,
-  loadSessionMeta,
-  outClean,
-  runCLI
-} from '../../llm.shared'
 import type { ProviderAdapter, ProviderInvocationContext } from '..'
+import { appendLogEntry, extractOrCreateJSON, loadSessionMeta, outClean, runCLI } from '../../llm.shared'
+import { runProviderInvocation, runProviderInvocationStream } from '../../providerRunner'
 import { registerProvider } from '../registry'
 
 const normalizePromptArg = (text: string): string => {

@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@solidjs/testing-library'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceNarratorFeedResponse } from '../../../../interfaces/widgets/workspaceNarrator'
-import { WorkspaceNarratorWidget } from './index'
 import { fetchNarratorFeed, fetchNarratorRawLog, postNarratorMessage } from '../../lib/narratorFeed'
+import { WorkspaceNarratorWidget } from './index'
 
 vi.mock('../../lib/narratorFeed', () => {
   return {
