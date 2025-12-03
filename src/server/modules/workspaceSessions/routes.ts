@@ -90,11 +90,59 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       signal: null
     } as unknown as CodingAgentRunRecord
 
+    const storageRoot = (codingAgentStorage as any)?.rootDir ?? null
+    const storagePaths = storageRoot
+      ? {
+          storageDir: path.join(storageRoot, 'storage'),
+          messageRoot: path.join(storageRoot, 'storage', 'message'),
+          partRoot: path.join(storageRoot, 'storage', 'part')
+        }
+      : null
+
+    const writeStructuredMessage = async (payload: {
+      role: string
+      text: string
+      providerId?: string | null
+      modelId?: string | null
+    }): Promise<boolean> => {
+      if (!storagePaths) return false
+      try {
+        const sessionMessageDir = path.join(storagePaths.messageRoot, sessionId)
+        await fs.mkdir(sessionMessageDir, { recursive: true })
+        await fs.mkdir(storagePaths.partRoot, { recursive: true })
+        const messageId = crypto.randomUUID()
+        const partId = crypto.randomUUID()
+        const now = new Date().toISOString()
+        const messageJson = {
+          id: messageId,
+          sessionID: sessionId,
+          role: payload.role,
+          time: { created: now, completed: now },
+          modelID: payload.modelId ?? null,
+          providerID: payload.providerId ?? null
+        }
+        await fs.writeFile(path.join(sessionMessageDir, `${messageId}.json`), JSON.stringify(messageJson, null, 2), 'utf8')
+        const partDirPath = path.join(storagePaths.partRoot, messageId)
+        await fs.mkdir(partDirPath, { recursive: true })
+        const partJson = {
+          id: partId,
+          type: 'text',
+          text: payload.text,
+          time: { start: Date.now(), end: Date.now() }
+        }
+        await fs.writeFile(path.join(partDirPath, `${partId}.json`), JSON.stringify(partJson, null, 2), 'utf8')
+        return true
+      } catch (err) {
+        console.warn('[coding-agent] Failed to write agent message to storage', {
+          error: (err as any)?.message ?? String(err)
+        })
+        return false
+      }
+    }
+
     try {
-      const storageRoot = (codingAgentStorage as any)?.rootDir
-      if (storageRoot) {
-        const storageDir = path.join(storageRoot, 'storage')
-        const sessionMetaDir = path.join(storageDir, 'session', 'global')
+      if (storagePaths) {
+        const sessionMetaDir = path.join(storagePaths.storageDir, 'session', 'global')
         await fs.mkdir(sessionMetaDir, { recursive: true })
         const now = Date.now()
         const metaJson = {
@@ -117,51 +165,43 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       sessionId: run.sessionId
     })
 
+    const logDir = path.join(options.workspacePath, '.opencode', 'agent-streams')
+    await fs.mkdir(logDir, { recursive: true })
+    const logPath = path.join(logDir, `${run.sessionId}.log`)
+
+    const appendLogLine = async (entry: { role: string; content: string; round?: number }) => {
+      const time = new Date().toISOString()
+      const roundSegment = typeof entry.round === 'number' ? `[round:${entry.round}] ` : ''
+      const line = `[${time}] [${entry.role}] ${roundSegment}${entry.content}\n`
+      await fs.appendFile(logPath, line, 'utf8')
+    }
+
+    const primeUserPrompt = async () => {
+      const trimmed = options.prompt.trim()
+      if (!trimmed) return
+      const ok = await writeStructuredMessage({
+        role: 'user',
+        text: trimmed,
+        providerId: MULTI_AGENT_PROVIDER_ID,
+        modelId: options.model ?? null
+      })
+      if (!ok) await appendLogLine({ role: 'user', content: trimmed })
+    }
+
+    await primeUserPrompt()
+
     ;(async () => {
       try {
-        const streamsDir = path.join(options.workspacePath, '.opencode', 'agent-streams')
-        await fs.mkdir(streamsDir, { recursive: true })
-        const logPath = path.join(streamsDir, `${run.sessionId}.log`)
         const appendChunk = async (event: { role: string; round: number; chunk: string }) => {
-          const time = new Date().toISOString()
-          try {
-            const storageRoot = (codingAgentStorage as any)?.rootDir
-            if (storageRoot) {
-              const storageDir = path.join(storageRoot, 'storage')
-              const messageDir = path.join(storageDir, 'message', run.sessionId)
-              const partRoot = path.join(storageRoot, 'part')
-              await fs.mkdir(messageDir, { recursive: true })
-              await fs.mkdir(partRoot, { recursive: true })
-              const messageId = crypto.randomUUID()
-              const partId = crypto.randomUUID()
-              const now = new Date().toISOString()
-              const messageJson = {
-                id: messageId,
-                sessionID: run.sessionId,
-                role: event.role,
-                time: { created: now, completed: now },
-                modelID: options.model ?? null,
-                providerID: MULTI_AGENT_PROVIDER_ID
-              }
-              await fs.writeFile(path.join(messageDir, `${messageId}.json`), JSON.stringify(messageJson, null, 2), 'utf8')
-              const partDirPath = path.join(partRoot, messageId)
-              await fs.mkdir(partDirPath, { recursive: true })
-              const partJson = {
-                id: partId,
-                type: 'text',
-                text: event.chunk,
-                time: { start: Date.now(), end: Date.now() }
-              }
-              await fs.writeFile(path.join(partDirPath, `${partId}.json`), JSON.stringify(partJson, null, 2), 'utf8')
-              return
-            }
-          } catch (err) {
-            console.warn('[coding-agent] Failed to write agent message to storage', {
-              error: (err as any)?.message ?? String(err)
-            })
+          const ok = await writeStructuredMessage({
+            role: event.role,
+            text: event.chunk,
+            providerId: MULTI_AGENT_PROVIDER_ID,
+            modelId: options.model ?? null
+          })
+          if (!ok) {
+            await appendLogLine({ role: event.role, content: event.chunk, round: event.round })
           }
-          const line = `[${time}] [${event.role}] [round:${event.round}] ${event.chunk}\n`
-          await fs.appendFile(logPath, line, 'utf8')
         }
 
         await runVerifierWorkerLoop({

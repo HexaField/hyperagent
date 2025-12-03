@@ -105,41 +105,47 @@ describe('workspace sessions routes — agent persona', () => {
     expect(resp.status).toBe(202)
     expect(resp.body).toHaveProperty('run')
     expect(resp.body.run).toHaveProperty('providerId', 'multi-agent')
+    const sessionId = resp.body.run.sessionId
 
     await new Promise((r) => setTimeout(r, 50))
     expect(spyRunLoop).toHaveBeenCalledTimes(1)
     const callArgs = spyRunLoop.mock.calls[0][0]
     expect(callArgs).toMatchObject({ userInstructions: TEST_PROMPT })
 
-    const messageRoot = path.join(storageRoot, 'storage', 'message')
-    const locateMessage = async () => {
-      try {
-        const sessionIds = await fs.readdir(messageRoot)
-        const sessionId = sessionIds.find(Boolean)
-        if (!sessionId) return null
-        const messageFiles = await fs.readdir(path.join(messageRoot, sessionId))
-        const messageFile = messageFiles.find((file) => file.endsWith('.json'))
-        if (!messageFile) return null
-        return { sessionId, messageFile }
-      } catch {
-        return null
+    const sessionMessageDir = path.join(storageRoot, 'storage', 'message', sessionId)
+    const partRoot = path.join(storageRoot, 'storage', 'part')
+
+    const waitForMessage = async (predicate: (message: any) => boolean) => {
+      const deadline = Date.now() + 2000
+      while (Date.now() < deadline) {
+        try {
+          const files = await fs.readdir(sessionMessageDir)
+          for (const file of files.filter((name) => name.endsWith('.json'))) {
+            const messageJson = JSON.parse(await fs.readFile(path.join(sessionMessageDir, file), 'utf8'))
+            if (predicate(messageJson)) return messageJson
+          }
+        } catch {}
+        await new Promise((r) => setTimeout(r, 50))
       }
+      return null
     }
-    let selected: { sessionId: string; messageFile: string } | null = null
-    for (let i = 0; i < 20 && !selected; i++) {
-      selected = await locateMessage()
-      if (!selected) await new Promise((r) => setTimeout(r, 25))
+
+    const readFirstPart = async (messageId: string) => {
+      const dir = path.join(partRoot, messageId)
+      const files = await fs.readdir(dir)
+      expect(files.length).toBeGreaterThan(0)
+      return JSON.parse(await fs.readFile(path.join(dir, files[0]), 'utf8'))
     }
-    expect(selected, 'expected multi-agent message to be written to storage').toBeTruthy()
-    const messageJson = JSON.parse(
-      await fs.readFile(path.join(messageRoot, selected!.sessionId, selected!.messageFile), 'utf8')
-    )
-    expect(['worker', 'verifier']).toContain(messageJson.role)
-    const partDir = path.join(storageRoot, 'part', messageJson.id)
-    const partFiles = await fs.readdir(partDir)
-    expect(partFiles.length).toBeGreaterThan(0)
-    const partJson = JSON.parse(await fs.readFile(path.join(partDir, partFiles[0]), 'utf8'))
-    expect(partJson.text.length).toBeGreaterThan(0)
+
+    const userMessage = await waitForMessage((msg) => msg.role === 'user')
+    expect(userMessage, 'expected stored user prompt message').toBeTruthy()
+    const userPart = await readFirstPart(userMessage!.id)
+    expect(userPart.text).toContain(TEST_PROMPT)
+
+    const workerMessage = await waitForMessage((msg) => msg.role === 'worker')
+    expect(workerMessage, 'expected worker stream message').toBeTruthy()
+    const workerPart = await readFirstPart(workerMessage!.id)
+    expect(workerPart.text?.length ?? 0).toBeGreaterThan(0)
   })
 
   it('falls back to the provider runner for non multi-agent personas', async () => {
