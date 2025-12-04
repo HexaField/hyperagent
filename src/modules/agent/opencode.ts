@@ -149,7 +149,12 @@ export const createOpencodeStorage = ({ rootDir }: { rootDir?: string }): Openco
         try {
           const raw = await fs.readFile(path.join(metaDir, fname), 'utf8')
           const parsed = JSON.parse(raw)
-          sessions.push({ id: parsed.id, title: parsed.title ?? null, directory: parsed.directory ?? null, time: parsed.time ?? {} })
+          sessions.push({
+            id: parsed.id,
+            title: parsed.title ?? null,
+            directory: parsed.directory ?? null,
+            time: parsed.time ?? {}
+          })
         } catch {}
       }
       return sessions

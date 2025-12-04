@@ -23,6 +23,7 @@
     "certs:generate": "node scripts/generate-certs.js",
     "ui:server": "ts-node-dev --respawn --transpile-only --project src/server/tsconfig.json src/server/index.ts",
     "ui:web": "vite --config src/client/vite.config.ts",
+    "ui:build": "vite build --config src/client/vite.config.ts",
     "ui:dev": "concurrently -k -n server,web -c green,cyan \"npm:ui:server\" \"npm:ui:web\"",
     "docker:workflow-runner:build": "docker build -t hyperagent-workflow-runner:latest -f docker/workflow-runner/Dockerfile ."
   },
