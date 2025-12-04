@@ -1,4 +1,4 @@
-import { createOpencodeClient, createOpencodeServer, OpencodeClient, Part, Session, TextPart } from '@opencode-ai/sdk'
+import type { OpencodeClient, Part, Session, TextPart } from '@opencode-ai/sdk'
 import fs from 'fs/promises'
 import path from 'path'
 
@@ -6,6 +6,16 @@ let opencodeServer: {
   url: string
   close(): void
 } | null = null
+
+export const closeOpencodeServer = () => {
+  if (opencodeServer) {
+    opencodeServer.close()
+    opencodeServer = null
+  }
+}
+
+// opencode freaks out if you try to import it statically
+const getSdk = async () => await import('@opencode-ai/sdk')
 
 /**
  * Starts a singleton Opencode server instance for use by clients.
@@ -17,7 +27,8 @@ export const getOpencodeServer = async (): Promise<{
   close(): void
 }> => {
   if (opencodeServer) return opencodeServer
-  opencodeServer = await createOpencodeServer()
+  const sdk = await getSdk()
+  opencodeServer = await sdk.createOpencodeServer()
   return opencodeServer
 }
 
@@ -32,7 +43,8 @@ const opencodeClients: { [directory: string]: OpencodeClient } = {}
 export const getOpencodeClient = async (directory: string): Promise<OpencodeClient> => {
   if (opencodeClients[directory]) return opencodeClients[directory]
   const server = await getOpencodeServer()
-  const opencode = await createOpencodeClient({
+  const sdk = await getSdk()
+  const opencode = await sdk.createOpencodeClient({
     baseUrl: server.url,
     directory: directory
   })
@@ -74,7 +86,6 @@ export const promptSession = async (session: Session, prompts: string[], model: 
 
   const response = await opencode.session.prompt({
     path: { id: session.id },
-
     body: {
       model: { providerID, modelID },
       parts: prompts.map((prompt) => ({ type: 'text', text: prompt }))
