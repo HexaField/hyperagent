@@ -2,12 +2,10 @@ import fs from 'fs/promises'
 import path from 'path'
 import { parseFrontmatter } from '../server/modules/workspaceSessions/personas'
 import { runVerifierWorkerLoop, type AgentLoopResult, type AgentStreamCallback } from './agent/agent'
-import type { Provider } from './llm'
 import type { AgentExecutor, AgentExecutorArgs, AgentExecutorResult } from './workflows'
 
 export type AgentWorkflowExecutorOptions = {
   runLoop?: typeof runVerifierWorkerLoop
-  provider?: Provider
   model?: string
   maxRounds?: number
   onStream?: AgentStreamCallback
@@ -15,12 +13,10 @@ export type AgentWorkflowExecutorOptions = {
 
 export function createAgentWorkflowExecutor(options: AgentWorkflowExecutorOptions = {}): AgentExecutor {
   const runLoop = options.runLoop ?? runVerifierWorkerLoop
-  const provider = options.provider
   const model = options.model
   const maxRounds = options.maxRounds
   const onStream = options.onStream
   const agentMetadata = {
-    provider: provider ?? null,
     model: model ?? null
   }
 
@@ -31,7 +27,6 @@ export function createAgentWorkflowExecutor(options: AgentWorkflowExecutorOption
     try {
       const loopResult = await runLoop({
         userInstructions,
-        provider,
         model,
         maxRounds,
         sessionDir,
@@ -46,7 +41,7 @@ export function createAgentWorkflowExecutor(options: AgentWorkflowExecutorOption
         logsPath: logsPath ?? null
       }
     } catch (error) {
-      return await buildFallbackAgentResult({ sessionDir, userInstructions, args, cause: error })
+      return await buildFallbackAgentResult({ sessionDir, userInstructions, cause: error })
     }
   }
 }
@@ -54,7 +49,7 @@ export function createAgentWorkflowExecutor(options: AgentWorkflowExecutorOption
 function buildStepResultFromLoop(
   loopResult: AgentLoopResult,
   userInstructions: string,
-  metadata?: { provider: string | null; model: string | null }
+  metadata?: { model: string | null }
 ) {
   return {
     instructions: userInstructions,
@@ -65,7 +60,7 @@ function buildStepResultFromLoop(
       reason: loopResult.reason,
       bootstrap: loopResult.bootstrap,
       rounds: loopResult.rounds,
-      provider: metadata?.provider ?? null,
+      provider: null,
       model: metadata?.model ?? null
     }
   }
@@ -260,11 +255,10 @@ async function detectLogsPath(sessionDir: string): Promise<string | undefined> {
 type FallbackAgentArgs = {
   sessionDir: string
   userInstructions: string
-  args: AgentExecutorArgs
   cause: unknown
 }
 
-async function buildFallbackAgentResult({ sessionDir, userInstructions, args, cause }: FallbackAgentArgs) {
+async function buildFallbackAgentResult({ sessionDir, userInstructions, cause }: FallbackAgentArgs) {
   const reason = buildFallbackReason(cause)
   const fallbackPlan = synthesizePlan(userInstructions)
   const workerTurn = {

@@ -6,7 +6,7 @@ import { runVerifierWorkerLoop, type AgentStreamCallback } from '../modules/agen
 import { createPersistence } from '../modules/database'
 import { runGitCommandSync } from '../modules/git'
 import { detectGitAuthorFromCli } from '../modules/gitAuthor'
-import type { Provider } from '../modules/llm'
+// Provider is represented as a simple string identifier now
 import { createRadicleModule } from '../modules/radicle'
 import { createTestRadicleModule } from '../modules/radicle/testHarness'
 import type { RadicleModule } from '../modules/radicle/types'
@@ -138,22 +138,22 @@ const AGENT_STREAM_PREFIX = '[agent-stream]'
 const createAgentStreamLogger = (workflowId: string, stepId: string, runnerInstanceId: string): AgentStreamCallback => {
   return (event) => {
     try {
-      const payload = {
-        event: 'agent.stream',
-        workflowId,
-        stepId,
-        runnerInstanceId,
-        timestamp: new Date().toISOString(),
-        data: {
-          role: event.role,
-          round: event.round,
-          chunk: event.chunk,
-          provider: event.provider,
-          model: event.model,
-          attempt: event.attempt,
-          sessionId: event.sessionId ?? null
-        }
-      }
+          const payload = {
+            event: 'agent.stream',
+            workflowId,
+            stepId,
+            runnerInstanceId,
+            timestamp: new Date().toISOString(),
+            data: {
+              role: event.role,
+              round: event.round,
+              parts: Array.isArray((event as any).parts) ? (event as any).parts.map((p: any) => p.text ?? '') : [],
+              provider: null,
+              model: event.model,
+              attempt: event.attempt,
+              sessionId: event.sessionId ?? null
+            }
+          }
       console.log(`${AGENT_STREAM_PREFIX} ${JSON.stringify(payload)}`)
     } catch (error) {
       runnerErrorLogger('agent_stream_log_failed', error, { workflowId, stepId })
@@ -208,8 +208,8 @@ const resolveCommitAuthor = () => {
   }
 }
 
-const resolveAgentOptions = () => {
-  const provider = (process.env.WORKFLOW_AGENT_PROVIDER?.trim() || 'opencode') as Provider
+  const resolveAgentOptions = () => {
+  const provider = (process.env.WORKFLOW_AGENT_PROVIDER?.trim() || 'opencode') as string
   const model = process.env.WORKFLOW_AGENT_MODEL?.trim() || 'github-copilot/gpt-5-mini'
   const maxRoundsEnv = process.env.WORKFLOW_AGENT_MAX_ROUNDS
   const maxRounds = maxRoundsEnv && Number.isFinite(Number(maxRoundsEnv)) ? Number(maxRoundsEnv) : undefined
@@ -330,7 +330,6 @@ async function main() {
         : {
             agentExecutorOptions: {
               runLoop: runVerifierWorkerLoop,
-              provider: agentOptions!.provider,
               model: agentOptions!.model,
               maxRounds: agentOptions!.maxRounds,
               onStream: createAgentStreamLogger(workflowId, stepId, runnerInstanceId)

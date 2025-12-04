@@ -3,7 +3,7 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import express from 'express'
 import fs from 'fs/promises'
 import { createProxyMiddleware } from 'http-proxy-middleware'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import type { ClientRequest, IncomingMessage } from 'node:http'
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
 import { createServer as createNetServer, type AddressInfo, type Socket } from 'node:net'
@@ -29,6 +29,7 @@ import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerG
 import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
 import { runVerifierWorkerLoop, type AgentStreamEvent } from '../../modules/agent/agent'
+import { createOpencodeStorage } from '../../modules/agent/opencode'
 import { runGitCommand } from '../../modules/git'
 import { createSseStream } from '../lib/sse'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
@@ -86,7 +87,7 @@ type RunLoop = typeof runVerifierWorkerLoop
 
 type ControllerFactory = (options: CodeServerOptions) => CodeServerController
 
-function ensureWorkflowAgentProviderReady(provider: Provider | undefined) {
+function ensureWorkflowAgentProviderReady(provider: string | undefined) {
   if (!provider) return
   const binary = resolveWorkflowAgentBinary(provider)
   if (!binary) return
@@ -96,7 +97,7 @@ function ensureWorkflowAgentProviderReady(provider: Provider | undefined) {
   }
 }
 
-function resolveWorkflowAgentBinary(provider: Provider): string | null {
+function resolveWorkflowAgentBinary(provider: string): string | null {
   switch (provider) {
     case 'opencode':
       return 'opencode'
@@ -127,9 +128,9 @@ export type CreateServerOptions = {
   tls?: TlsConfig
   publicOrigin?: string
   corsOrigin?: string
-  codingAgentStorage?: CodingAgentStorage
-  codingAgentRunner?: CodingAgentRunner
-  codingAgentCommandRunner?: CodingAgentCommandRunner
+  codingAgentStorage?: any
+  codingAgentRunner?: any
+  codingAgentCommandRunner?: any
   webSockets?: WebSocketBindings
   narratorRelay?: NarratorRelay
 }
@@ -223,12 +224,19 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       repository: persistence.terminalSessions
     })
 
-  const codingAgentStorage = options.codingAgentStorage ?? createCodingAgentStorage()
-  const codingAgentRunner = options.codingAgentRunner ?? createCodingAgentRunner()
-  const codingAgentCommandRunner =
-    options.codingAgentCommandRunner ??
-    (async (args: string[], commandOptions?: CodingAgentCommandOptions) =>
-      await runCodingAgentCli(args, commandOptions))
+  const codingAgentStorage = options.codingAgentStorage ?? createOpencodeStorage({ rootDir: process.env.OPENCODE_STORAGE_ROOT })
+  const codingAgentRunner =
+    options.codingAgentRunner ??
+    (async () => {
+      // minimal runner compatibility shim
+      return {
+        listRuns: async () => [],
+        getRun: async () => null,
+        startRun: async () => null,
+        killRun: async () => false
+      }
+    })
+  // optional command runner may be provided by tests or custom server setups
 
   const gitAuthor = detectGitAuthorFromCli()
   const commitAuthor = {
@@ -466,40 +474,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     return trimmed.length ? trimmed : '/'
   }
 
-  async function runCodingAgentCli(
-    args: string[],
-    commandOptions?: CodingAgentCommandOptions
-  ): Promise<CodingAgentCommandResult> {
-    return await new Promise((resolve, reject) => {
-      if (!Array.isArray(args) || args.length === 0) {
-        return reject(
-          new Error('runCodingAgentCli invoked with no args — refusing to spawn interactive opencode terminal')
-        )
-      }
-      const child = spawn('opencode', args, {
-        cwd: commandOptions?.cwd,
-        env: process.env,
-        stdio: ['ignore', 'pipe', 'pipe']
-      })
-      let stdout = ''
-      let stderr = ''
-      child.stdout?.on('data', (chunk) => {
-        stdout += chunk.toString()
-      })
-      child.stderr?.on('data', (chunk) => {
-        stderr += chunk.toString()
-      })
-      child.once('error', reject)
-      child.once('close', (code) => {
-        if (code === 0) {
-          resolve({ stdout, stderr })
-          return
-        }
-        const message = stderr.trim() || stdout.trim() || `opencode ${args.join(' ')} failed with code ${code}`
-        reject(new Error(message))
-      })
-    })
-  }
+  
 
   type CodeServerWorkspaceOptions = {
     sessionId: string
@@ -616,7 +591,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   }
 
   const agentRunHandler: RequestHandler = async (req: Request, res: Response) => {
-    const { prompt, provider, model, maxRounds, projectId } = req.body ?? {}
+    const { prompt, model, maxRounds, projectId } = req.body ?? {}
     if (!prompt || typeof prompt !== 'string') {
       res.status(400).json({ error: 'prompt is required' })
       return
@@ -694,19 +669,16 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
 
     try {
-      const providerToUse = typeof provider === 'string' && provider.length ? (provider as Provider) : undefined
       const modelToUse = typeof model === 'string' && model.length ? model : undefined
       const normalizedMaxRounds = typeof maxRounds === 'number' ? maxRounds : undefined
 
       agentLogger.info('Agent loop started', {
         sessionId,
         projectId: project?.id ?? null,
-        provider: providerToUse ?? null,
         model: modelToUse ?? null
       })
       const result = await runLoop({
         userInstructions: prompt,
-        provider: providerToUse,
         model: modelToUse,
         maxRounds: normalizedMaxRounds,
         sessionDir: sessionDir ?? undefined,
@@ -1131,7 +1103,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     wrapAsync,
     codingAgentRunner,
     codingAgentStorage,
-    codingAgentCommandRunner,
     ensureWorkspaceDirectory
   })
 

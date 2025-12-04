@@ -83,6 +83,10 @@ export const createWorkflowLogStream = (): WorkflowLogStream => {
     if (!data || (data.role !== 'worker' && data.role !== 'verifier')) {
       return
     }
+    const extractTextFromParts = (parts: any[] | undefined): string => {
+      if (!Array.isArray(parts)) return ''
+      return parts.map((p) => (p && typeof p === 'object' ? String(p.text ?? '') : String(p ?? ''))).join('').trim()
+    }
     const entry: WorkflowAgentLogEntry = {
       id: nextId(),
       workflowId: payload.workflowId,
@@ -93,7 +97,7 @@ export const createWorkflowLogStream = (): WorkflowLogStream => {
       round: data.round ?? 0,
       attempt: data.attempt ?? 0,
       model: typeof data.model === 'string' ? data.model : '',
-      chunk: data.chunk,
+      chunk: extractTextFromParts((data as any).parts),
       timestamp: payload.timestamp ?? new Date().toISOString(),
       sessionId: data.sessionId ?? null
     }

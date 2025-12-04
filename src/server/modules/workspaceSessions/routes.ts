@@ -2,10 +2,6 @@ import crypto from 'crypto'
 import { Router, type RequestHandler } from 'express'
 import fs from 'fs/promises'
 import path from 'path'
-import type { CodingAgentCommandRunner } from '../../../../src/modules/opencodeCommandRunner'
-import type { CodingAgentRunner, CodingAgentStorage } from '../../../../src/modules/provider'
-import { runProviderInvocation } from '../../../../src/modules/providerRunner'
-import { getProviderAdapter, listProviders } from '../../../../src/modules/providers'
 import type {
   CodingAgentMessage,
   CodingAgentProvider,
@@ -16,20 +12,15 @@ import type {
   CodingAgentSessionListResponse,
   CodingAgentSessionSummary
 } from '../../../interfaces/core/codingAgent'
+import { createSession, extractResponseText, promptSession } from '../../../modules/agent/opencode'
 import {
   CODING_AGENT_PROVIDER_ID,
   DEFAULT_CODING_AGENT_MODEL,
-  FALLBACK_CODING_AGENT_MODEL_IDS,
   KNOWN_CODING_AGENT_MODEL_LABELS
 } from '../../core/config'
 
 import { ensureProviderConfig } from '../../../../src/modules/workflowAgentExecutor'
-import {
-  runVerifierWorkerLoop,
-  type AgentLoopResult,
-  type VerifierStructuredResponse,
-  type WorkerStructuredResponse
-} from '../../../modules/agent/agent'
+import { runVerifierWorkerLoop } from '../../../modules/agent/agent'
 import { deletePersona, listPersonas, readPersona, writePersona } from './personas'
 
 const MULTI_AGENT_PERSONA_ID = 'multi-agent'
@@ -83,14 +74,23 @@ const simplifyPartsForSignature = (parts: CodingAgentMessage['parts']): unknown[
 
 export type WorkspaceSessionsDeps = {
   wrapAsync: WrapAsync
-  codingAgentRunner: CodingAgentRunner
-  codingAgentStorage: CodingAgentStorage
-  codingAgentCommandRunner: CodingAgentCommandRunner
+  // minimal runner/storage shapes expected by this router
+  codingAgentRunner: {
+    listRuns: () => Promise<any[]>
+    getRun: (id: string) => Promise<any | null>
+    startRun?: (opts: any) => Promise<any>
+    killRun?: (id: string) => Promise<boolean>
+  }
+  codingAgentStorage: {
+    rootDir?: string
+    listSessions: (opts: { workspacePath?: string } | undefined) => Promise<any[]>
+    getSession: (id: string) => Promise<any | null>
+  }
   ensureWorkspaceDirectory: (dirPath: string) => Promise<void>
 }
 
 export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
-  const { wrapAsync, codingAgentRunner, codingAgentStorage, codingAgentCommandRunner, ensureWorkspaceDirectory } = deps
+  const { wrapAsync, codingAgentRunner, codingAgentStorage, ensureWorkspaceDirectory } = deps
   const router = Router()
 
   const logSessions = (message: string, metadata?: Record<string, unknown>) => {
@@ -124,7 +124,7 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
   }): Promise<CodingAgentRunRecord> => {
     const sessionId = `ses_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`
     const startedAt = new Date().toISOString()
-    const run = {
+    const run: CodingAgentRunRecord = {
       sessionId,
       pid: -1,
       workspacePath: options.workspacePath,
@@ -132,116 +132,12 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       title: options.title,
       model: options.model,
       providerId: MULTI_AGENT_PROVIDER_ID,
-      logFile: null,
+      logFile: '',
       startedAt,
       updatedAt: startedAt,
       status: 'running',
       exitCode: null,
       signal: null
-    } as unknown as CodingAgentRunRecord
-
-    const storageRoot = codingAgentStorage.rootDir
-    const storagePaths = storageRoot
-      ? {
-          storageDir: path.join(storageRoot, 'storage'),
-          messageRoot: path.join(storageRoot, 'storage', 'message'),
-          partRoot: path.join(storageRoot, 'storage', 'part')
-        }
-      : null
-
-    const writeStructuredMessage = async (payload: {
-      role: string
-      text: string
-      providerId?: string | null
-      modelId?: string | null
-    }): Promise<boolean> => {
-      if (!storagePaths) return false
-      try {
-        const sessionMessageDir = path.join(storagePaths.messageRoot, sessionId)
-        await fs.mkdir(sessionMessageDir, { recursive: true })
-        await fs.mkdir(storagePaths.partRoot, { recursive: true })
-        const messageId = crypto.randomUUID()
-        const partId = crypto.randomUUID()
-        const now = new Date().toISOString()
-        const messageJson = {
-          id: messageId,
-          sessionID: sessionId,
-          role: payload.role,
-          time: { created: now, completed: now },
-          modelID: payload.modelId ?? null,
-          providerID: payload.providerId ?? null
-        }
-        await fs.writeFile(
-          path.join(sessionMessageDir, `${messageId}.json`),
-          JSON.stringify(messageJson, null, 2),
-          'utf8'
-        )
-        const partDirPath = path.join(storagePaths.partRoot, messageId)
-        await fs.mkdir(partDirPath, { recursive: true })
-        const partJson = {
-          id: partId,
-          type: 'text',
-          text: payload.text,
-          time: { start: Date.now(), end: Date.now() }
-        }
-        await fs.writeFile(path.join(partDirPath, `${partId}.json`), JSON.stringify(partJson, null, 2), 'utf8')
-        console.log('[coding-agent] persisted structured message', {
-          sessionId,
-          role: payload.role,
-          messagePath: path.join(sessionMessageDir, `${messageId}.json`),
-          partPath: path.join(partDirPath, `${partId}.json`)
-        })
-        return true
-      } catch (err) {
-        console.warn('[coding-agent] Failed to write agent message to storage', {
-          error: (err as any)?.message ?? String(err)
-        })
-        return false
-      }
-    }
-
-    const formatWorkerMessage = (payload: Partial<WorkerStructuredResponse>): string | null => {
-      if (!payload) return null
-      const sections: string[] = []
-      if (payload.status) sections.push(`Status: ${payload.status}`)
-      if (payload.plan) sections.push(`Plan:\n${payload.plan}`)
-      if (payload.work) sections.push(`Work:\n${payload.work}`)
-      if (payload.requests) sections.push(`Requests:\n${payload.requests}`)
-      if (!sections.length) return null
-      return sections.join('\n\n').trim()
-    }
-
-    const formatVerifierMessage = (payload: Partial<VerifierStructuredResponse>): string | null => {
-      if (!payload) return null
-      const sections: string[] = []
-      if (payload.verdict) {
-        const prioritySegment = typeof payload.priority === 'number' ? ` (priority ${payload.priority})` : ''
-        sections.push(`Verdict: ${payload.verdict}${prioritySegment}`)
-      }
-      if (payload.critique) sections.push(`Critique:\n${payload.critique}`)
-      if (payload.instructions) sections.push(`Instructions:\n${payload.instructions}`)
-      if (!sections.length) return null
-      return sections.join('\n\n').trim()
-    }
-
-    try {
-      if (storagePaths) {
-        const sessionMetaDir = path.join(storagePaths.storageDir, 'session', 'global')
-        await fs.mkdir(sessionMetaDir, { recursive: true })
-        const now = Date.now()
-        const metaJson = {
-          id: sessionId,
-          directory: options.workspacePath,
-          title: run.title ?? null,
-          time: { created: now, updated: now },
-          summary: { additions: 0, deletions: 0, files: 0 }
-        }
-        await fs.writeFile(path.join(sessionMetaDir, `${sessionId}.json`), JSON.stringify(metaJson, null, 2), 'utf8')
-      }
-    } catch (err) {
-      console.warn('[coding-agent] Failed to write session meta to storage', {
-        error: (err as any)?.message ?? String(err)
-      })
     }
 
     logSessions('Coding agent run started (multi-agent persona)', {
@@ -249,275 +145,165 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       sessionId: run.sessionId
     })
 
-    const logDir = path.join(options.workspacePath, '.opencode', 'agent-streams')
-    await fs.mkdir(logDir, { recursive: true })
-    const logPath = path.join(logDir, `${run.sessionId}.log`)
+    // simple log file for streaming output
+    try {
+      const logDir = path.join(options.workspacePath, '.opencode', 'agent-streams')
+      await fs.mkdir(logDir, { recursive: true })
+      const logPath = path.join(logDir, `${run.sessionId}.log`)
 
-    const appendLogLine = async (entry: { role: string; content: string; round?: number }) => {
-      const time = new Date().toISOString()
-      const roundSegment = typeof entry.round === 'number' ? `[round:${entry.round}] ` : ''
-      const line = `[${time}] [${entry.role}] ${roundSegment}${entry.content}\n`
-      await fs.appendFile(logPath, line, 'utf8')
-    }
-
-    const primeUserPrompt = async () => {
-      const trimmed = options.prompt.trim()
-      if (!trimmed) return
-      const ok = await writeStructuredMessage({
-        role: 'user',
-        text: trimmed,
-        providerId: MULTI_AGENT_PROVIDER_ID,
-        modelId: options.model ?? null
-      })
-      if (!ok) await appendLogLine({ role: 'user', content: trimmed })
-    }
-
-    await primeUserPrompt()
-
-    type JsonChunkParser = {
-      push: (chunk: string) => void
-      flush: () => string
-    }
-
-    type StreamEntry = {
-      role: string
-      round: number
-      rawBuffer: string
-      parser: JsonChunkParser
-    }
-
-    const streamEntries = new Map<string, StreamEntry>()
-    const persistedStreamKeys = new Set<string>()
-    const streamKey = (role: string, round: number) => `${role}:${round}`
-
-    const createJsonChunkParser = (onObject: (payload: unknown) => void): JsonChunkParser => {
-      let buffer = ''
-      let depth = 0
-      let inString = false
-      let escapeNext = false
-      let capturing = false
-
-      const reset = () => {
-        buffer = ''
-        depth = 0
-        inString = false
-        escapeNext = false
-        capturing = false
+      const appendLogLine = async (entry: { role: string; content: string; round?: number }) => {
+        const time = new Date().toISOString()
+        const roundSegment = typeof entry.round === 'number' ? `[round:${entry.round}] ` : ''
+        const line = `[${time}] [${entry.role}] ${roundSegment}${entry.content}\n`
+        await fs.appendFile(logPath, line, 'utf8')
       }
 
-      const emitBuffer = () => {
-        const payload = buffer
-        reset()
+      // write initial user prompt to the log
+      if (options.prompt && options.prompt.trim()) {
+        await appendLogLine({ role: 'user', content: options.prompt.trim() })
+      }
+
+      // run the agent loop in background; stream events are appended to the log
+      ;(async () => {
         try {
-          const parsed = JSON.parse(payload)
-          onObject(parsed)
-        } catch {
-          // ignore malformed fragments; they will still be available via raw logs
-        }
-      }
+          // persist structured messages into codingAgentStorage if available
+          const storageRoot = codingAgentStorage.rootDir
+          const storagePaths = storageRoot
+            ? {
+                storageDir: path.join(storageRoot, 'storage'),
+                messageRoot: path.join(storageRoot, 'storage', 'message'),
+                partRoot: path.join(storageRoot, 'storage', 'part')
+              }
+            : null
 
-      const pushChar = (char: string) => {
-        if (!capturing) {
-          if (char === '{') {
-            capturing = true
-            buffer = '{'
-            depth = 1
-          }
-          return
-        }
-        buffer += char
-        if (escapeNext) {
-          escapeNext = false
-          return
-        }
-        if (char === '\\') {
-          escapeNext = true
-          return
-        }
-        if (char === '"') {
-          inString = !inString
-          return
-        }
-        if (inString) return
-        if (char === '{') {
-          depth++
-          return
-        }
-        if (char === '}') {
-          depth--
-          if (depth === 0) {
-            emitBuffer()
-          }
-        }
-      }
-
-      return {
-        push(chunk: string) {
-          for (const char of chunk) {
-            pushChar(char)
-          }
-        },
-        flush() {
-          const remainder = capturing ? buffer : ''
-          reset()
-          return remainder
-        }
-      }
-    }
-
-    const formatStreamPayload = (role: string, payload: unknown): string | null => {
-      if (!payload || typeof payload !== 'object') return null
-      if (role === 'worker') return formatWorkerMessage(payload as Partial<WorkerStructuredResponse>)
-      if (role === 'verifier') return formatVerifierMessage(payload as Partial<VerifierStructuredResponse>)
-      return null
-    }
-
-    const persistAgentMessage = async (role: string, round: number, content: string) => {
-      const trimmed = content.trim()
-      if (!trimmed.length) return
-      const key = streamKey(role, round)
-      if (persistedStreamKeys.has(key)) return
-      persistedStreamKeys.add(key)
-      try {
-        const ok = await writeStructuredMessage({
-          role,
-          text: trimmed,
-          providerId: MULTI_AGENT_PROVIDER_ID,
-          modelId: options.model ?? null
-        })
-        if (!ok) {
-          persistedStreamKeys.delete(key)
-          await appendLogLine({ role, content: trimmed, round })
-        }
-      } catch (err) {
-        persistedStreamKeys.delete(key)
-        await appendLogLine({ role, content: trimmed, round })
-        throw err
-      }
-    }
-
-    const safePersistAgentMessage = (role: string, round: number, content: string) => {
-      void persistAgentMessage(role, round, content).catch((err) => {
-        console.warn('[coding-agent] Failed to persist agent message', {
-          role,
-          round,
-          error: (err as any)?.message ?? String(err)
-        })
-      })
-    }
-
-    const ensureStreamEntry = (role: string, round: number): StreamEntry => {
-      const key = streamKey(role, round)
-      const existing = streamEntries.get(key)
-      if (existing) return existing
-      const parser = createJsonChunkParser((payload) => {
-        const formatted = formatStreamPayload(role, payload)
-        if (!formatted) return
-        safePersistAgentMessage(role, round, formatted)
-      })
-      const entry: StreamEntry = { role, round, rawBuffer: '', parser }
-      streamEntries.set(key, entry)
-      return entry
-    }
-
-    const appendChunk = (event: { role: string; round: number; chunk: string }) => {
-      const entry = ensureStreamEntry(event.role, event.round)
-      entry.rawBuffer += event.chunk
-      entry.parser.push(event.chunk)
-    }
-
-    const persistLoopResult = async (result: AgentLoopResult | null) => {
-      if (!result) return
-      const bootstrapText = formatVerifierMessage(result.bootstrap?.parsed ?? null)
-      if (bootstrapText) {
-        await persistAgentMessage('verifier', result.bootstrap.round ?? 0, bootstrapText)
-      }
-      for (const round of result.rounds ?? []) {
-        const workerText = formatWorkerMessage(round.worker?.parsed ?? null)
-        if (workerText) {
-          await persistAgentMessage('worker', round.worker.round ?? 0, workerText)
-        }
-        const verifierText = formatVerifierMessage(round.verifier?.parsed ?? null)
-        if (verifierText) {
-          await persistAgentMessage('verifier', round.verifier.round ?? 0, verifierText)
-        }
-      }
-    }
-
-    const flushStreamEntries = async () => {
-      for (const [key, entry] of streamEntries) {
-        if (persistedStreamKeys.has(key)) continue
-        const remainder = entry.parser.flush()
-        const fallbackContent = (remainder || entry.rawBuffer).trim()
-        if (!fallbackContent.length) continue
-        await appendLogLine({ role: entry.role, content: fallbackContent, round: entry.round })
-      }
-      streamEntries.clear()
-    }
-
-    ;(async () => {
-      let loopResult: AgentLoopResult | null = null
-      // monitor opencode CLI invocations log and print its tail periodically to aid debugging
-      let monitorRunning = true
-      const invocationsLogPath = path.join(options.workspacePath, '.opencode', 'invocations.log')
-      const monitor = async () => {
-        while (monitorRunning) {
-          try {
-            const exists = await fs
-              .stat(invocationsLogPath)
-              .then(() => true)
-              .catch(() => false)
-            if (exists) {
-              const raw = await fs.readFile(invocationsLogPath, 'utf8')
-              const tail = raw.slice(-4000)
-              console.log('[coding-agent] opencode invocations log tail:\n', tail)
-            }
-          } catch (err) {
-            // ignore
-          }
-          await new Promise((r) => setTimeout(r, 2000))
-        }
-      }
-      void monitor()
-      try {
-        loopResult = await runVerifierWorkerLoop({
-          userInstructions: options.prompt,
-          provider: (options.llmProviderId ?? 'opencode') as any,
-          model: options.model,
-          sessionDir: options.workspacePath,
-          onStream: (evt) => {
+          const writeStructuredMessage = async (payload: {
+            role: string
+            text: string
+            providerId?: string | null
+            modelId?: string | null
+          }): Promise<boolean> => {
+            if (!storagePaths) return false
             try {
-              // log incoming stream chunks to aid debugging of what the provider emitted
-              try {
-                const preview = typeof evt.chunk === 'string' ? evt.chunk.slice(0, 200) : String(evt.chunk)
-                console.log('[coding-agent] onStream chunk', { role: evt.role, round: evt.round, preview })
-              } catch {}
-              appendChunk({ role: evt.role, round: evt.round, chunk: evt.chunk })
+              const sessionMessageDir = path.join(storagePaths.messageRoot, sessionId)
+              await fs.mkdir(sessionMessageDir, { recursive: true })
+              await fs.mkdir(storagePaths.partRoot, { recursive: true })
+              const messageId = crypto.randomUUID()
+              const partId = crypto.randomUUID()
+              const now = new Date().toISOString()
+              const messageJson = {
+                id: messageId,
+                sessionID: sessionId,
+                role: payload.role,
+                time: { created: now, completed: now },
+                modelID: payload.modelId ?? null,
+                providerID: payload.providerId ?? null
+              }
+              await fs.writeFile(
+                path.join(sessionMessageDir, `${messageId}.json`),
+                JSON.stringify(messageJson, null, 2),
+                'utf8'
+              )
+              const partDirPath = path.join(storagePaths.partRoot, messageId)
+              await fs.mkdir(partDirPath, { recursive: true })
+              const partJson = {
+                id: partId,
+                type: 'text',
+                text: payload.text,
+                time: { start: Date.now(), end: Date.now() }
+              }
+              await fs.writeFile(path.join(partDirPath, `${partId}.json`), JSON.stringify(partJson, null, 2), 'utf8')
+              return true
             } catch (err) {
-              console.warn('[coding-agent] Failed to write agent stream chunk', {
+              console.warn('[coding-agent] Failed to write agent message to storage', {
                 error: (err as any)?.message ?? String(err)
               })
+              return false
             }
           }
-        })
-      } catch (err) {
-        logSessionsError('Agent loop failed', err, {
-          workspacePath: options.workspacePath,
-          personaId: options.personaId ?? MULTI_AGENT_PERSONA_ID
-        })
-      } finally {
-        monitorRunning = false
-        try {
-          await persistLoopResult(loopResult)
+
+          const formatWorkerMessage = (payload: any): string | null => {
+            if (!payload) return null
+            const sections: string[] = []
+            if (payload.status) sections.push(`Status: ${payload.status}`)
+            if (payload.plan) sections.push(`Plan:\n${payload.plan}`)
+            if (payload.work) sections.push(`Work:\n${payload.work}`)
+            if (payload.requests) sections.push(`Requests:\n${payload.requests}`)
+            if (!sections.length) return null
+            return sections.join('\n\n').trim()
+          }
+
+          const formatVerifierMessage = (payload: any): string | null => {
+            if (!payload) return null
+            const sections: string[] = []
+            if (payload.verdict) {
+              const prioritySegment = typeof payload.priority === 'number' ? ` (priority ${payload.priority})` : ''
+              sections.push(`Verdict: ${payload.verdict}${prioritySegment}`)
+            }
+            if (payload.critique) sections.push(`Critique:\n${payload.critique}`)
+            if (payload.instructions) sections.push(`Instructions:\n${payload.instructions}`)
+            if (!sections.length) return null
+            return sections.join('\n\n').trim()
+          }
+
+          const result = await runVerifierWorkerLoop({
+            userInstructions: options.prompt,
+            model: options.model,
+            sessionDir: options.workspacePath,
+            onStream: async (evt) => {
+              try {
+                // prefer structured parts if present
+                let formatted: string | null = null
+                if (Array.isArray((evt as any).parts) && (evt as any).parts.length) {
+                  formatted = (evt as any).parts.map((p: any) => p.text ?? String(p)).join('\n')
+                } else if (typeof (evt as any).chunk === 'string') {
+                  // chunk may be JSON string
+                  try {
+                    const parsed = JSON.parse((evt as any).chunk)
+                    if (evt.role === 'worker') formatted = formatWorkerMessage(parsed)
+                    else if (evt.role === 'verifier') formatted = formatVerifierMessage(parsed)
+                  } catch {
+                    formatted = String((evt as any).chunk)
+                  }
+                }
+                if (formatted && storagePaths) {
+                  await writeStructuredMessage({
+                    role: evt.role,
+                    text: formatted,
+                    providerId: MULTI_AGENT_PROVIDER_ID,
+                    modelId: options.model ?? null
+                  })
+                }
+                // always append raw to the simple log as well
+                const content =
+                  formatted ??
+                  (Array.isArray((evt as any).parts)
+                    ? (evt as any).parts.map((p: any) => p.text ?? '').join('\n')
+                    : String((evt as any).chunk ?? ''))
+                await appendLogLine({ role: evt.role, content, round: evt.round })
+              } catch (err) {
+                console.warn('[coding-agent] failed to append stream chunk', err)
+              }
+            }
+          })
+
+          await appendLogLine({ role: 'system', content: `Agent finished: ${result.outcome}` })
         } catch (err) {
-          logSessionsError('Failed to persist multi-agent loop result', err, {
+          logSessionsError('Agent loop failed', err, {
             workspacePath: options.workspacePath,
             personaId: options.personaId ?? MULTI_AGENT_PERSONA_ID
           })
+          try {
+            await fs.appendFile(
+              path.join(options.workspacePath, '.opencode', 'agent-streams', `${run.sessionId}.log`),
+              `Agent loop failed: ${String(err)}\n`,
+              'utf8'
+            )
+          } catch {}
         }
-        await flushStreamEntries()
-      }
-    })()
+      })()
+    } catch (err) {
+      console.warn('[coding-agent] failed to start multi-agent session logging', err)
+    }
 
     return run
   }
@@ -546,85 +332,16 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
     return `${titleizeModelSegment(providerSegment)} · ${titleizeModelSegment(nameSegment)}`
   }
 
-  const parseCodingAgentModelList = (raw: string | null | undefined): string[] => {
-    if (!raw) return []
-    const trimmed = raw.trim()
-    if (!trimmed.length) return []
-    try {
-      const parsed = JSON.parse(trimmed)
-      if (Array.isArray(parsed)) {
-        return parsed
-          .filter((entry): entry is string => typeof entry === 'string')
-          .map((entry) => entry.trim())
-          .filter(Boolean)
-      }
-      if (Array.isArray((parsed as any).models)) {
-        return ((parsed as any).models as unknown[])
-          .filter((entry): entry is string => typeof entry === 'string')
-          .map((entry) => entry.trim())
-          .filter(Boolean)
-      }
-    } catch {
-      // fall back to newline parsing
-    }
-    return trimmed
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-  }
-
-  const ensureCodingAgentModelList = (models: string[]): string[] => {
-    const seen = new Set<string>()
-    const append = (value: string) => {
-      const normalized = value.trim()
-      if (!normalized.length || seen.has(normalized)) return
-      seen.add(normalized)
-    }
-    models.filter((value) => typeof value === 'string').forEach(append)
-    if (!seen.size) {
-      FALLBACK_CODING_AGENT_MODEL_IDS.forEach(append)
-    }
-    if (!seen.has(DEFAULT_CODING_AGENT_MODEL)) {
-      append(DEFAULT_CODING_AGENT_MODEL)
-    }
-    const ordered = Array.from(seen)
-    const prioritized = ordered.filter((id) => id !== DEFAULT_CODING_AGENT_MODEL)
-    return [DEFAULT_CODING_AGENT_MODEL, ...prioritized]
-  }
-
-  const listCodingAgentModelIds = async (): Promise<string[]> => {
-    try {
-      const result = await codingAgentCommandRunner(['models'])
-      const stdout = result?.stdout ?? ''
-      return ensureCodingAgentModelList(parseCodingAgentModelList(stdout))
-    } catch (error) {
-      console.warn('Failed to list coding agent models via coding agent CLI, falling back to defaults.', error)
-      return ensureCodingAgentModelList([])
-    }
-  }
-
-  const describeDefaultCodingAgentProvider = async (): Promise<CodingAgentProvider> => {
-    const modelIds = await listCodingAgentModelIds()
-    const defaultModelId = modelIds[0] ?? DEFAULT_CODING_AGENT_MODEL
-    return {
-      id: CODING_AGENT_PROVIDER_ID,
-      label: 'Coding Agent CLI',
-      defaultModelId,
-      models: modelIds.map((id) => ({ id, label: formatCodingAgentModelLabel(id) }))
-    }
-  }
-
   const listCodingAgentProviders = async (): Promise<CodingAgentProvider[]> => {
-    const adapters = listProviders()
-    const descriptions: CodingAgentProvider[] = []
-    for (const adapter of adapters) {
-      if (adapter.id === CODING_AGENT_PROVIDER_ID) {
-        descriptions.push(await describeDefaultCodingAgentProvider())
-        continue
+    // Simplified provider listing: advertise only the built-in opencode provider
+    return [
+      {
+        id: CODING_AGENT_PROVIDER_ID,
+        label: 'Opencode',
+        defaultModelId: DEFAULT_CODING_AGENT_MODEL,
+        models: [{ id: DEFAULT_CODING_AGENT_MODEL, label: formatCodingAgentModelLabel(DEFAULT_CODING_AGENT_MODEL) }]
       }
-      descriptions.push({ id: adapter.id, label: adapter.label, defaultModelId: '', models: [] })
-    }
-    return descriptions
+    ]
   }
 
   const listCodingAgentProvidersHandler: RequestHandler = async (_req, res) => {
@@ -647,8 +364,8 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
         codingAgentRunner.listRuns()
       ])
       type RunnerRun = (typeof runList)[number]
-      const runIndex = new Map<string, RunnerRun>(runList.map((run) => [run.sessionId, run]))
-      const payload: CodingAgentSessionSummary[] = sessionList.map((session) => {
+      const runIndex = new Map<string, RunnerRun>(runList.map((run: any) => [run.sessionId, run]))
+      const payload: CodingAgentSessionSummary[] = sessionList.map((session: any) => {
         const run = runIndex.get(session.id)
         const providerId = run?.providerId ?? session.providerId ?? null
         const modelId = run?.model ?? session.modelId ?? null
@@ -697,7 +414,7 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
   const listCodingAgentRunsHandler: RequestHandler = async (_req, res) => {
     try {
       const runs = await codingAgentRunner.listRuns()
-      const payload: CodingAgentRunRecord[] = runs.map((run) => ({
+      const payload: CodingAgentRunRecord[] = runs.map((run: any) => ({
         ...run,
         providerId: run.providerId ?? CODING_AGENT_PROVIDER_ID
       }))
@@ -773,6 +490,10 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
 
       // Branch: if persona is NOT multi-agent, start a normal provider-run via codingAgentRunner.
       if (!multiAgentMode) {
+        if (typeof codingAgentRunner.startRun !== 'function') {
+          res.status(501).json({ error: 'Provider run not supported in this server build' })
+          return
+        }
         try {
           const runRecord = await codingAgentRunner.startRun({
             workspacePath: normalizedWorkspace,
@@ -820,6 +541,10 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       return
     }
     try {
+      if (typeof codingAgentRunner.killRun !== 'function') {
+        res.status(501).json({ error: 'Kill run not supported in this server build' })
+        return
+      }
       const success = await codingAgentRunner.killRun(sessionId)
       res.json({ success })
     } catch (error) {
@@ -878,39 +603,29 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
           .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
           .find((candidate) => candidate.length)
           ?.trim() ?? DEFAULT_CODING_AGENT_MODEL
-      const adapter = getProviderAdapter(resolvedProviderId)
-      if (!adapter) {
-        res.status(400).json({ error: `Unsupported provider: ${resolvedProviderId}` })
-        return
-      }
-      const invocation = adapter.buildInvocation
-        ? adapter.buildInvocation({
-            sessionId,
-            modelId: resolvedModelId,
-            text,
-            workspacePath: existing.session.workspacePath,
-            messages: existing.messages,
-            session: existing
-          })
-        : null
-      if (!invocation) {
-        res.status(500).json({ error: `Provider ${resolvedProviderId} cannot build invocation` })
-        return
-      }
-      logSessions('Posting coding agent message', {
+      logSessions('Posting coding agent message (opencode prompt)', {
         sessionId,
         providerId: resolvedProviderId,
         modelId: resolvedModelId,
         role
       })
       try {
-        await runProviderInvocation(invocation, {
-          cwd: existing.session.workspacePath,
-          opencodeCommandRunner: codingAgentCommandRunner
-        })
+        // Use opencode directly to prompt the workspace session
+        const opSession = await createSession(existing.session.workspacePath)
+        const response = await promptSession(opSession, [text], resolvedModelId)
+        try {
+          const out = extractResponseText((response as any).parts ?? (response as any))
+          const logDir = path.join(existing.session.workspacePath, '.opencode', 'agent-streams')
+          await fs.mkdir(logDir, { recursive: true })
+          const logPath = path.join(logDir, `${sessionId}.log`)
+          const line = `[${new Date().toISOString()}] [provider] ${out}\n`
+          await fs.appendFile(logPath, line, 'utf8')
+        } catch {
+          // best-effort logging, ignore
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Provider invocation failed'
-        logSessionsError('Provider invocation failed', err, {
+        logSessionsError('Opencode prompt failed', err, {
           sessionId,
           providerId: resolvedProviderId,
           modelId: resolvedModelId

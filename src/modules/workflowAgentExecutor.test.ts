@@ -22,14 +22,13 @@ describe('createAgentWorkflowExecutor', () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), 'workflow-agent-'))
     tempDirs.push(sessionDir)
     const runLoop = vi.fn().mockResolvedValue(buildAgentLoopResult('approved'))
-    const executor = createAgentWorkflowExecutor({ runLoop, provider: 'goose', model: 'gpt-oss', maxRounds: 4 })
+    const executor = createAgentWorkflowExecutor({ runLoop, model: 'gpt-oss', maxRounds: 4 })
 
     const args = buildExecutorArgs(sessionDir)
     const result = await executor(args)
 
     expect(runLoop).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: 'goose',
         model: 'gpt-oss',
         maxRounds: 4,
         sessionDir,

@@ -1,4 +1,6 @@
 import { createOpencodeClient, createOpencodeServer, OpencodeClient, Part, Session, TextPart } from '@opencode-ai/sdk'
+import fs from 'fs/promises'
+import path from 'path'
 
 let opencodeServer: {
   url: string
@@ -93,4 +95,139 @@ export const extractResponseText = (response: Part[]): string => {
       .reverse()
       .at(-1) as TextPart
   ).text
+}
+
+// --- Opencode storage and run-record helpers (migrated here to avoid duplication)
+export type OpencodeSessionSummary = {
+  id: string
+  title: string | null
+  workspacePath: string | null
+  projectId: string | null
+  createdAt?: string
+  updatedAt?: string
+  summary?: { additions: number; deletions: number; files: number }
+}
+
+export type OpencodeMessagePart = {
+  id: string
+  type: string
+  text?: string
+  start?: number | null
+  end?: number | null
+}
+
+export type OpencodeSessionDetail = {
+  session: OpencodeSessionSummary
+  messages: Array<any>
+}
+
+export type OpencodeStorage = {
+  rootDir?: string
+  listSessions: (opts?: { workspacePath?: string }) => Promise<OpencodeSessionSummary[]>
+  getSession: (id: string) => Promise<OpencodeSessionDetail | null>
+}
+
+export const createOpencodeStorage = ({ rootDir }: { rootDir?: string }): OpencodeStorage => {
+  const storageRoot = rootDir
+
+  const storagePaths = storageRoot
+    ? {
+        storageDir: path.join(storageRoot, 'storage'),
+        messageRoot: path.join(storageRoot, 'storage', 'message'),
+        partRoot: path.join(storageRoot, 'storage', 'part')
+      }
+    : null
+
+  const listSessions = async (_opts?: { workspacePath?: string }) => {
+    if (!storagePaths) return []
+    try {
+      const metaDir = path.join(storagePaths.storageDir, 'session', 'global')
+      const entries = await fs.readdir(metaDir).catch(() => [])
+      const sessions: any[] = []
+      for (const fname of entries) {
+        if (!fname.endsWith('.json')) continue
+        try {
+          const raw = await fs.readFile(path.join(metaDir, fname), 'utf8')
+          const parsed = JSON.parse(raw)
+          sessions.push({ id: parsed.id, title: parsed.title ?? null, directory: parsed.directory ?? null, time: parsed.time ?? {} })
+        } catch {}
+      }
+      return sessions
+    } catch {
+      return []
+    }
+  }
+
+  const getSession = async (id: string) => {
+    if (!storagePaths) return null
+    try {
+      const sessionMetaPath = path.join(storagePaths.storageDir, 'session', 'global', `${id}.json`)
+      const metaRaw = await fs.readFile(sessionMetaPath, 'utf8')
+      const meta = JSON.parse(metaRaw)
+      const messageDir = path.join(storagePaths.messageRoot, id)
+      const msgs: any[] = []
+      const msgFiles = await fs.readdir(messageDir).catch(() => [])
+      for (const mf of msgFiles) {
+        if (!mf.endsWith('.json')) continue
+        try {
+          const mraw = await fs.readFile(path.join(messageDir, mf), 'utf8')
+          const mobj = JSON.parse(mraw)
+          // load parts
+          const partsDir = path.join(storagePaths.partRoot, mobj.id)
+          const partFiles = await fs.readdir(partsDir).catch(() => [])
+          const parts: any[] = []
+          for (const pf of partFiles) {
+            if (!pf.endsWith('.json')) continue
+            try {
+              const praw = await fs.readFile(path.join(partsDir, pf), 'utf8')
+              const pobj = JSON.parse(praw)
+              parts.push(pobj)
+            } catch {}
+          }
+          msgs.push({ ...mobj, parts })
+        } catch {}
+      }
+      return {
+        session: {
+          id: meta.id,
+          title: meta.title ?? null,
+          workspacePath: meta.directory ?? null,
+          projectId: null,
+          createdAt: meta.time?.created ? new Date(meta.time.created).toISOString() : new Date().toISOString(),
+          updatedAt: meta.time?.updated ? new Date(meta.time.updated).toISOString() : new Date().toISOString(),
+          summary: meta.summary ?? { additions: 0, deletions: 0, files: 0 }
+        },
+        messages: msgs
+      }
+    } catch {
+      return null
+    }
+  }
+
+  return { rootDir: storageRoot, listSessions, getSession }
+}
+
+export type OpencodeRunRecord = {
+  sessionId: string
+  pid: number
+  workspacePath: string
+  prompt: string
+  title: string | null
+  model: string | null
+  providerId: string | null
+  logFile: string
+  startedAt: string
+  updatedAt: string
+  status: 'running' | 'finished' | 'failed'
+  exitCode: number | null
+  signal: string | null
+}
+
+export default {
+  getOpencodeServer,
+  getOpencodeClient,
+  createSession,
+  promptSession,
+  extractResponseText,
+  createOpencodeStorage
 }

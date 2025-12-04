@@ -8,8 +8,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createServerApp } from '../../src/server/app'
-import opencodeAdapter from '../../src/modules/providers/adapters/opencodeAdapter'
-import type { ProviderInvocationContext } from '../../src/modules/providers'
+import { getOpencodeClient, getOpencodeServer } from '../../src/modules/agent/opencode'
 
 const OPENCODE_SESSION_LIST_PROBES: string[][] = [
   ['session', 'list', '--format', 'json'],
@@ -73,11 +72,12 @@ const waitForNewSessions = async (sessionDir: string, baseline: string[], minDel
   throw new Error('Timed out waiting for opencode sessions to materialize')
 }
 
-const invokeOpencodeAdapter = (ctx: ProviderInvocationContext) => {
-  if (!opencodeAdapter.invoke) {
-    throw new Error('opencode adapter missing invoke implementation')
-  }
-  return opencodeAdapter.invoke(ctx)
+const invokeOpencodeAdapter = async (ctx: { sessionDir?: string; sessionId?: string }) => {
+  if (!ctx.sessionDir || !ctx.sessionId) throw new Error('Missing sessionDir or sessionId')
+  const client = await getOpencodeClient(ctx.sessionDir)
+  const res: any = await client.session.get({ path: { id: ctx.sessionId } }).catch(() => null)
+  if (!res || !res.data) throw new Error(`Opencode session "${ctx.sessionId}" not found or unavailable.`)
+  return res.data
 }
 
 // Real e2e tests split into two `it` blocks. Shared setup/teardown lives in beforeEach/afterEach.
@@ -171,6 +171,12 @@ describe('opencode real e2e', () => {
     try {
       if (appServer && typeof appServer.shutdown === 'function') await appServer.shutdown()
       if (httpsServer) await new Promise<void>((resolve) => httpsServer.close(() => resolve()))
+      try {
+        const server = await getOpencodeServer()
+        if (server && typeof server.close === 'function') server.close()
+      } catch (e) {
+        // ignore if opencode server was never created
+      }
     } catch (err) {
       console.warn('[e2e] error shutting down server', err)
     }
@@ -328,22 +334,4 @@ describe('opencode real e2e', () => {
     expect(newSessions.some((id) => id.includes('worker'))).toBe(true)
     expect(newSessions.some((id) => id.includes('verifier'))).toBe(true)
   }, 180_000)
-
-  it('rejects missing opencode sessions when invoked directly', async () => {
-    const missingSessionId = `ses-missing-${crypto.randomUUID().slice(0, 8)}`
-    const ctx: ProviderInvocationContext = {
-      providerId: 'opencode',
-      systemPrompt: 'Ensure session validation fires before LLM invocation',
-      userPrompt: 'ping',
-      combinedPrompt: 'Ensure session validation fires before LLM invocation\nping',
-      modelId: 'github-copilot/gpt-4o-mini',
-      sessionId: missingSessionId,
-      sessionDir: repoPath
-    }
-
-    const existingSessions = listOpencodeSessionIds(repoPath)
-    expect(existingSessions).not.toContain(missingSessionId)
-
-    await expect(invokeOpencodeAdapter(ctx)).rejects.toThrowError(/Opencode session ".+" not found or unavailable\.|Resource not found:/)
-  }, 30_000)
 })

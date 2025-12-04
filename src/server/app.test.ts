@@ -17,12 +17,7 @@ import type WebSocketType from 'ws'
 import type { WebSocketServer as WebSocketServerType, RawData as WsRawData } from 'ws'
 import type { CodeServerController, CodeServerHandle, CodeServerOptions } from '../../src/modules/codeServer'
 import type { TerminalSessionRecord } from '../../src/modules/database'
-import {
-  createOpencodeStorage,
-  type OpencodeSessionDetail,
-  type OpencodeSessionSummary,
-  type OpencodeStorage
-} from '../../src/modules/opencodeStorage'
+import { createOpencodeStorage, type OpencodeSessionDetail, type OpencodeSessionSummary, type OpencodeStorage } from '../../src/modules/agent/opencode'
 import type { OpencodeRunner } from '../../src/modules/provider'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import type { LiveTerminalSession, TerminalModule } from '../../src/modules/terminal'
@@ -353,8 +348,7 @@ async function createIntegrationHarness(options?: {
     const chunk: AgentStreamEvent = {
       role: 'worker',
       round: 1,
-      chunk: 'stream-chunk',
-      provider: 'ollama',
+      parts: [{ id: 'p1', type: 'text', text: 'stream-chunk' } as any],
       model: 'mock-model',
       attempt: 1
     }
