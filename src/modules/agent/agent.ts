@@ -1,4 +1,4 @@
-import { Session } from '@opencode-ai/sdk'
+import { Part, Session } from '@opencode-ai/sdk'
 import crypto from 'crypto'
 import type { PersistenceContext, PersistenceModule, Timestamp } from '../database'
 import { appendLogEntry, loadSessionMeta } from '../provenance/provenance'
@@ -98,7 +98,7 @@ export type AgentLoopResult = {
 export type AgentStreamEvent = {
   role: 'worker' | 'verifier'
   round: number
-  chunk: string
+  parts: Part[]
   model: string
   attempt: number
   sessionId?: string
@@ -214,14 +214,13 @@ type VerifierInvokeArgs = {
 
 async function invokeWorker(args: WorkerInvokeArgs): Promise<WorkerTurn> {
   const query = buildWorkerPrompt(args.userInstructions, args.verifierInstructions, args.verifierCritique, args.round)
-  // const streamBridge = createStreamBridge('worker', args.round, args.onStream)
   const { raw, parsed } = await invokeStructuredJsonCall({
     role: 'worker',
     systemPrompt: WORKER_SYSTEM_PROMPT,
     basePrompt: query,
     model: args.model,
     session: args.session,
-    // onStream: streamBridge,
+    onStream: args.onStream,
     parseResponse: (response) => parseWorkerResponse('worker', response)
   })
   console.log(raw, parsed)
@@ -230,14 +229,13 @@ async function invokeWorker(args: WorkerInvokeArgs): Promise<WorkerTurn> {
 
 async function invokeVerifier(args: VerifierInvokeArgs): Promise<VerifierTurn> {
   const query = buildVerifierPrompt(args.userInstructions, args.workerTurn, args.round)
-  // const streamBridge = createStreamBridge('verifier', args.round, args.onStream)
   const { raw, parsed } = await invokeStructuredJsonCall({
     role: 'verifier',
     systemPrompt: VERIFIER_SYSTEM_PROMPT,
     basePrompt: query,
     model: args.model,
     session: args.session,
-    // onStream: streamBridge,
+    onStream: args.onStream,
     parseResponse: (response) => parseVerifierResponse('verifier', response)
   })
   console.log(raw, parsed)
@@ -358,7 +356,7 @@ type StructuredJsonCallOptions<T> = {
   basePrompt: string
   model: string
   session: Session
-  // onStream?: LLMStreamCallback
+  onStream?: AgentStreamCallback
   parseResponse: (res: string) => T
 }
 
@@ -384,7 +382,17 @@ async function invokeStructuredJsonCall<T>(options: StructuredJsonCallOptions<T>
     })
 
     try {
-      return { raw, parsed: options.parseResponse(raw) }
+      const parsed = options.parseResponse(raw)
+
+      options.onStream?.({
+        role: options.role,
+        round: attempt,
+        parts: response.parts,
+        model: options.model,
+        attempt: 1,
+        sessionId: options.session.id
+      })
+      return { raw, parsed }
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error))
       console.warn('[agent] structured JSON call failed', {
