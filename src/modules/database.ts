@@ -8,7 +8,7 @@ import {
   type AgentRunStatus,
   type AgentRunsBindings,
   type AgentRunsRepository
-} from './agent'
+} from './agent/agent'
 import {
   codeServerSessionsPersistence,
   type CodeServerSessionInput,

@@ -16,12 +16,12 @@ RUN apt-get update \
 RUN mkdir -p /root/.config && touch /root/.bashrc
 
 RUN curl -fsSL https://opencode.ai/install | bash && \
+  ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode && \
   ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode-cli
 
 RUN curl -fsSL https://radicle.xyz/install | sh -s -- --prefix=/usr/local/radicle --no-modify-path
 
 ENV PATH="/root/.opencode/bin:/usr/local/bin:/usr/local/radicle/bin:${PATH}"
-ENV OPENCODE_BIN_PATH=/root/.opencode/bin/opencode
 ENV RADICLE_BIN_PATH=/usr/local/radicle/bin/rad
 ENV RADICLE_CLI_PATH=/usr/local/bin/rad
 
@@ -32,8 +32,7 @@ RUN npm install
 
 COPY . .
 
-RUN chmod +x docker/workflow-runner/bin/opencode docker/workflow-runner/bin/rad \
-  && cp docker/workflow-runner/bin/opencode /usr/local/bin/opencode \
+RUN chmod +x docker/workflow-runner/bin/rad \
   && cp docker/workflow-runner/bin/rad /usr/local/bin/rad
 
 ENV OPENCODE_LOG_DIR=/var/log/opencode

@@ -9,7 +9,6 @@ import { createServer as createHttpsServer, type Server as HttpsServer } from 'n
 import { createServer as createNetServer, type AddressInfo, type Socket } from 'node:net'
 import os from 'os'
 import path from 'path'
-import { runVerifierWorkerLoop, type AgentStreamEvent } from '../../../src/modules/agent'
 import {
   createCodeServerController,
   type CodeServerController,
@@ -17,18 +16,6 @@ import {
 } from '../../../src/modules/codeServer'
 import { createPersistence, type Persistence, type ProjectRecord } from '../../../src/modules/database'
 import { detectGitAuthorFromCli } from '../../../src/modules/gitAuthor'
-import type { Provider } from '../../../src/modules/llm'
-import type {
-  CodingAgentCommandOptions,
-  CodingAgentCommandResult,
-  CodingAgentCommandRunner
-} from '../../../src/modules/opencodeCommandRunner'
-import {
-  createCodingAgentRunner,
-  createCodingAgentStorage,
-  type CodingAgentRunner,
-  type CodingAgentStorage
-} from '../../../src/modules/provider'
 import { createRadicleModule, type RadicleModule } from '../../../src/modules/radicle'
 import { createDiffModule } from '../../../src/modules/review/diff'
 import { createReviewEngineModule } from '../../../src/modules/review/engine'
@@ -41,6 +28,7 @@ import { createWorkflowPolicyFromEnv } from '../../../src/modules/workflowPolicy
 import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
+import { runVerifierWorkerLoop, type AgentStreamEvent } from '../../modules/agent/agent'
 import { runGitCommand } from '../../modules/git'
 import { createSseStream } from '../lib/sse'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
@@ -483,6 +471,11 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     commandOptions?: CodingAgentCommandOptions
   ): Promise<CodingAgentCommandResult> {
     return await new Promise((resolve, reject) => {
+      if (!Array.isArray(args) || args.length === 0) {
+        return reject(
+          new Error('runCodingAgentCli invoked with no args — refusing to spawn interactive opencode terminal')
+        )
+      }
       const child = spawn('opencode', args, {
         cwd: commandOptions?.cwd,
         env: process.env,

@@ -20,7 +20,6 @@ export type WorkflowAgentLogEntry = {
   role: 'worker' | 'verifier'
   round: number
   attempt: number
-  provider: string
   model: string
   chunk: string
   timestamp: string

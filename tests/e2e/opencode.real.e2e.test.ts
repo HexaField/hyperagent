@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import fs from 'fs/promises'
 import fetch from 'node-fetch'
 import { spawnSync } from 'node:child_process'
@@ -7,6 +8,77 @@ import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createServerApp } from '../../src/server/app'
+import opencodeAdapter from '../../src/modules/providers/adapters/opencodeAdapter'
+import type { ProviderInvocationContext } from '../../src/modules/providers'
+
+const OPENCODE_SESSION_LIST_PROBES: string[][] = [
+  ['session', 'list', '--format', 'json'],
+  ['session', 'list']
+]
+
+const parseSessionJson = (raw: string): string[] => {
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed?.sessions)) {
+      return parsed.sessions.map((entry: any) => entry?.name ?? entry?.session ?? entry?.id).filter(Boolean)
+    }
+    if (Array.isArray(parsed)) {
+      return parsed.filter((entry): entry is string => typeof entry === 'string')
+    }
+  } catch {
+    // fall through
+  }
+  return []
+}
+
+const parseSessionPlain = (raw: string): string[] =>
+  raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+const listOpencodeSessionIds = (cwd: string): string[] => {
+  for (const args of OPENCODE_SESSION_LIST_PROBES) {
+    try {
+      const bin = process.env.OPENCODE_BIN || 'opencode'
+      const result = spawnSync(bin, args, { cwd, encoding: 'utf8' })
+      if (result.error || (typeof result.status === 'number' && result.status !== 0)) {
+        continue
+      }
+      const stdout = (result.stdout ?? '').toString().trim()
+      if (!stdout.length) continue
+      const ids = args.includes('--format') ? parseSessionJson(stdout) : parseSessionPlain(stdout)
+      if (ids.length) return ids.map((id) => id.toString().trim()).filter(Boolean)
+    } catch {
+      // try next probe format
+    }
+  }
+  return []
+}
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const waitForNewSessions = async (sessionDir: string, baseline: string[], minDelta: number): Promise<string[]> => {
+  const baselineSet = new Set(baseline)
+  const maxDurationMs = 60_000
+  const start = Date.now()
+  while (Date.now() - start < maxDurationMs) {
+    const current = listOpencodeSessionIds(sessionDir)
+    const diff = current.filter((id) => !baselineSet.has(id))
+    if (diff.length >= minDelta) {
+      return diff
+    }
+    await delay(1_000)
+  }
+  throw new Error('Timed out waiting for opencode sessions to materialize')
+}
+
+const invokeOpencodeAdapter = (ctx: ProviderInvocationContext) => {
+  if (!opencodeAdapter.invoke) {
+    throw new Error('opencode adapter missing invoke implementation')
+  }
+  return opencodeAdapter.invoke(ctx)
+}
 
 // Real e2e tests split into two `it` blocks. Shared setup/teardown lives in beforeEach/afterEach.
 describe('opencode real e2e', () => {
@@ -109,8 +181,15 @@ describe('opencode real e2e', () => {
 
     // cleanup temp dirs
     try {
-      if (tmpBase) await fs.rm(tmpBase, { recursive: true, force: true })
-      if (workspaceRoot) await fs.rm(workspaceRoot, { recursive: true, force: true })
+      const preserve = process.env.PRESERVE_E2E_WORKSPACE === '1'
+      if (preserve) {
+        console.log('[e2e] PRESERVE_E2E_WORKSPACE set — not removing temp dirs:')
+        console.log('[e2e] tmpBase:', tmpBase)
+        console.log('[e2e] workspaceRoot:', workspaceRoot)
+      } else {
+        if (tmpBase) await fs.rm(tmpBase, { recursive: true, force: true })
+        if (workspaceRoot) await fs.rm(workspaceRoot, { recursive: true, force: true })
+      }
     } catch (err) {
       console.warn('[e2e] cleanup failed', err)
     }
@@ -142,10 +221,37 @@ describe('opencode real e2e', () => {
       if (runs.some((r: any) => r.sessionId === run1.sessionId)) break
       await new Promise((r) => setTimeout(r, 500))
     }
+
+    // Verify the opencode runner log contains the emitted session id (more reliable than `opencode session list`)
+    const waitForLogContains = async (logPath: string, text: string, timeoutMs = 60_000) => {
+      const start = Date.now()
+      while (Date.now() - start < timeoutMs) {
+        try {
+          const content = await fs.readFile(logPath, 'utf8')
+          if (content.includes(text)) return true
+        } catch {
+          // ignore until file exists
+        }
+        await delay(500)
+      }
+      return false
+    }
+
+    if (!run1.logFile || typeof run1.logFile !== 'string') {
+      throw new Error('Run record missing logFile; cannot verify opencode session output')
+    }
+
+    const logContains = await waitForLogContains(run1.logFile, run1.sessionId, 60_000)
+    if (!logContains) {
+      const sample = await fs.readFile(run1.logFile, 'utf8').catch(() => '')
+      console.error('[e2e] opencode run log (sample):', sample.slice(0, 2000))
+    }
+    expect(logContains).toBe(true)
   }, 180_000)
 
   it('runs multi-agent session (persona) with real opencode', async () => {
     const agent = new https.Agent({ rejectUnauthorized: false })
+    const baselineSessions = listOpencodeSessionIds(repoPath)
 
     // Multi-agent run (persona 'multi-agent') — should copy persona and run verifier/worker
     const startRes2 = await fetch(`${baseUrl}/api/coding-agent/sessions`, {
@@ -217,5 +323,27 @@ describe('opencode real e2e', () => {
 
     expect(seen.worker).toBe(true)
     expect(seen.verifier).toBe(true)
+
+    const newSessions = await waitForNewSessions(repoPath, baselineSessions, 2)
+    expect(newSessions.some((id) => id.includes('worker'))).toBe(true)
+    expect(newSessions.some((id) => id.includes('verifier'))).toBe(true)
   }, 180_000)
+
+  it('rejects missing opencode sessions when invoked directly', async () => {
+    const missingSessionId = `ses-missing-${crypto.randomUUID().slice(0, 8)}`
+    const ctx: ProviderInvocationContext = {
+      providerId: 'opencode',
+      systemPrompt: 'Ensure session validation fires before LLM invocation',
+      userPrompt: 'ping',
+      combinedPrompt: 'Ensure session validation fires before LLM invocation\nping',
+      modelId: 'github-copilot/gpt-4o-mini',
+      sessionId: missingSessionId,
+      sessionDir: repoPath
+    }
+
+    const existingSessions = listOpencodeSessionIds(repoPath)
+    expect(existingSessions).not.toContain(missingSessionId)
+
+    await expect(invokeOpencodeAdapter(ctx)).rejects.toThrowError(/Opencode session ".+" not found or unavailable\.|Resource not found:/)
+  }, 30_000)
 })

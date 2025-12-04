@@ -4,9 +4,9 @@ import os from 'os'
 import path from 'path'
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import * as agentModule from '../../../../src/modules/agent'
 import { createOpencodeStorage, type OpencodeStorage } from '../../../../src/modules/opencodeStorage'
 import type { CodingAgentSessionDetail } from '../../../interfaces/core/codingAgent'
+import * as agentModule from '../../../modules/agent/agent'
 
 let createWorkspaceSessionsRouter: any
 

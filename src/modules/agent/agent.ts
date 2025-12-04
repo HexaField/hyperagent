@@ -1,8 +1,9 @@
+import { Session } from '@opencode-ai/sdk'
 import crypto from 'crypto'
-import os from 'os'
-import type { PersistenceContext, PersistenceModule, Timestamp } from './database'
-import { callLLM, type LLMResponse, type LLMStreamCallback, type Provider } from './llm'
-import { createProviderSession } from './provider/session'
+import type { PersistenceContext, PersistenceModule, Timestamp } from '../database'
+import { appendLogEntry, loadSessionMeta } from '../provenance/provenance'
+import { createSession, extractResponseText, promptSession } from './opencode'
+// import { callLLM, type LLMResponse, type LLMStreamCallback, type Provider } from '../llm'
 
 type WorkerStatus = 'working' | 'done' | 'blocked'
 type VerifierVerdict = 'instruct' | 'approve' | 'fail'
@@ -79,7 +80,6 @@ export type ConversationRound = {
 
 export type AgentLoopOptions = {
   userInstructions: string
-  provider?: Provider
   model?: string
   maxRounds?: number
   sessionDir?: string
@@ -99,7 +99,6 @@ export type AgentStreamEvent = {
   role: 'worker' | 'verifier'
   round: number
   chunk: string
-  provider: Provider
   model: string
   attempt: number
   sessionId?: string
@@ -107,54 +106,23 @@ export type AgentStreamEvent = {
 
 export type AgentStreamCallback = (event: AgentStreamEvent) => void
 
-const PROVIDER_SESSION_PREFIX = 'ses'
-
-const sanitizeSessionSegment = (value: string): string => {
-  return (
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .replace(/-{2,}/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .trim() || 'session'
-  )
-}
-
-const ensureProviderSessionId = (candidate: string | undefined, role: string): string => {
-  if (candidate && candidate.startsWith(PROVIDER_SESSION_PREFIX)) {
-    return candidate
-  }
-  if (candidate && candidate.trim().length) {
-    const normalized = `${PROVIDER_SESSION_PREFIX}-${sanitizeSessionSegment(candidate)}`
-    console.log('[agent] Normalized provider session id', { role, supplied: candidate, normalized })
-    return normalized
-  }
-  const random = crypto.randomBytes(4).toString('hex')
-  return `${PROVIDER_SESSION_PREFIX}-${sanitizeSessionSegment(role)}-${Date.now().toString(36)}-${random}`
-}
-
 export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
-  const provider = options.provider ?? 'ollama'
   const model = options.model ?? 'llama3.2'
   const maxRounds = options.maxRounds ?? 10
-  const workerSessionId = ensureProviderSessionId(options.workerSessionId, 'worker')
-  const verifierSessionId = ensureProviderSessionId(options.verifierSessionId, 'verifier')
-  const sessionDir = options.sessionDir ?? os.tmpdir() // Use OS temp dir if none provided
+  const sessionDir = options.sessionDir
+  if (!sessionDir) throw new Error('sessionDir is required for runVerifierWorkerLoop')
+
   const streamCallback = options.onStream
 
   // Create provider sessions (delegates to configured provider implementation)
-  createProviderSession(workerSessionId, sessionDir)
-  createProviderSession(verifierSessionId, sessionDir)
+  const workerSession = await createSession(sessionDir)
+  const verifierSession = await createSession(sessionDir)
 
   const rounds: ConversationRound[] = []
 
   const bootstrap = await invokeVerifier({
-    provider,
     model,
-    sessionDir,
-    sessionId: verifierSessionId,
+    session: verifierSession,
     userInstructions: options.userInstructions,
     workerTurn: null,
     round: 0,
@@ -166,10 +134,8 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
 
   for (let round = 1; round <= maxRounds; round++) {
     const workerTurn = await invokeWorker({
-      provider,
       model,
-      sessionDir,
-      sessionId: workerSessionId,
+      session: workerSession,
       userInstructions: options.userInstructions,
       verifierInstructions: pendingInstructions,
       verifierCritique: latestCritique,
@@ -187,10 +153,8 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
     }
 
     const verifierTurn = await invokeVerifier({
-      provider,
       model,
-      sessionDir,
-      sessionId: verifierSessionId,
+      session: verifierSession,
       userInstructions: options.userInstructions,
       workerTurn,
       round,
@@ -230,10 +194,8 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
 }
 
 type WorkerInvokeArgs = {
-  provider: Provider
   model: string
-  sessionDir?: string
-  sessionId: string
+  session: Session
   userInstructions: string
   verifierInstructions: string
   verifierCritique?: string
@@ -242,10 +204,8 @@ type WorkerInvokeArgs = {
 }
 
 type VerifierInvokeArgs = {
-  provider: Provider
   model: string
-  sessionDir?: string
-  sessionId: string
+  session: Session
   userInstructions: string
   workerTurn: WorkerTurn | null
   round: number
@@ -254,55 +214,34 @@ type VerifierInvokeArgs = {
 
 async function invokeWorker(args: WorkerInvokeArgs): Promise<WorkerTurn> {
   const query = buildWorkerPrompt(args.userInstructions, args.verifierInstructions, args.verifierCritique, args.round)
-  const streamBridge = createStreamBridge('worker', args.round, args.onStream)
+  // const streamBridge = createStreamBridge('worker', args.round, args.onStream)
   const { raw, parsed } = await invokeStructuredJsonCall({
     role: 'worker',
     systemPrompt: WORKER_SYSTEM_PROMPT,
     basePrompt: query,
-    provider: args.provider,
     model: args.model,
-    sessionDir: args.sessionDir,
-    sessionId: args.sessionId,
-    onStream: streamBridge,
+    session: args.session,
+    // onStream: streamBridge,
     parseResponse: (response) => parseWorkerResponse('worker', response)
   })
+  console.log(raw, parsed)
   return { round: args.round, raw, parsed }
 }
 
 async function invokeVerifier(args: VerifierInvokeArgs): Promise<VerifierTurn> {
   const query = buildVerifierPrompt(args.userInstructions, args.workerTurn, args.round)
-  const streamBridge = createStreamBridge('verifier', args.round, args.onStream)
+  // const streamBridge = createStreamBridge('verifier', args.round, args.onStream)
   const { raw, parsed } = await invokeStructuredJsonCall({
     role: 'verifier',
     systemPrompt: VERIFIER_SYSTEM_PROMPT,
     basePrompt: query,
-    provider: args.provider,
     model: args.model,
-    sessionDir: args.sessionDir,
-    sessionId: args.sessionId,
-    onStream: streamBridge,
+    session: args.session,
+    // onStream: streamBridge,
     parseResponse: (response) => parseVerifierResponse('verifier', response)
   })
+  console.log(raw, parsed)
   return { round: args.round, raw, parsed }
-}
-
-function createStreamBridge(
-  role: AgentStreamEvent['role'],
-  round: number,
-  cb?: AgentStreamCallback
-): LLMStreamCallback | undefined {
-  if (!cb) return undefined
-  return (event) => {
-    cb({
-      role,
-      round,
-      chunk: event.chunk,
-      provider: event.provider,
-      model: event.model,
-      attempt: event.attempt,
-      sessionId: event.sessionId
-    })
-  }
 }
 
 function buildWorkerPrompt(
@@ -337,7 +276,7 @@ function buildVerifierPrompt(userInstructions: string, workerTurn: WorkerTurn | 
   ].join('\n\n')
 }
 
-function parseWorkerResponse(role: 'worker', res: LLMResponse): WorkerStructuredResponse {
+function parseWorkerResponse(role: 'worker', res: string): WorkerStructuredResponse {
   const obj = parseJsonPayload(role, res)
   const status = normalizeWorkerStatus(obj.status)
   return {
@@ -348,7 +287,7 @@ function parseWorkerResponse(role: 'worker', res: LLMResponse): WorkerStructured
   }
 }
 
-function parseVerifierResponse(role: 'verifier', res: LLMResponse): VerifierStructuredResponse {
+function parseVerifierResponse(role: 'verifier', res: string): VerifierStructuredResponse {
   const obj = parseJsonPayload(role, res)
   const verdict = normalizeVerifierVerdict(obj.verdict ?? obj.status)
   const priority = Number.isInteger(obj.priority) ? obj.priority : 3
@@ -360,11 +299,11 @@ function parseVerifierResponse(role: 'verifier', res: LLMResponse): VerifierStru
   }
 }
 
-function parseJsonPayload(role: string, res: LLMResponse): any {
-  if (!res.success || !res.data) {
-    throw new Error(`${role} LLM call failed: ${res.error || 'unknown error'}`)
-  }
-  const jsonText = extractJson(res.data)
+function parseJsonPayload(role: string, res: string): any {
+  // if (!res.success || !res.data) {
+  //   throw new Error(`${role} LLM call failed: ${res.error || 'unknown error'}`)
+  // }
+  const jsonText = extractJson(res)
   try {
     return JSON.parse(jsonText)
   } catch (error) {
@@ -417,27 +356,35 @@ type StructuredJsonCallOptions<T> = {
   role: 'worker' | 'verifier'
   systemPrompt: string
   basePrompt: string
-  provider: Provider
   model: string
-  sessionDir?: string
-  sessionId: string
-  onStream?: LLMStreamCallback
-  parseResponse: (res: LLMResponse) => T
+  session: Session
+  // onStream?: LLMStreamCallback
+  parseResponse: (res: string) => T
 }
 
 async function invokeStructuredJsonCall<T>(options: StructuredJsonCallOptions<T>): Promise<{ raw: string; parsed: T }> {
   let prompt = options.basePrompt
   let lastError: Error | null = null
 
+  const meta = loadSessionMeta(options.session)
+
   for (let attempt = 1; attempt <= MAX_JSON_ATTEMPTS; attempt++) {
-    const response = await callLLM(options.systemPrompt, prompt, options.provider, options.model, {
-      sessionDir: options.sessionDir,
-      sessionId: options.sessionId,
-      onStream: options.onStream
+    const response = await promptSession(options.session, [options.systemPrompt, prompt], options.model)
+    const raw = extractResponseText(response.parts)
+
+    appendLogEntry(options.session, meta, {
+      provider: 'opencode',
+      model: options.model,
+      role: options.role,
+      payload: {
+        attempt,
+        prompt,
+        rawResponse: raw
+      }
     })
-    const raw = response.data ?? ''
+
     try {
-      return { raw, parsed: options.parseResponse(response) }
+      return { raw, parsed: options.parseResponse(raw) }
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error))
       console.warn('[agent] structured JSON call failed', {

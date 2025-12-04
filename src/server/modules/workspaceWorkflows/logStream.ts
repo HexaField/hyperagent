@@ -3,7 +3,7 @@ import type {
   WorkflowLogEntry,
   WorkflowRunnerLogEntry
 } from '../../../interfaces/workflows/logs'
-import type { AgentStreamEvent } from '../../../modules/agent'
+import type { AgentStreamEvent } from '../../../modules/agent/agent'
 
 const AGENT_STREAM_PREFIX = '[agent-stream]'
 const MAX_EVENTS_PER_WORKFLOW = 1000
@@ -92,7 +92,6 @@ export const createWorkflowLogStream = (): WorkflowLogStream => {
       role: data.role,
       round: data.round ?? 0,
       attempt: data.attempt ?? 0,
-      provider: typeof data.provider === 'string' ? data.provider : '',
       model: typeof data.model === 'string' ? data.model : '',
       chunk: data.chunk,
       timestamp: payload.timestamp ?? new Date().toISOString(),

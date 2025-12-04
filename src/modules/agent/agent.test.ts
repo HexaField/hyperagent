@@ -1,15 +1,23 @@
 import { spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { runVerifierWorkerLoop } from './agent'
+import { getOpencodeServer } from './opencode'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
   return res.status === 0
 }
 
+const model = 'github-copilot/gpt-5-mini'
+
 describe('Verifier/worker collaboration loop', () => {
+  afterAll(async () => {
+    const server = await getOpencodeServer()
+    server.close()
+  })
+
   it('iterates on a complex graph-feature coding brief', async () => {
     const sessionDir = path.join(process.cwd(), `.tests/agent-integration-${Date.now()}`)
     const exists = commandExists('opencode')
@@ -17,36 +25,23 @@ describe('Verifier/worker collaboration loop', () => {
 
     fs.mkdirSync(sessionDir, { recursive: true })
 
-    fs.writeFileSync(
-      path.join(sessionDir, 'opencode.json'),
-      JSON.stringify(
-        {
-          $schema: 'https://opencode.ai/config.json',
-          permission: {
-            edit: 'allow',
-            bash: 'allow',
-            webfetch: 'allow',
-            doom_loop: 'allow',
-            external_directory: 'deny'
-          }
-        },
-        null,
-        2
-      ),
-      'utf8'
-    )
+    const opencodeConfig = {
+      $schema: 'https://opencode.ai/config.json',
+      permission: {
+        edit: 'allow',
+        bash: 'allow',
+        webfetch: 'allow',
+        doom_loop: 'allow',
+        external_directory: 'deny'
+      }
+    }
+    fs.writeFileSync(path.join(sessionDir, 'opencode.json'), JSON.stringify(opencodeConfig, null, 2))
 
-    const scenario = `You are starting from a completely empty repository named 'nebula-kanban'. Create everything you need under this repo root.
-- Implement a conflict-aware swimlane merge assistant inside packages/board/src/BoardCanvas.tsx that can highlight nodes belonging to overlapping sprints.
-- Extend packages/board/src/types.ts so each Swimlane tracks bidirectional adjacency metadata plus a rolling risk index derived from blocked cards.
-- Propose a deterministic algorithm (pseudo-code welcome) for reconciling inbound/outbound dependencies across lanes up to depth 3, annotating the canvas with badges.
-- Describe the exact Vitest test additions to packages/board/tests/BoardCanvas.test.ts to validate the lane reconciliation logic.
-- Stay entirely within the nebula-kanban repo; do not reference or depend on any other files.`
+    const scenario = `Create a readme.md file that includes the text "Hello, world".`
 
     const result = await runVerifierWorkerLoop({
       userInstructions: scenario,
-      provider: 'opencode',
-      model: 'github-copilot/gpt-5-mini',
+      model: model,
       maxRounds: 5,
       sessionDir
     })
@@ -67,6 +62,7 @@ describe('Verifier/worker collaboration loop', () => {
     const metaDir = path.join(sessionDir, '.hyperagent')
     expect(fs.existsSync(metaDir)).toBe(true)
     const metaFiles = fs.readdirSync(metaDir).filter((file) => file.endsWith('.json'))
+
     expect(metaFiles.length).toBeGreaterThan(0)
     const logs = metaFiles.flatMap((file) => {
       const meta = JSON.parse(fs.readFileSync(path.join(metaDir, file), 'utf8'))
@@ -75,8 +71,13 @@ describe('Verifier/worker collaboration loop', () => {
     const opencodeEntries = logs.filter((entry: any) => entry.provider === 'opencode')
     expect(opencodeEntries.length).toBeGreaterThanOrEqual(2)
     for (const entry of opencodeEntries) {
-      expect(entry.model).toBe('github-copilot/gpt-5-mini')
+      expect(entry.model).toBe(model)
       expect(typeof entry.payload).toBe('object')
     }
-  }, 1_200_000) // super long... but needed for complex agent tasks
+
+    const readmePath = path.join(sessionDir, 'readme.md')
+    expect(fs.existsSync(readmePath)).toBe(true)
+    const readmeContent = fs.readFileSync(readmePath, 'utf8')
+    expect(readmeContent.includes('Hello, world')).toBe(true)
+  }, 60_000)
 })

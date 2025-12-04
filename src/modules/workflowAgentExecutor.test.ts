@@ -2,7 +2,7 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentLoopResult } from './agent'
+import type { AgentLoopResult } from './agent/agent'
 import { createAgentWorkflowExecutor } from './workflowAgentExecutor'
 import type { AgentExecutorArgs } from './workflows'
 
