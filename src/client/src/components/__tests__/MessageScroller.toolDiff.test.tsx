@@ -10,7 +10,6 @@ const makeToolMessage = (diff: string | null) =>
     createdAt: new Date().toISOString(),
     completedAt: null,
     modelId: null,
-    providerId: null,
     text: '',
     parts: [
       {

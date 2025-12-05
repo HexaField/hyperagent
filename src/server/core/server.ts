@@ -1087,9 +1087,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   const workspaceSessionsRouter = createWorkspaceSessionsRouter({
     wrapAsync,
     ensureWorkspaceDirectory,
-    codingAgentRunner: options.codingAgentRunner,
-    codingAgentStorage: options.codingAgentStorage,
-    codingAgentCommandRunner: options.codingAgentCommandRunner
+    // routes call agent/opencode/provenance helpers directly
   })
 
   const workspaceNarratorRouter = createWorkspaceNarratorRouter({

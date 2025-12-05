@@ -21,7 +21,6 @@ export type CodingAgentSessionSummary = {
   projectId: string | null
   createdAt: string
   updatedAt: string
-  providerId?: string | null
   modelId?: string | null
   summary: {
     additions: number
@@ -45,7 +44,6 @@ export type CodingAgentMessage = {
   createdAt: string
   completedAt: string | null
   modelId: string | null
-  providerId: string | null
   text: string
   parts: CodingAgentMessagePart[]
 }

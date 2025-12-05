@@ -1,6 +1,4 @@
 import type {
-  CodingAgentProvider,
-  CodingAgentProviderListResponse,
   CodingAgentRunListResponse,
   CodingAgentSessionDetail,
   CodingAgentSessionListResponse,
@@ -12,22 +10,11 @@ import { fetchJson } from '../shared/api/httpClient'
 export type {
   CodingAgentMessage,
   CodingAgentMessagePart,
-  CodingAgentProvider,
   CodingAgentSessionDetail,
   CodingAgentSessionSummary,
   RunMeta
 } from '../../../interfaces/core/codingAgent'
 
-export async function fetchCodingAgentProviders(): Promise<CodingAgentProvider[]> {
-  try {
-    const payload = await fetchJson<CodingAgentProviderListResponse>('/api/coding-agent/providers')
-    const providers = Array.isArray(payload?.providers) ? payload.providers : []
-    return providers
-  } catch (error) {
-    console.error('Failed to fetch coding agent providers', error)
-    return []
-  }
-}
 
 export async function fetchCodingAgentSessions(params?: {
   workspacePath?: string
@@ -46,7 +33,6 @@ export async function startCodingAgentRun(input: {
   prompt: string
   title?: string
   model?: string
-  providerId?: string
   personaId?: string
 }): Promise<RunMeta> {
   // Keep payload backward-compatible: include personaId when provided
@@ -56,7 +42,6 @@ export async function startCodingAgentRun(input: {
   }
   if (input.title) body.title = input.title
   if (input.model) body.model = input.model
-  if (input.providerId) body.providerId = input.providerId
   if (input.personaId) body.personaId = input.personaId
 
   const payload = await fetchJson<{ run: RunMeta }>(`/api/coding-agent/sessions`, {

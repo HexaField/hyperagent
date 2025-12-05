@@ -6,6 +6,7 @@ import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CodingAgentSessionDetail, CodingAgentSessionSummary } from '../../../interfaces/core/codingAgent'
 import * as agentModule from '../../../modules/agent/multi-agent'
+import * as singleAgentModule from '../../../modules/agent/single-agent'
 
 let createWorkspaceSessionsRouter: any
 
@@ -157,6 +158,10 @@ describe('workspace sessions routes — agent persona', () => {
         rounds: []
       } as any
     })
+    vi.spyOn(singleAgentModule, 'runSingleAgentLoop').mockImplementation(async (_opts: any) => {
+      // simulate a no-op single-agent run for tests
+      return { outcome: 'noop' } as any
+    })
 
     const mod = await import('./routes')
     createWorkspaceSessionsRouter = mod.createWorkspaceSessionsRouter
@@ -239,7 +244,7 @@ describe('workspace sessions routes — agent persona', () => {
       .send({ workspacePath, prompt: TEST_PROMPT, personaId: NON_MULTI_PERSONA_ID })
 
     expect(resp.status).toBe(202)
-    expect(depsUnderTest.codingAgentRunner.startRun).toHaveBeenCalledTimes(1)
+    expect(singleAgentModule.runSingleAgentLoop).toHaveBeenCalledTimes(1)
     expect(spyRunLoop).not.toHaveBeenCalled()
   })
 

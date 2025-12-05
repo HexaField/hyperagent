@@ -89,7 +89,6 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
       createdAt: event.timestamp,
       completedAt: event.timestamp,
       modelId: null,
-      providerId: null,
       text: formatEventBody(event),
       parts: buildMessageParts(event)
     }))

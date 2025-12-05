@@ -1,22 +1,19 @@
 import crypto from 'crypto'
 import { Router, type RequestHandler } from 'express'
 // filesystem logging and direct storage writes are handled in the agent module now
+import fs from 'fs'
+import path from 'path'
 import type {
   CodingAgentMessage,
-  CodingAgentProvider,
-  CodingAgentProviderListResponse,
   CodingAgentRunListResponse,
   CodingAgentSessionDetail,
   CodingAgentSessionListResponse,
   CodingAgentSessionSummary,
   RunMeta
 } from '../../../interfaces/core/codingAgent'
-import { createSession, promptSession } from '../../../modules/agent/opencode'
-import {
-  CODING_AGENT_PROVIDER_ID,
-  DEFAULT_CODING_AGENT_MODEL,
-  KNOWN_CODING_AGENT_MODEL_LABELS
-} from '../../core/config'
+import { createSession, getSession as getOpencodeSession, promptSession } from '../../../modules/agent/opencode'
+import { metaDirectory, RunMeta as ProvRunMeta } from '../../../modules/provenance/provenance'
+import { DEFAULT_CODING_AGENT_MODEL } from '../../core/config'
 
 import { ensureProviderConfig } from '../../../../src/modules/workflowAgentExecutor'
 import { runVerifierWorkerLoop } from '../../../modules/agent/multi-agent'
@@ -24,7 +21,6 @@ import { runSingleAgentLoop } from '../../../modules/agent/single-agent'
 import { deletePersona, listPersonas, readPersona, writePersona } from './personas'
 
 const MULTI_AGENT_PERSONA_ID = 'multi-agent'
-const MULTI_AGENT_PROVIDER_ID = 'multi-agent'
 
 type WrapAsync = (handler: RequestHandler) => RequestHandler
 
@@ -71,7 +67,6 @@ const buildMessageSignature = (message: CodingAgentMessage): string => {
       text: message.text,
       completedAt: message.completedAt,
       modelId: message.modelId,
-      providerId: message.providerId,
       parts: simplifyPartsForSignature(message.parts)
     })
   } catch {
@@ -114,22 +109,6 @@ const simplifyPartsForSignature = (parts: CodingAgentMessage['parts']): unknown[
 export type WorkspaceSessionsDeps = {
   wrapAsync: WrapAsync
   ensureWorkspaceDirectory: (dirPath: string) => Promise<void>
-  // optional injected storage/runner for testability or alternate implementations
-  codingAgentStorage?: any
-  codingAgentRunner?: {
-    listRuns: () => Promise<RunMeta[]>
-    getRun: (sessionId: string) => Promise<RunMeta | null>
-    startRun: (opts: {
-      workspacePath: string
-      prompt: string
-      title?: string | null
-      model?: string
-      providerId?: string | null
-      personaId?: string | null
-    }) => Promise<RunMeta | Record<string, any>>
-    killRun: (sessionId: string) => Promise<boolean>
-  }
-  codingAgentCommandRunner?: (args: string[], opts?: { cwd?: string }) => Promise<{ stdout: string; stderr: string }>
 }
 
 /**
@@ -146,73 +125,7 @@ export type WorkspaceSessionsDeps = {
 export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
   const { wrapAsync, ensureWorkspaceDirectory } = deps
   const router = Router()
-  const codingAgentStorage =
-    (deps as any).codingAgentStorage ??
-    ({ rootDir: process.env.OPENCODE_STORAGE_ROOT, listSessions: async () => [], getSession: async () => null } as any)
-  const codingAgentCommandRunner = (deps as any).codingAgentCommandRunner ?? null
-
-  // provide a simple in-process default runner when none is injected. This runner
-  // starts either the single-agent or verifier-worker loop in the background and
-  // keeps minimal run tracking in-memory so the frontend can query runs.
-  const defaultRuns = new Map<string, RunMeta>()
-  /**
-   * Minimal in-process runner used when an external/injected runner is
-   * not provided. It launches the appropriate agent loop (single or
-   * verifier/worker) and maintains a tiny in-memory `RunMeta` index
-   * so the frontend can query recent runs. Provenance and durable
-   * logging remain the responsibility of the agent module.
-   */
-  const defaultRunner = {
-    listRuns: async () => Array.from(defaultRuns.values()),
-    getRun: async (sessionId: string) => defaultRuns.get(sessionId) ?? null,
-    startRun: async (opts: any) => {
-      const sessionId = `ses_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`
-      const startedAt = new Date().toISOString()
-      const run: RunMeta = { id: sessionId, agents: [], log: [], createdAt: startedAt, updatedAt: startedAt }
-      defaultRuns.set(sessionId, run)
-      // run the appropriate agent loop in background; provenance/logging
-      // responsibilities are handled by the agent module itself, so the
-      // default runner only invokes the loop and keeps minimal in-memory
-      // metadata for listing.
-      ;(async () => {
-        try {
-          if (opts.personaId === MULTI_AGENT_PERSONA_ID) {
-            await runVerifierWorkerLoop({
-              userInstructions: opts.prompt,
-              model: opts.model,
-              sessionDir: opts.workspacePath,
-              runID: sessionId,
-              onStream: opts.onStream
-            })
-          } else {
-            await runSingleAgentLoop({
-              runID: sessionId,
-              userInstructions: opts.prompt,
-              model: opts.model,
-              sessionDir: opts.workspacePath,
-              onStream: opts.onStream
-            })
-          }
-        } catch {
-          const updated = defaultRuns.get(sessionId)
-          if (updated) {
-            updated.updatedAt = new Date().toISOString()
-            defaultRuns.set(sessionId, updated)
-          }
-        }
-      })()
-      return run
-    },
-    killRun: async (sessionId: string) => {
-      const existing = defaultRuns.get(sessionId)
-      if (!existing) return false
-      existing.updatedAt = new Date().toISOString()
-      defaultRuns.set(sessionId, existing)
-      return true
-    }
-  }
-
-  const codingAgentRunner = (deps as any).codingAgentRunner ?? defaultRunner
+  // No injected storage/command-runner: routes call agent/opencode functions directly.
 
   const logSessions = (message: string, metadata?: Record<string, unknown>) => {
     if (metadata && Object.keys(metadata).length) {
@@ -236,59 +149,11 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
   }
 
   /**
-   * Start a multi-agent session by delegating to the configured runner.
-   *
-   * Historically this function created log files and wrote structured
-   * messages. That behavior has been moved into the agent module; this
-   * helper now simply calls `codingAgentRunner.startRun`.
-   *
-   * @param options.workspacePath - Workspace directory for the session
-   * @param options.prompt - Initial user prompt
-   * @param options.title - Optional title for the run
-   * @param options.model - Model id to use for LLM calls
-   * @param options.llmProviderId - Provider id for LLM calls
-   * @param options.personaId - Persona id to use
-   * @returns A `RunMeta` representing the started run
-   */
-  const startMultiAgentSession = async (options: {
-    workspacePath: string
-    prompt: string
-    title: string | null
-    model: string
-    llmProviderId: string | null
-    personaId: string | null
-  }): Promise<RunMeta> => {
-    if (typeof codingAgentRunner.startRun !== 'function') {
-      throw new Error('Provider run not supported in this server build')
-    }
-    const run = await codingAgentRunner.startRun({
-      workspacePath: options.workspacePath,
-      prompt: options.prompt,
-      title: options.title,
-      model: options.model,
-      providerId: options.llmProviderId ?? MULTI_AGENT_PROVIDER_ID,
-      personaId: options.personaId ?? MULTI_AGENT_PERSONA_ID
-    } as any)
-    return run
-  }
-
-  /**
    * Turn a model id segment into a human-friendly title fragment.
    *
    * Examples: `gpt-5-mini` -> `GPT 5 Mini`, `openai/gpt-4` -> `Openai · GPT 4`.
    */
-  const titleizeModelSegment = (segment: string): string => {
-    return segment
-      .split(/[-_]/)
-      .filter(Boolean)
-      .map((part) => {
-        const upper = part.toUpperCase()
-        if (upper === 'GPT') return 'GPT'
-        if (upper === 'LLM') return 'LLM'
-        return part.charAt(0).toUpperCase() + part.slice(1)
-      })
-      .join(' ')
-  }
+  // model title helpers removed with providers concept
 
   /**
    * Create a display label for a coding agent model id.
@@ -296,81 +161,9 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
    * Falls back to a best-effort humanized label when the model isn't
    * in the known labels map.
    */
-  const formatCodingAgentModelLabel = (modelId: string): string => {
-    if (!modelId) return 'Unknown model'
-    const known = KNOWN_CODING_AGENT_MODEL_LABELS[modelId]
-    if (known) return known
-    const [providerSegment, nameSegment] = modelId.split('/', 2)
-    if (!nameSegment) {
-      return titleizeModelSegment(providerSegment)
-    }
-    return `${titleizeModelSegment(providerSegment)} · ${titleizeModelSegment(nameSegment)}`
-  }
+  // model label formatting removed with providers concept
 
-  /**
-   * List available coding agent providers.
-   *
-   * The router currently exposes a simplified list with a single built-in
-   * provider backed by the Opencode runtime.
-   *
-   * @returns An array of provider descriptions suitable for client display
-   */
-  const listCodingAgentProviders = async (): Promise<CodingAgentProvider[]> => {
-    // If an opencode CLI runner was injected, prefer to query it for available
-    // models so the UI can present an up-to-date list. Otherwise fall back to
-    // a conservative default model list.
-    if (codingAgentCommandRunner) {
-      try {
-        const result = await codingAgentCommandRunner(['models'])
-        const lines = (result.stdout ?? '')
-          .split(/\r?\n/)
-          .map((l: string) => l.trim())
-          .filter(Boolean)
-        const models = lines.map((m: string) => ({ id: m, label: formatCodingAgentModelLabel(m) }))
-        // Ensure the configured default model appears first in the list so
-        // the UI has a stable preferred selection regardless of provider
-        // CLI ordering.
-        const defaultIndex = models.findIndex((x: { id: string }) => x.id === DEFAULT_CODING_AGENT_MODEL)
-        if (defaultIndex === -1) {
-          models.unshift({ id: DEFAULT_CODING_AGENT_MODEL, label: formatCodingAgentModelLabel(DEFAULT_CODING_AGENT_MODEL) })
-        } else if (defaultIndex > 0) {
-          const [def] = models.splice(defaultIndex, 1)
-          models.unshift(def)
-        }
-        return [
-          { id: 'opencode', label: 'Opencode', defaultModelId: DEFAULT_CODING_AGENT_MODEL, models }
-        ]
-      } catch (err) {
-        // log and fallthrough to default list
-        logSessionsError('Failed to query opencode CLI for models', err)
-      }
-    }
-    // Simplified provider listing: advertise only the built-in opencode provider
-    return [
-      {
-        id: 'opencode',
-        label: 'Opencode',
-        defaultModelId: DEFAULT_CODING_AGENT_MODEL,
-        models: [{ id: DEFAULT_CODING_AGENT_MODEL, label: formatCodingAgentModelLabel(DEFAULT_CODING_AGENT_MODEL) }]
-      }
-    ]
-  }
-
-  /**
-   * HTTP handler: GET /api/coding-agent/providers
-   *
-   * Returns a compact list of available LLM providers and models.
-   */
-  const listCodingAgentProvidersHandler: RequestHandler = async (_req, res) => {
-    try {
-      const providers = await listCodingAgentProviders()
-      const response: CodingAgentProviderListResponse = { providers }
-      res.json(response)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to list coding agent providers'
-      res.status(500).json({ error: message })
-    }
-  }
+  // Providers concept removed: routes no longer expose provider/model discovery.
 
   /**
    * HTTP handler: GET /api/coding-agent/sessions
@@ -382,8 +175,35 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
     try {
       const workspaceParam = req.query.workspacePath
       const workspacePath = typeof workspaceParam === 'string' ? workspaceParam : undefined
-      const sessionList = await codingAgentStorage.listSessions({ workspacePath })
-      const payload: CodingAgentSessionSummary[] = sessionList.map((session: any) => ({ ...session }))
+      // Return runs discovered in the workspace's provenance metadata
+      const payload: CodingAgentSessionSummary[] = []
+      if (workspacePath) {
+        try {
+          const metaDir = metaDirectory(workspacePath)
+          if (fs.existsSync(metaDir)) {
+            const files = fs.readdirSync(metaDir).filter((f) => f.endsWith('.json'))
+            for (const file of files) {
+              try {
+                const raw = fs.readFileSync(path.join(metaDir, file), 'utf-8')
+                const parsed = JSON.parse(raw) as ProvRunMeta
+                payload.push({
+                  id: parsed.id,
+                  title: `Run ${parsed.id}`,
+                  workspacePath,
+                  projectId: null as any,
+                  createdAt: parsed.createdAt,
+                  updatedAt: parsed.updatedAt,
+                  summary: { additions: 0, deletions: 0, files: 0 }
+                })
+              } catch {
+                // ignore malformed run files
+              }
+            }
+          }
+        } catch {
+          // fall through and return empty list
+        }
+      }
       const response: CodingAgentSessionListResponse = { sessions: payload }
       res.json(response)
     } catch (error) {
@@ -405,26 +225,65 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       return
     }
     try {
-      const detail = (await codingAgentStorage.getSession(sessionId)) as CodingAgentSessionDetail | null
+      // Try to load session via opencode runtime for the requested workspace
+      const workspaceQuery = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : process.cwd()
+      let detail: CodingAgentSessionDetail | null = null
+      try {
+        // Attempt to use the opencode session API if available in this workspace
+        const opSession = await getOpencodeSession(workspaceQuery, sessionId).catch(() => null)
+        if (opSession) {
+          detail = {
+            session: {
+              id: sessionId,
+              workspacePath: workspaceQuery,
+              modelId: DEFAULT_CODING_AGENT_MODEL,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              title: null,
+              projectId: null as any,
+              summary: { additions: 0, deletions: 0, files: 0 }
+            },
+            messages: []
+          }
+        }
+      } catch (e) {
+        // ignore opencode lookup failures
+        console.error('opencode session lookup failed', e)
+      }
+      if (!detail) {
+        // Fallback: try to find a persisted RunMeta for this session id in the
+        // current workspace metadata directory.
+        try {
+          const metaDir = metaDirectory(workspaceQuery)
+          const filePath = path.join(metaDir, `${sessionId}.json`)
+          if (fs.existsSync(filePath)) {
+            const raw = fs.readFileSync(filePath, 'utf-8')
+            const parsed = JSON.parse(raw) as ProvRunMeta
+            detail = {
+              session: {
+                id: parsed.id,
+                workspacePath: workspaceQuery,
+                modelId: DEFAULT_CODING_AGENT_MODEL,
+                createdAt: parsed.createdAt,
+                updatedAt: parsed.updatedAt,
+                title: null,
+                projectId: null as any,
+                summary: { additions: 0, deletions: 0, files: 0 }
+              },
+              messages: []
+            }
+          }
+        } catch (err) {
+          console.error('run meta lookup failed', err)
+        }
+      }
       if (!detail) {
         res.status(404).json({ error: 'Unknown session' })
         return
       }
       const normalizedMessages = dedupeSequentialMessages(detail.messages ?? [])
       console.log('[coding-agent] getCodingAgentSessionHandler', { sessionId, messages: normalizedMessages.length })
-      // Run meta does not include provider/model; prefer stored session values
-      await codingAgentRunner.getRun(sessionId).catch(() => null)
-      const providerId = detail.session.providerId ?? null
-      const modelId = detail.session.modelId ?? null
-      res.json({
-        ...detail,
-        messages: normalizedMessages,
-        session: {
-          ...detail.session,
-          providerId,
-          modelId
-        }
-      })
+      res.json({ ...detail, messages: normalizedMessages })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load coding agent session'
       res.status(500).json({ error: message })
@@ -438,7 +297,35 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
    */
   const listCodingAgentRunsHandler: RequestHandler = async (_req, res) => {
     try {
-      const runs = await codingAgentRunner.listRuns()
+      // Discover run metadata files in an optional workspace query parameter
+      const workspaceQuery =
+        typeof _req.query.workspacePath === 'string' ? (_req.query.workspacePath as string) : undefined
+      const runs: RunMeta[] = []
+      if (workspaceQuery) {
+        try {
+          const metaDir = metaDirectory(workspaceQuery)
+          if (fs.existsSync(metaDir)) {
+            const files = fs.readdirSync(metaDir).filter((f) => f.endsWith('.json'))
+            for (const file of files) {
+              try {
+                const raw = fs.readFileSync(path.join(metaDir, file), 'utf-8')
+                const parsed = JSON.parse(raw) as ProvRunMeta
+                runs.push({
+                  id: parsed.id,
+                  agents: parsed.agents ?? [],
+                  log: parsed.log ?? [],
+                  createdAt: parsed.createdAt,
+                  updatedAt: parsed.updatedAt
+                })
+              } catch {
+                // ignore malformed files
+              }
+            }
+          }
+        } catch {
+          // ignore and return empty
+        }
+      }
       const response: CodingAgentRunListResponse = { runs }
       res.json(response)
     } catch (error) {
@@ -456,7 +343,7 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
    * workspace and persona inputs and enforces basic request shape.
    */
   const startCodingAgentSessionHandler: RequestHandler = async (req, res) => {
-    const { workspacePath, prompt, title, model, providerId: rawProviderId } = req.body ?? {}
+    const { workspacePath, prompt, model } = req.body ?? {}
     const personaId =
       typeof req.body?.personaId === 'string' && req.body.personaId.trim() ? req.body.personaId.trim() : null
     const multiAgentMode = personaId === MULTI_AGENT_PERSONA_ID
@@ -469,8 +356,7 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       return
     }
     const normalizedWorkspace = workspacePath.trim()
-    const providerId =
-      typeof rawProviderId === 'string' && rawProviderId.trim().length ? rawProviderId.trim() : CODING_AGENT_PROVIDER_ID
+    // provider selection removed; provider config will be defaulted by ensureProviderConfig
     // const adapter = getProviderAdapter(providerId)
     // if (!adapter) {
     //   res.status(400).json({ error: `Unsupported provider: ${providerId}` })
@@ -498,11 +384,10 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
     }
     try {
       // ensure provider config and apply persona merges (copy persona into session)
-      await ensureProviderConfig(normalizedWorkspace, providerId, personaId)
+      await ensureProviderConfig(normalizedWorkspace, undefined, personaId)
 
       const resolvedModel = typeof model === 'string' && model.trim().length ? model.trim() : DEFAULT_CODING_AGENT_MODEL
       const trimmedPrompt = prompt.trim()
-      const resolvedTitle = typeof title === 'string' ? title : null
       /** @todo use provider abstraction in the future */
       // if (adapter.validateModel) {
       //   const ok = await Promise.resolve(adapter.validateModel(resolvedModel))
@@ -511,53 +396,53 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       //     return
       //   }
       // }
-      logSessions('Starting coding agent run', {
-        workspacePath: normalizedWorkspace,
-        providerId,
-        model: resolvedModel
-      })
+      logSessions('Starting coding agent run', { workspacePath: normalizedWorkspace, model: resolvedModel })
 
-      // Branch: if persona is NOT multi-agent, start a normal provider-run via codingAgentRunner.
+      // For non-multi-agent runs we start a simple opencode session and
+      // prompt it with the initial text. This keeps the route as a thin
+      // wrapper over the opencode helpers.
       if (!multiAgentMode) {
-        if (typeof codingAgentRunner.startRun !== 'function') {
-          res.status(501).json({ error: 'Provider run not supported in this server build' })
-          return
-        }
-        try {
-          const runRecord = await codingAgentRunner.startRun({
-            workspacePath: normalizedWorkspace,
-            prompt: trimmedPrompt,
-            title: resolvedTitle,
-            model: resolvedModel,
-            providerId
-          })
-          res.status(202).json({ run: runRecord })
-          return
-        } catch (err) {
-          logSessionsError('Failed to start provider run for persona', err, {
-            workspacePath: normalizedWorkspace,
-            personaId
-          })
-          const message = err instanceof Error ? err.message : 'Failed to start provider run'
-          res.status(500).json({ error: message })
-          return
-        }
+        // Start a single-agent loop in the background which will create and
+        // persist run metadata via the provenance helpers.
+        const sessionId = `ses_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`
+        const startedAt = new Date().toISOString()
+        const runRecord: RunMeta = { id: sessionId, agents: [], log: [], createdAt: startedAt, updatedAt: startedAt }
+        ;(async () => {
+          try {
+            await runSingleAgentLoop({
+              userInstructions: trimmedPrompt,
+              model: resolvedModel,
+              sessionDir: normalizedWorkspace,
+              runID: sessionId
+            })
+          } catch (err) {
+            logSessionsError('Single-agent loop failed', err, { sessionId })
+          }
+        })()
+        res.status(202).json({ run: runRecord })
+        return
       }
-      const runRecord = await startMultiAgentSession({
-        workspacePath: normalizedWorkspace,
-        prompt: trimmedPrompt,
-        title: resolvedTitle,
-        model: resolvedModel,
-        // ensure multi-agent persona uses the opencode provider for LLM calls
-        llmProviderId: multiAgentMode ? 'opencode' : (providerId ?? null),
-        personaId
-      })
+
+      // Multi-agent persona: kick off the verifier/worker loop in the
+      // background and return a minimal RunMeta immediately.
+      const sessionId = `ses_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`
+      const startedAt = new Date().toISOString()
+      const runRecord: RunMeta = { id: sessionId, agents: [], log: [], createdAt: startedAt, updatedAt: startedAt }
+      ;(async () => {
+        try {
+          await runVerifierWorkerLoop({
+            userInstructions: trimmedPrompt,
+            model: resolvedModel,
+            sessionDir: normalizedWorkspace,
+            runID: sessionId
+          })
+        } catch (err) {
+          logSessionsError('Multi-agent loop failed', err, { sessionId })
+        }
+      })()
       res.status(202).json({ run: runRecord })
     } catch (error) {
-      logSessionsError('Failed to start coding agent session', error, {
-        workspacePath: normalizedWorkspace,
-        providerId
-      })
+      logSessionsError('Failed to start coding agent session', error, { workspacePath: normalizedWorkspace })
       const message = error instanceof Error ? error.message : 'Failed to start coding agent session'
       res.status(500).json({ error: message })
     }
@@ -576,12 +461,8 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       return
     }
     try {
-      if (typeof codingAgentRunner.killRun !== 'function') {
-        res.status(501).json({ error: 'Kill run not supported in this server build' })
-        return
-      }
-      const success = await codingAgentRunner.killRun(sessionId)
-      res.json({ success })
+      // This server build does not support programmatic kill of runs.
+      res.status(501).json({ error: 'Kill run not supported in this server build' })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to terminate coding agent session'
       res.status(500).json({ error: message })
@@ -611,78 +492,36 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       return
     }
     try {
-      const existing = (await codingAgentStorage.getSession(sessionId)) as CodingAgentSessionDetail | null
-      if (!existing) {
-        res.status(404).json({ error: 'Unknown session' })
-        return
-      }
-      const run = await codingAgentRunner.getRun(sessionId)
-      if (role !== 'user') {
-        console.warn(`[coding-agent] Unsupported role "${role}" for session ${sessionId}; sending as user message.`)
-      }
+      // Determine the workspace to operate in (prefer explicit query)
+      const workspaceQuery = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : process.cwd()
       try {
-        await ensureWorkspaceDirectory(existing.session.workspacePath)
+        await ensureWorkspaceDirectory(workspaceQuery)
       } catch {
         res.status(400).json({ error: 'Session workspace is unavailable' })
         return
       }
-      const providerFromMessages = existing.messages
-        .slice()
-        .reverse()
-        .map((message) => (typeof message.providerId === 'string' ? message.providerId.trim() : ''))
-        .find((candidate) => candidate.length)
-      const resolvedProviderId =
-        [existing.session.providerId, run?.providerId, providerFromMessages]
-          .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
-          .find((candidate) => candidate.length)
-          ?.trim() ?? CODING_AGENT_PROVIDER_ID
-      const modelFromMessages = existing.messages
-        .slice()
-        .reverse()
-        .map((message) => (typeof message.modelId === 'string' ? message.modelId.trim() : ''))
-        .find((candidate) => candidate.length)
-      const resolvedModelId =
-        [requestedModelId, existing.session.modelId, run?.model, modelFromMessages]
-          .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
-          .find((candidate) => candidate.length)
-          ?.trim() ?? DEFAULT_CODING_AGENT_MODEL
-      logSessions('Posting coding agent message (opencode prompt)', {
-        sessionId,
-        providerId: resolvedProviderId,
-        modelId: resolvedModelId,
-        role
-      })
+      const resolvedModelId = requestedModelId ?? DEFAULT_CODING_AGENT_MODEL
+      logSessions('Posting coding agent message (opencode prompt)', { sessionId, modelId: resolvedModelId, role })
       try {
-        // If a CLI runner override is available (in tests or alternate envs),
-        // prefer invoking the opencode CLI rather than starting an in-process
-        // opencode server. This keeps the server test harness deterministic.
-        if (codingAgentCommandRunner) {
-          const args = ['run', text, '--session', sessionId, '--format', 'json', '--model', resolvedModelId]
-          await codingAgentCommandRunner(args, { cwd: existing.session.workspacePath })
-        } else {
-          // Use opencode directly to prompt the workspace session
-          const opSession = await createSession(existing.session.workspacePath)
-          await promptSession(opSession, [text], resolvedModelId)
-        }
+        // Use opencode directly to prompt the workspace session
+        const opSession = await createSession(workspaceQuery)
+        await promptSession(opSession, [text], resolvedModelId)
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Provider invocation failed'
-        logSessionsError('Opencode prompt failed', err, {
-          sessionId,
-          providerId: resolvedProviderId,
-          modelId: resolvedModelId
-        })
+        logSessionsError('Opencode prompt failed', err, { sessionId, modelId: resolvedModelId })
         res.status(500).json({ error: message })
         return
       }
-      const updated = (await codingAgentStorage.getSession(sessionId)) as CodingAgentSessionDetail | null
-      const detail = updated ?? existing
+      // Return a minimal updated session detail to the caller
       res.status(201).json({
-        ...detail,
         session: {
-          ...detail.session,
-          providerId: resolvedProviderId,
-          modelId: resolvedModelId
-        }
+          id: sessionId,
+          workspacePath: typeof req.query.workspacePath === 'string' ? req.query.workspacePath : process.cwd(),
+          modelId: resolvedModelId,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        },
+        messages: []
       })
     } catch (error) {
       logSessionsError('Failed to post coding agent message', error, { sessionId })
@@ -691,7 +530,7 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
     }
   }
 
-  router.get('/api/coding-agent/providers', wrapAsync(listCodingAgentProvidersHandler))
+  // provider listing removed
   // Persona management (OpenCode agent markdown files in ~/.config/opencode/agent)
   const listPersonasHandler: RequestHandler = async (_req, res) => {
     try {

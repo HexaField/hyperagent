@@ -15,7 +15,6 @@ import {
   startCodingAgentRun,
   updateCodingAgentPersona,
   type CodingAgentMessage,
-  type CodingAgentProvider,
   type CodingAgentSessionDetail,
   type CodingAgentSessionSummary,
   type PersonaDetail,
@@ -31,30 +30,17 @@ const STATE_EVENT = 'coding-agent-console:state'
 const SEARCH_PARAM_SESSION = 'codingAgentSession'
 const DEFAULT_WORKSPACE_KEY = '__default__'
 const SESSION_PARAM_DELIMITER = '|'
-type CodingAgentProviderConfig = CodingAgentProvider
-type CodingAgentProviderId = CodingAgentProviderConfig['id']
-const FALLBACK_PROVIDER: CodingAgentProviderConfig = {
-  id: 'coding-agent-cli',
-  label: 'Coding Agent CLI',
-  defaultModelId: 'github-copilot/gpt-5-mini',
-  models: [
-    { id: 'github-copilot/gpt-5-mini', label: 'GitHub Copilot · GPT-5 Mini' },
-    { id: 'github-copilot/gpt-4o', label: 'GitHub Copilot · GPT-4o' },
-    { id: 'openai/gpt-4o-mini', label: 'OpenAI · GPT-4o Mini' }
-  ]
-}
-const DEFAULT_PROVIDERS: readonly CodingAgentProviderConfig[] = [FALLBACK_PROVIDER]
+// Providers removed: keep model-only overrides
+const DEFAULT_MODELS = [
+  { id: 'github-copilot/gpt-5-mini', label: 'GitHub Copilot · GPT-5 Mini' },
+  { id: 'github-copilot/gpt-4o', label: 'GitHub Copilot · GPT-4o' },
+  { id: 'openai/gpt-4o-mini', label: 'OpenAI · GPT-4o Mini' }
+]
 type SessionOverride = {
-  providerId?: CodingAgentProviderId
   modelId?: string
   personaId?: string
 }
-const providerConfigs = () => DEFAULT_PROVIDERS
-const PROVIDER_CONFIG_MAP = new Map<CodingAgentProviderId, CodingAgentProviderConfig>(
-  providerConfigs().map((config) => [config.id, config])
-)
-const DEFAULT_PROVIDER = providerConfigs()[0]
-const DEFAULT_MODEL_ID = DEFAULT_PROVIDER.defaultModelId
+const DEFAULT_MODEL_ID = 'github-copilot/gpt-5-mini'
 type PersistedState = {
   selectedSessionId?: string | null
 }
@@ -82,32 +68,14 @@ function defaultPersonaKeyFor(workspaceKey: string): string {
   return `${storageKeyFor(workspaceKey)}:defaultPersona`
 }
 
-function normalizeProviderId(value: string | null | undefined): CodingAgentProviderId {
-  if (!value) return DEFAULT_PROVIDER.id
-  return PROVIDER_CONFIG_MAP.has(value as CodingAgentProviderId)
-    ? (value as CodingAgentProviderId)
-    : DEFAULT_PROVIDER.id
+function normalizeModelId(_providerId: string | null | undefined, value: string | null | undefined): string {
+  if (!value) return DEFAULT_MODEL_ID
+  return DEFAULT_MODELS.some((m) => m.id === value) ? value : DEFAULT_MODEL_ID
 }
 
-function providerConfigFor(providerId: string | null | undefined): CodingAgentProviderConfig {
-  const normalized = normalizeProviderId(providerId)
-  return PROVIDER_CONFIG_MAP.get(normalized) ?? DEFAULT_PROVIDER
-}
-
-function normalizeModelId(providerId: string | null | undefined, value: string | null | undefined): string {
-  const config = providerConfigFor(providerId)
-  if (!value) return config.defaultModelId
-  return config.models.some((option: any) => option.id === value) ? value : config.defaultModelId
-}
-
-function providerLabel(providerId: string | null | undefined): string {
-  return providerConfigFor(providerId).label
-}
-
-function modelLabel(providerId: string | null | undefined, modelId: string | null | undefined): string {
-  const config = providerConfigFor(providerId)
-  const normalizedModel = normalizeModelId(config.id, modelId)
-  return config.models.find((option: any) => option.id === normalizedModel)?.label ?? normalizedModel
+function modelLabel(_providerId: string | null | undefined, modelId: string | null | undefined): string {
+  const normalized = normalizeModelId(null, modelId)
+  return DEFAULT_MODELS.find((m) => m.id === normalized)?.label ?? normalized
 }
 
 function readStoredState(workspaceKey: string): PersistedState {
@@ -203,14 +171,10 @@ function parseSessionOverrides(raw: string | null): Record<string, SessionOverri
     const next: Record<string, SessionOverride> = {}
     for (const [sessionId, value] of Object.entries(parsed)) {
       if (!sessionId || typeof value !== 'object' || value === null) continue
-      const entry = value as Partial<SessionOverride> & { providerId?: string; modelId?: string }
-      const providerId = entry.providerId ? normalizeProviderId(entry.providerId) : undefined
+      const entry = value as Partial<SessionOverride> & { modelId?: string }
       const modelId = entry.modelId ? String(entry.modelId) : undefined
-      if (providerId || modelId) {
-        next[sessionId] = {
-          ...(providerId ? { providerId } : {}),
-          ...(modelId ? { modelId: normalizeModelId(providerId ?? DEFAULT_PROVIDER.id, modelId) } : {})
-        }
+      if (modelId) {
+        next[sessionId] = { modelId: normalizeModelId(null, modelId) }
       }
     }
     return next
@@ -313,7 +277,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [drawerVisible, setDrawerVisible] = createSignal(false)
   const [widgetMenuOpen, setWidgetMenuOpen] = createSignal(false)
   const [sessionSettingsId, setSessionSettingsId] = createSignal<string | null>(null)
-  const [sessionSettingsProvider, setSessionSettingsProvider] = createSignal<CodingAgentProviderId>(DEFAULT_PROVIDER.id)
   const [sessionSettingsModel, setSessionSettingsModel] = createSignal<string>(DEFAULT_MODEL_ID)
   const [sessionOverrides, setSessionOverrides] = createSignal<Record<string, SessionOverride>>({})
   const [defaultPersonaId, setDefaultPersonaId] = createSignal<string | null>(null)
@@ -432,7 +395,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         if (!workspacePath) {
           throw new Error('Workspace path is required')
         }
-        const providerId = DEFAULT_PROVIDER.id
         const modelId = DEFAULT_MODEL_ID
         const personaToUse = draftPersonaId() ?? defaultPersonaId() ?? undefined
         const run = await startCodingAgentRun({
@@ -444,8 +406,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         setSessionOverrides((prev) => ({
           ...prev,
           [run.id]: {
-            providerId,
-            modelId: normalizeModelId(providerId, modelId),
+            modelId: normalizeModelId(null, modelId),
             ...(personaToUse ? { personaId: personaToUse } : {})
           }
         }))
@@ -749,36 +710,19 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     if (!exists) closeSessionSettings()
   })
 
-  const resolveSessionProvider = (sessionId: string | null | undefined): CodingAgentProviderId => {
-    if (!sessionId) return DEFAULT_PROVIDER.id
-    const overrides = sessionOverrides()
-    const override = overrides?.[sessionId]
-    if (override?.providerId) return normalizeProviderId(override.providerId)
-    return DEFAULT_PROVIDER.id
-  }
-
   const resolveSessionModel = (sessionId: string | null | undefined): string => {
-    const providerId = resolveSessionProvider(sessionId)
-    if (!sessionId) return normalizeModelId(providerId, null)
+    if (!sessionId) return normalizeModelId(null, null)
     const overrides = sessionOverrides()
     const override = overrides?.[sessionId]
-    if (override?.modelId) return normalizeModelId(providerId, override.modelId)
+    if (override?.modelId) return normalizeModelId(null, override.modelId)
     const session = sessionRows().find((row) => row.id === sessionId)
-    return normalizeModelId(providerId, session?.modelId)
+    return normalizeModelId(null, session?.modelId)
   }
-
-  const resolveSessionProviderLabel = (sessionId: string | null | undefined): string => {
-    return providerLabel(resolveSessionProvider(sessionId))
-  }
-
   const resolveSessionModelLabel = (sessionId: string | null | undefined): string => {
-    const providerId = resolveSessionProvider(sessionId)
-    return modelLabel(providerId, resolveSessionModel(sessionId))
+    return modelLabel(null, resolveSessionModel(sessionId))
   }
 
   const openSessionSettings = (sessionId: string) => {
-    const providerId = resolveSessionProvider(sessionId)
-    setSessionSettingsProvider(providerId)
     setSessionSettingsModel(resolveSessionModel(sessionId))
     setSessionSettingsId(sessionId)
   }
@@ -786,9 +730,8 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const handleSessionSettingsSave = () => {
     const targetId = sessionSettingsId()
     if (!targetId) return
-    const providerId = normalizeProviderId(sessionSettingsProvider())
-    const modelId = normalizeModelId(providerId, sessionSettingsModel())
-    setSessionOverrides((prev) => ({ ...prev, [targetId]: { providerId, modelId } }))
+    const modelId = normalizeModelId(null, sessionSettingsModel())
+    setSessionOverrides((prev) => ({ ...prev, [targetId]: { modelId } }))
     closeSessionSettings()
   }
 
@@ -863,9 +806,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                       </div>
                       <p class="mt-1 text-xs text-[var(--text-muted)]">
                         Updated {new Date(session.updatedAt).toLocaleString()}
-                      </p>
-                      <p class="mt-1 text-xs text-[var(--text-muted)]">
-                        Provider: {resolveSessionProviderLabel(session.id)}
                       </p>
                       <p class="mt-1 text-xs text-[var(--text-muted)]">Model: {resolveSessionModelLabel(session.id)}</p>
                     </button>
@@ -1180,25 +1120,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
               <p class="text-xs text-[var(--text-muted)]">ID: {target.id}</p>
             </div>
             <div class="space-y-4">
-              <div class="space-y-2">
-                <label class="text-sm font-semibold text-[var(--text)]" for="session-settings-provider">
-                  Provider
-                </label>
-                <select
-                  id="session-settings-provider"
-                  class="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-2 text-sm"
-                  value={sessionSettingsProvider()}
-                  onInput={(event) => {
-                    const nextProvider = normalizeProviderId(event.currentTarget.value)
-                    setSessionSettingsProvider(nextProvider)
-                    setSessionSettingsModel((current) => normalizeModelId(nextProvider, current))
-                  }}
-                >
-                  <For each={DEFAULT_PROVIDERS}>
-                    {(provider) => <option value={provider.id}>{provider.label}</option>}
-                  </For>
-                </select>
-              </div>
+              {/* Provider selection removed — model-only settings */}
               <div class="space-y-2">
                 <label class="text-sm font-semibold text-[var(--text)]" for="session-settings-model">
                   Model
@@ -1209,8 +1131,8 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                   value={sessionSettingsModel()}
                   onInput={(event) => setSessionSettingsModel(event.currentTarget.value)}
                 >
-                  <For each={providerConfigFor(sessionSettingsProvider()).models}>
-                    {(option) => <option value={option.id}>{option.label}</option>}
+                  <For each={DEFAULT_MODELS}>
+                    {(option) => <option value={option.id}>{option.label ?? option.id}</option>}
                   </For>
                 </select>
               </div>
@@ -1499,7 +1421,6 @@ function messageSignature(message: CodingAgentMessage): string {
       text: message.text,
       completedAt: message.completedAt,
       modelId: message.modelId,
-      providerId: message.providerId,
       parts: message.parts,
       role: message.role
     })
