@@ -28,8 +28,7 @@ import { createWorkflowPolicyFromEnv } from '../../../src/modules/workflowPolicy
 import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
-import { runVerifierWorkerLoop, type AgentStreamEvent } from '../../modules/agent/agent'
-import { createOpencodeStorage } from '../../modules/agent/opencode'
+import { runVerifierWorkerLoop, type AgentStreamEvent } from '../../modules/agent/multi-agent'
 import { runGitCommand } from '../../modules/git'
 import { createSseStream } from '../lib/sse'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
@@ -128,9 +127,6 @@ export type CreateServerOptions = {
   tls?: TlsConfig
   publicOrigin?: string
   corsOrigin?: string
-  codingAgentStorage?: any
-  codingAgentRunner?: any
-  codingAgentCommandRunner?: any
   webSockets?: WebSocketBindings
   narratorRelay?: NarratorRelay
 }
@@ -223,20 +219,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       },
       repository: persistence.terminalSessions
     })
-
-  const codingAgentStorage = options.codingAgentStorage ?? createOpencodeStorage({ rootDir: process.env.OPENCODE_STORAGE_ROOT })
-  const codingAgentRunner =
-    options.codingAgentRunner ??
-    (async () => {
-      // minimal runner compatibility shim
-      return {
-        listRuns: async () => [],
-        getRun: async () => null,
-        startRun: async () => null,
-        killRun: async () => false
-      }
-    })
-  // optional command runner may be provided by tests or custom server setups
 
   const gitAuthor = detectGitAuthorFromCli()
   const commitAuthor = {
@@ -473,8 +455,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     const trimmed = pathName.slice(prefix.length)
     return trimmed.length ? trimmed : '/'
   }
-
-  
 
   type CodeServerWorkspaceOptions = {
     sessionId: string
@@ -1101,8 +1081,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
 
   const workspaceSessionsRouter = createWorkspaceSessionsRouter({
     wrapAsync,
-    codingAgentRunner,
-    codingAgentStorage,
     ensureWorkspaceDirectory
   })
 

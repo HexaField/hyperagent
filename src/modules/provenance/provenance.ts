@@ -1,6 +1,5 @@
-import { Session } from '@opencode-ai/sdk'
+// provenance operates on run ids and directories; Session type not required here
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
 
 export const META_FOLDER = '.hyperagent'
@@ -10,22 +9,16 @@ export function sanitizeSessionId(sessionId: string): string {
   return safe.length ? safe : 'session'
 }
 
-export function resolveSessionRoot(sessionId: string, baseDir?: string): string {
-  return baseDir ? path.join(baseDir) : path.join(os.tmpdir(), '.sessions', sessionId)
-}
-
-export function metaDirectory(sessionId: string, baseDir?: string): string {
-  const root = resolveSessionRoot(sessionId, baseDir)
-  const dir = path.join(root, META_FOLDER)
+export function metaDirectory(directory: string): string {
+  const dir = path.join(directory, META_FOLDER)
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
   return dir
 }
 
-function metaFile(session: Session) {
-  const sessionId = session.id
-  const baseDir = session.directory
-  const dir = metaDirectory(sessionId, baseDir)
-  return path.join(dir, `${sanitizeSessionId(sessionId)}.json`)
+function metaFile(runId: string, directory: string) {
+  const dir = metaDirectory(directory)
+  const idForFile = sanitizeSessionId(path.basename(path.resolve(String(runId))))
+  return path.join(dir, `${idForFile}.json`)
 }
 
 export type LogEntry = {
@@ -44,8 +37,8 @@ export type SessionMeta = {
   updatedAt: string
 }
 
-export function loadSessionMeta(session: Session): SessionMeta {
-  const file = metaFile(session)
+export function loadSessionMeta(runId: string, directory: string): SessionMeta {
+  const file = metaFile(runId, directory)
   if (fs.existsSync(file)) {
     try {
       const raw = fs.readFileSync(file, 'utf-8')
@@ -57,17 +50,17 @@ export function loadSessionMeta(session: Session): SessionMeta {
     }
   }
   const blank: SessionMeta = {
-    id: session.id,
+    id: sanitizeSessionId(path.basename(String(runId))),
     log: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   }
-  saveSessionMeta(blank, session)
+  saveSessionMeta(blank, runId, directory)
   return blank
 }
 
-export function saveSessionMeta(meta: SessionMeta, session: Session) {
-  const file = metaFile(session)
+export function saveSessionMeta(meta: SessionMeta, runId: string, directory: string) {
+  const file = metaFile(runId, directory)
   meta.updatedAt = new Date().toISOString()
   fs.writeFileSync(file, JSON.stringify(meta, null, 2))
 }
@@ -81,7 +74,7 @@ export type LogEntryInit = {
   createdAt?: string
 }
 
-export function appendLogEntry(session: Session, meta: SessionMeta, entry: LogEntryInit) {
+export function appendLogEntry(runId: string, meta: SessionMeta, entry: LogEntryInit, directory: string) {
   const normalized: LogEntry = {
     entryId: entry.entryId || `${entry.provider}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     provider: entry.provider,
@@ -92,7 +85,7 @@ export function appendLogEntry(session: Session, meta: SessionMeta, entry: LogEn
   }
   meta.log = Array.isArray(meta.log) ? meta.log : []
   meta.log.push(normalized)
-  saveSessionMeta(meta, session)
+  saveSessionMeta(meta, runId, directory)
 }
 
 export function findLatestLogEntry(meta: SessionMeta, predicate: (entry: LogEntry) => boolean): LogEntry | undefined {

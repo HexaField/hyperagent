@@ -3,7 +3,6 @@ import crypto from 'crypto'
 import type { PersistenceContext, PersistenceModule, Timestamp } from '../database'
 import { appendLogEntry, loadSessionMeta } from '../provenance/provenance'
 import { createSession, extractResponseText, promptSession } from './opencode'
-// import { callLLM, type LLMResponse, type LLMStreamCallback, type Provider } from '../llm'
 
 type WorkerStatus = 'working' | 'done' | 'blocked'
 type VerifierVerdict = 'instruct' | 'approve' | 'fail'
@@ -109,14 +108,14 @@ export type AgentStreamCallback = (event: AgentStreamEvent) => void
 export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
   const model = options.model ?? 'llama3.2'
   const maxRounds = options.maxRounds ?? 10
-  const sessionDir = options.sessionDir
-  if (!sessionDir) throw new Error('sessionDir is required for runVerifierWorkerLoop')
+  const directory = options.sessionDir
+  if (!directory) throw new Error('sessionDir is required for runVerifierWorkerLoop')
 
   const streamCallback = options.onStream
 
-  // Create provider sessions (delegates to configured provider implementation)
-  const workerSession = await createSession(sessionDir)
-  const verifierSession = await createSession(sessionDir)
+  const runId = `run-${Date.now()}`
+  const workerSession = await createSession(directory)
+  const verifierSession = await createSession(directory)
 
   const rounds: ConversationRound[] = []
 
@@ -126,7 +125,9 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
     userInstructions: options.userInstructions,
     workerTurn: null,
     round: 0,
-    onStream: streamCallback
+    onStream: streamCallback,
+    runId,
+    directory
   })
 
   let pendingInstructions = bootstrap.parsed.instructions || options.userInstructions
@@ -140,7 +141,9 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
       verifierInstructions: pendingInstructions,
       verifierCritique: latestCritique,
       round,
-      onStream: streamCallback
+      onStream: streamCallback,
+      runId,
+      directory
     })
 
     if (workerTurn.parsed.status === 'blocked') {
@@ -158,7 +161,9 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
       userInstructions: options.userInstructions,
       workerTurn,
       round,
-      onStream: streamCallback
+      onStream: streamCallback,
+      runId,
+      directory
     })
 
     rounds.push({ worker: workerTurn, verifier: verifierTurn })
@@ -201,6 +206,8 @@ type WorkerInvokeArgs = {
   verifierCritique?: string
   round: number
   onStream?: AgentStreamCallback
+  runId: string
+  directory: string
 }
 
 type VerifierInvokeArgs = {
@@ -210,6 +217,8 @@ type VerifierInvokeArgs = {
   workerTurn: WorkerTurn | null
   round: number
   onStream?: AgentStreamCallback
+  runId: string
+  directory: string
 }
 
 async function invokeWorker(args: WorkerInvokeArgs): Promise<WorkerTurn> {
@@ -220,6 +229,8 @@ async function invokeWorker(args: WorkerInvokeArgs): Promise<WorkerTurn> {
     basePrompt: query,
     model: args.model,
     session: args.session,
+    runId: args.runId,
+    directory: args.directory,
     onStream: args.onStream,
     parseResponse: (response) => parseWorkerResponse('worker', response)
   })
@@ -235,6 +246,8 @@ async function invokeVerifier(args: VerifierInvokeArgs): Promise<VerifierTurn> {
     basePrompt: query,
     model: args.model,
     session: args.session,
+    runId: args.runId,
+    directory: args.directory,
     onStream: args.onStream,
     parseResponse: (response) => parseVerifierResponse('verifier', response)
   })
@@ -356,6 +369,8 @@ type StructuredJsonCallOptions<T> = {
   basePrompt: string
   model: string
   session: Session
+  runId: string
+  directory: string
   onStream?: AgentStreamCallback
   parseResponse: (res: string) => T
 }
@@ -364,22 +379,27 @@ async function invokeStructuredJsonCall<T>(options: StructuredJsonCallOptions<T>
   let prompt = options.basePrompt
   let lastError: Error | null = null
 
-  const meta = loadSessionMeta(options.session)
+  const meta = loadSessionMeta(options.runId, options.directory)
 
   for (let attempt = 1; attempt <= MAX_JSON_ATTEMPTS; attempt++) {
     const response = await promptSession(options.session, [options.systemPrompt, prompt], options.model)
     const raw = extractResponseText(response.parts)
 
-    appendLogEntry(options.session, meta, {
-      provider: 'opencode',
-      model: options.model,
-      role: options.role,
-      payload: {
-        attempt,
-        prompt,
-        rawResponse: raw
-      }
-    })
+    appendLogEntry(
+      options.runId,
+      meta,
+      {
+        provider: 'opencode',
+        model: options.model,
+        role: options.role,
+        payload: {
+          attempt,
+          prompt,
+          rawResponse: raw
+        }
+      },
+      options.directory
+    )
 
     try {
       const parsed = options.parseResponse(raw)

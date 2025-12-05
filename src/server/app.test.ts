@@ -22,7 +22,7 @@ import type { OpencodeRunner } from '../../src/modules/provider'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import type { LiveTerminalSession, TerminalModule } from '../../src/modules/terminal'
 import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from '../../src/modules/workflowRunnerGateway'
-import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../modules/agent/agent'
+import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../modules/agent/multi-agent'
 import { createServerApp, type CreateServerOptions } from './app'
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'

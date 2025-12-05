@@ -1,13 +1,11 @@
 import { TextPart } from '@opencode-ai/sdk'
 import os from 'os'
-import { afterAll, describe, expect, it } from 'vitest'
-import { createSession, getOpencodeServer, promptSession } from './opencode'
+import { describe, expect, it } from 'vitest'
+import { createSession, promptSession } from './opencode'
+import { opencodeTestHooks } from './opencodeTestHooks'
 
 describe('Opencode Module', () => {
-  afterAll(async () => {
-    const server = await getOpencodeServer()
-    server.close()
-  })
+  opencodeTestHooks()
 
   it('should create a session successfully', async () => {
     const tmp = os.tmpdir()

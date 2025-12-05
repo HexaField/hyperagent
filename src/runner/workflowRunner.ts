@@ -2,7 +2,7 @@
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
-import { runVerifierWorkerLoop, type AgentStreamCallback } from '../modules/agent/agent'
+import { runVerifierWorkerLoop, type AgentStreamCallback } from '../modules/agent/multi-agent'
 import { createPersistence } from '../modules/database'
 import { runGitCommandSync } from '../modules/git'
 import { detectGitAuthorFromCli } from '../modules/gitAuthor'

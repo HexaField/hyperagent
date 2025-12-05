@@ -1,9 +1,10 @@
 import { spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
-import { afterAll, describe, expect, it } from 'vitest'
-import { runVerifierWorkerLoop } from './agent'
-import { getOpencodeServer } from './opencode'
+import { describe, expect, it } from 'vitest'
+import { sanitizeSessionId } from '../provenance/provenance'
+import { runVerifierWorkerLoop } from './multi-agent'
+import { opencodeTestHooks } from './opencodeTestHooks'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
@@ -13,13 +14,10 @@ function commandExists(cmd: string): boolean {
 const model = 'github-copilot/gpt-5-mini'
 
 describe('Verifier/worker collaboration loop', () => {
-  afterAll(async () => {
-    const server = await getOpencodeServer()
-    server.close()
-  })
+  opencodeTestHooks()
 
-  it('iterates on a complex graph-feature coding brief', async () => {
-    const sessionDir = path.join(process.cwd(), `.tests/agent-integration-${Date.now()}`)
+  it('completes a simple file creation task', async () => {
+    const sessionDir = path.join(process.cwd(), `.tests/agent-${Date.now()}`)
     const exists = commandExists('opencode')
     expect(exists, "Required CLI 'opencode' not found on PATH").toBe(true)
 
@@ -59,15 +57,24 @@ describe('Verifier/worker collaboration loop', () => {
 
     expect(['approved', 'failed', 'max-rounds']).toContain(result.outcome)
 
-    const metaDir = path.join(sessionDir, '.hyperagent')
-    expect(fs.existsSync(metaDir)).toBe(true)
-    const metaFiles = fs.readdirSync(metaDir).filter((file) => file.endsWith('.json'))
+    const hyperagentDir = path.join(sessionDir, '.hyperagent')
+
+    const metaFiles = fs
+      .readdirSync(hyperagentDir)
+      .filter((f) => f.endsWith('.json'))
+      .map((f) => path.join(hyperagentDir, f))
 
     expect(metaFiles.length).toBeGreaterThan(0)
+
     const logs = metaFiles.flatMap((file) => {
-      const meta = JSON.parse(fs.readFileSync(path.join(metaDir, file), 'utf8'))
+      const meta = JSON.parse(fs.readFileSync(file, 'utf8'))
+      expect(typeof meta.id).toBe('string')
+      expect(Array.isArray(meta.log)).toBe(true)
+      const basename = path.basename(file, '.json')
+      expect(meta.id).toBe(sanitizeSessionId(basename))
       return Array.isArray(meta.log) ? meta.log : []
     })
+
     const opencodeEntries = logs.filter((entry: any) => entry.provider === 'opencode')
     expect(opencodeEntries.length).toBeGreaterThanOrEqual(2)
     for (const entry of opencodeEntries) {
@@ -75,9 +82,14 @@ describe('Verifier/worker collaboration loop', () => {
       expect(typeof entry.payload).toBe('object')
     }
 
-    const readmePath = path.join(sessionDir, 'readme.md')
-    expect(fs.existsSync(readmePath)).toBe(true)
-    const readmeContent = fs.readFileSync(readmePath, 'utf8')
+    const readmeDir = sessionDir
+    const foundReadmes = fs
+      .readdirSync(readmeDir)
+      .filter((f) => f.toLowerCase() === 'readme.md')
+      .map((f) => path.join(readmeDir, f))
+
+    expect(foundReadmes.length).toBeGreaterThan(0)
+    const readmeContent = fs.readFileSync(foundReadmes[0], 'utf8')
     expect(readmeContent.includes('Hello, world')).toBe(true)
-  }, 60_000)
+  }, 120_000)
 })

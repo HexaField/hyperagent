@@ -6,7 +6,7 @@ import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createOpencodeStorage, type OpencodeStorage } from '../../../../src/modules/agent/opencode'
 import type { CodingAgentSessionDetail } from '../../../interfaces/core/codingAgent'
-import * as agentModule from '../../../modules/agent/agent'
+import * as agentModule from '../../../modules/agent/multi-agent'
 
 let createWorkspaceSessionsRouter: any
 

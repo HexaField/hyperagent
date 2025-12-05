@@ -12,7 +12,12 @@ import type {
   CodingAgentSessionListResponse,
   CodingAgentSessionSummary
 } from '../../../interfaces/core/codingAgent'
-import { createSession, extractResponseText, promptSession } from '../../../modules/agent/opencode'
+import {
+  createOpencodeStorage,
+  createSession,
+  extractResponseText,
+  promptSession
+} from '../../../modules/agent/opencode'
 import {
   CODING_AGENT_PROVIDER_ID,
   DEFAULT_CODING_AGENT_MODEL,
@@ -20,7 +25,7 @@ import {
 } from '../../core/config'
 
 import { ensureProviderConfig } from '../../../../src/modules/workflowAgentExecutor'
-import { runVerifierWorkerLoop } from '../../../modules/agent/agent'
+import { runVerifierWorkerLoop } from '../../../modules/agent/multi-agent'
 import { deletePersona, listPersonas, readPersona, writePersona } from './personas'
 
 const MULTI_AGENT_PERSONA_ID = 'multi-agent'
@@ -74,24 +79,13 @@ const simplifyPartsForSignature = (parts: CodingAgentMessage['parts']): unknown[
 
 export type WorkspaceSessionsDeps = {
   wrapAsync: WrapAsync
-  // minimal runner/storage shapes expected by this router
-  codingAgentRunner: {
-    listRuns: () => Promise<any[]>
-    getRun: (id: string) => Promise<any | null>
-    startRun?: (opts: any) => Promise<any>
-    killRun?: (id: string) => Promise<boolean>
-  }
-  codingAgentStorage: {
-    rootDir?: string
-    listSessions: (opts: { workspacePath?: string } | undefined) => Promise<any[]>
-    getSession: (id: string) => Promise<any | null>
-  }
   ensureWorkspaceDirectory: (dirPath: string) => Promise<void>
 }
 
 export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
-  const { wrapAsync, codingAgentRunner, codingAgentStorage, ensureWorkspaceDirectory } = deps
+  const { wrapAsync, ensureWorkspaceDirectory } = deps
   const router = Router()
+  const codingAgentStorage = createOpencodeStorage({ rootDir: process.env.OPENCODE_STORAGE_ROOT })
 
   const logSessions = (message: string, metadata?: Record<string, unknown>) => {
     if (metadata && Object.keys(metadata).length) {
