@@ -8,7 +8,7 @@ import {
   type AgentRunStatus,
   type AgentRunsBindings,
   type AgentRunsRepository
-} from './agent/multi-agent'
+} from './agent/agent-persistence'
 import {
   codeServerSessionsPersistence,
   type CodeServerSessionInput,
