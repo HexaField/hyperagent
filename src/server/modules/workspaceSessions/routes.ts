@@ -1,11 +1,8 @@
-import crypto from 'crypto'
 import { Router, type RequestHandler } from 'express'
 // filesystem logging and direct storage writes are handled in the agent module now
 import fs from 'fs'
 import path from 'path'
-import { ensureProviderConfig } from '../../../../src/modules/workflowAgentExecutor'
 import type {
-  CodingAgentMessage,
   CodingAgentRunListResponse,
   CodingAgentSessionDetail,
   CodingAgentSessionListResponse,
@@ -13,99 +10,22 @@ import type {
   RunMeta
 } from '../../../interfaces/core/codingAgent'
 import { runVerifierWorkerLoop } from '../../../modules/agent/multi-agent'
-import { getSession as getOpencodeSession } from '../../../modules/agent/opencode'
 import { runSingleAgentLoop } from '../../../modules/agent/single-agent'
-import { metaDirectory, RunMeta as ProvRunMeta } from '../../../modules/provenance/provenance'
+import { hasRunMeta, loadRunMeta, metaDirectory, RunMeta as ProvRunMeta } from '../../../modules/provenance/provenance'
 import { DEFAULT_CODING_AGENT_MODEL } from '../../core/config'
 import { deletePersona, listPersonas, readPersona, writePersona } from './personas'
+
 type WrapAsync = (handler: RequestHandler) => RequestHandler
+
 const MULTI_AGENT_PERSONA_ID = 'multi-agent'
-/**
- * Deduplicate consecutive messages that are semantically identical.
- *
- * This helper compares adjacent messages using a stable signature and
- * removes exact repeats that occur sequentially. It is used when
- * returning session detail responses to avoid noisy duplicate stream
- * chunks in the UI.
- *
- * @param messages - Array of persisted CodingAgentMessage objects
- * @returns A filtered array with consecutive duplicates removed
- */
-
-export const dedupeSequentialMessages = (messages: CodingAgentMessage[]): CodingAgentMessage[] => {
-  if (!Array.isArray(messages) || messages.length <= 1) return messages ?? []
-  const result: CodingAgentMessage[] = []
-  let previousSignature: string | null = null
-  for (const message of messages) {
-    const signature = buildMessageSignature(message)
-    if (previousSignature && signature === previousSignature) {
-      continue
-    }
-    result.push(message)
-    previousSignature = signature
-  }
-  return result
-}
-
-/**
- * Build a stable signature string for a message.
- *
- * The signature consolidates the important fields (role, text, timestamps,
- * model/provider and simplified parts) into a JSON string for cheap
- * equality checks when deduplicating.
- *
- * @param message - Message to build a signature for
- * @returns A string signature suitable for equality comparisons
- */
-const buildMessageSignature = (message: CodingAgentMessage): string => {
-  try {
-    return JSON.stringify({
-      role: message.role,
-      text: message.text,
-      completedAt: message.completedAt,
-      modelId: message.modelId,
-      parts: simplifyPartsForSignature(message.parts)
-    })
-  } catch {
-    return `${message.id ?? ''}:${message.role ?? ''}:${message.completedAt ?? ''}:${message.text ?? ''}:${
-      message.parts?.length ?? 0
-    }`
-  }
-}
-
-/**
- * Simplify message parts for inclusion in a signature.
- *
- * Strips implementation-specific fields (ids, session references) and
- * returns a lightweight array suitable for JSON encoding in the
- * `buildMessageSignature` helper.
- *
- * @param parts - The parts array from a `CodingAgentMessage`
- * @returns A simplified array of part objects / primitives
- */
-const simplifyPartsForSignature = (parts: CodingAgentMessage['parts']): unknown[] => {
-  if (!Array.isArray(parts)) return []
-  return parts.map((part) => {
-    if (!part || typeof part !== 'object') return part
-    const { id, messageID, sessionID, ...rest } = part as Record<string, unknown>
-    void id
-    void messageID
-    void sessionID
-    return rest
-  })
-}
 
 /**
  * Dependencies required to create the workspace sessions router.
  *
- * `wrapAsync` is an Express helper for async handlers. `ensureWorkspaceDirectory`
- * ensures session workspaces exist. `codingAgentStorage` and `codingAgentRunner`
- * are optional injected implementations used for persistence and running
- * agents; when absent the router provides in-process fallbacks.
+ * `wrapAsync` is an Express helper for async handlers.
  */
 export type WorkspaceSessionsDeps = {
   wrapAsync: WrapAsync
-  ensureWorkspaceDirectory: (dirPath: string) => Promise<void>
 }
 
 /**
@@ -120,7 +40,7 @@ export type WorkspaceSessionsDeps = {
  * @returns An Express `Router` instance with the coding-agent routes mounted
  */
 export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
-  const { wrapAsync, ensureWorkspaceDirectory } = deps
+  const { wrapAsync } = deps
   const router = Router()
   // No injected storage/command-runner: routes call agent/opencode functions directly.
 
@@ -253,173 +173,53 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
   }
 
   /**
-   * HTTP handler: GET /api/coding-agent/sessions/:sessionId
+   * HTTP handler: GET /api/coding-agent/sessions/:runId
    *
    * Loads session details (messages, session metadata) from the
    * codingAgentStorage and returns a deduplicated message stream.
    */
   const getCodingAgentSessionHandler: RequestHandler = async (req, res) => {
-    const sessionId = req.params.sessionId
-    if (!sessionId) {
-      res.status(400).json({ error: 'sessionId is required' })
+    const runId = req.params.runId
+    if (!runId) {
+      res.status(400).json({ error: 'runId is required' })
       return
     }
-    try {
-      // Determine workspace: prefer explicit query, otherwise we'll try
-      // to discover a persisted RunMeta file for the session across the
-      // repository (supports tests which write meta files without passing
-      // the workspace path on the request).
-      let workspaceQuery = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : undefined
-      let detail: CodingAgentSessionDetail | null = null
-      // Helper: search for run meta file in common layouts when no workspace provided
-      const findRunMetaFile = (id: string): string | null => {
-        const root = process.cwd()
-        const ignored = new Set(['node_modules', '.git'])
-        const stack: string[] = [root]
-        while (stack.length) {
-          const dir = stack.pop() as string
-          let entries: string[] = []
-          try {
-            entries = fs.readdirSync(dir)
-          } catch {
-            continue
-          }
-          for (const name of entries) {
-            if (ignored.has(name)) continue
-            const full = path.join(dir, name)
-            let stat: fs.Stats
-            try {
-              stat = fs.statSync(full)
-            } catch {
-              continue
-            }
-            if (stat.isDirectory()) {
-              // If we find a .hyperagent dir containing the id, return it
-              if (name === '.hyperagent') {
-                const candidate = path.join(full, `${id}.json`)
-                if (fs.existsSync(candidate)) return candidate
-              }
-              // Look for legacy opencode storage layout
-              if (name === 'storage') {
-                // check storage/session/**/<id>.json
-                const sessionDir = path.join(full, 'session')
-                if (fs.existsSync(sessionDir)) {
-                  try {
-                    const projects = fs.readdirSync(sessionDir)
-                    for (const p of projects) {
-                      const candidate = path.join(sessionDir, p, `${id}.json`)
-                      if (fs.existsSync(candidate)) return candidate
-                    }
-                  } catch {
-                    // ignore
-                  }
-                }
-              }
-              // push directory for further traversal
-              stack.push(full)
-            }
-          }
-        }
-        return null
-      }
+    let workspaceQuery = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : undefined
+    if (!workspaceQuery) throw new Error('workspacePath query parameter is required')
 
-      if (workspaceQuery) {
-        try {
-          const opSession = await getOpencodeSession(workspaceQuery, sessionId).catch(() => null)
-          if (opSession) {
-            detail = {
-              session: {
-                id: sessionId,
-                workspacePath: workspaceQuery,
-                modelId: DEFAULT_CODING_AGENT_MODEL,
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-                title: null,
-                projectId: null as any,
-                summary: { additions: 0, deletions: 0, files: 0 }
-              },
-              messages: []
-            }
-          }
-        } catch (e) {
-          console.error('opencode session lookup failed', e)
-        }
-        if (!detail) {
-          try {
-            const metaDir = metaDirectory(workspaceQuery)
-            const filePath = path.join(metaDir, `${sessionId}.json`)
-            if (fs.existsSync(filePath)) {
-              const raw = fs.readFileSync(filePath, 'utf-8')
-              const parsed = JSON.parse(raw) as ProvRunMeta
-              detail = {
-                session: {
-                  id: parsed.id,
-                  workspacePath: workspaceQuery,
-                  modelId: DEFAULT_CODING_AGENT_MODEL,
-                  createdAt: parsed.createdAt,
-                  updatedAt: parsed.updatedAt,
-                  title: null,
-                  projectId: null as any,
-                  summary: { additions: 0, deletions: 0, files: 0 }
-                },
-                messages: []
-              }
-            }
-          } catch (err) {
-            console.error('run meta lookup failed', err)
-          }
-        }
-      } else {
-        // No workspace query provided: try to discover a RunMeta file
-        // elsewhere in the repository (supports test fixtures and legacy
-        // opencode storage layouts).
-        const found = findRunMetaFile(sessionId)
-        if (found) {
-          try {
-            const raw = fs.readFileSync(found, 'utf-8')
-            const parsed = JSON.parse(raw) as ProvRunMeta
-            // compute workspace root based on file layout
-            let inferredWorkspace = process.cwd()
-            if (
-              found.includes(`${path.sep}.hyperagent${path.sep}`) ||
-              found.endsWith(`${path.sep}.hyperagent${path.sep}${sessionId}.json`)
-            ) {
-              inferredWorkspace = path.dirname(path.dirname(found))
-            } else if (found.includes(`${path.sep}storage${path.sep}session${path.sep}`)) {
-              inferredWorkspace = found.split(`${path.sep}storage${path.sep}session`)[0]
-            } else {
-              inferredWorkspace = path.dirname(path.dirname(found))
-            }
-            workspaceQuery = inferredWorkspace
-            detail = {
-              session: {
-                id: parsed.id,
-                workspacePath: workspaceQuery,
-                modelId: DEFAULT_CODING_AGENT_MODEL,
-                createdAt: parsed.createdAt,
-                updatedAt: parsed.updatedAt,
-                title: null,
-                projectId: null as any,
-                summary: { additions: 0, deletions: 0, files: 0 }
-              },
-              messages: []
-            }
-          } catch (err) {
-            console.error('discovered run meta parse failed', err)
-          }
-        }
-      }
-      if (!detail) {
-        res.status(404).json({ error: 'Unknown session' })
-        return
-      }
-      const normalizedMessages = dedupeSequentialMessages(detail.messages ?? [])
-      console.log('[coding-agent] getCodingAgentSessionHandler', { sessionId, messages: normalizedMessages.length })
-      res.json({ ...detail, messages: normalizedMessages })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load coding agent session'
-      res.status(500).json({ error: message })
+    const exists = hasRunMeta(runId, workspaceQuery)
+
+    if (!exists) {
+      res.status(404).json({ error: 'Unknown session' })
+      return
     }
+
+    const runs = loadRunMeta(runId, workspaceQuery)
+    console.log('runs', runs)
+
+    const detail: CodingAgentSessionDetail = {
+      session: {
+        id: runId,
+        workspacePath: workspaceQuery,
+        modelId: DEFAULT_CODING_AGENT_MODEL,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        title: null,
+        projectId: null as any,
+        summary: { additions: 0, deletions: 0, files: 0 }
+      },
+      messages: runs.log.map((entry) => ({
+        id: entry.entryId,
+        role: entry.role || 'agent',
+        createdAt: entry.createdAt,
+        completedAt: entry.createdAt,
+        modelId: entry.model || DEFAULT_CODING_AGENT_MODEL,
+        parts: entry.payload
+      }))
+    }
+
+    console.log('[coding-agent] getCodingAgentSessionHandler', { runId, messages: detail.messages.length })
+    res.json(detail)
   }
 
   /**
@@ -488,91 +288,49 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       return
     }
     const normalizedWorkspace = workspacePath.trim()
-    // provider selection removed; provider config will be defaulted by ensureProviderConfig
-    // const adapter = getProviderAdapter(providerId)
-    // if (!adapter) {
-    //   res.status(400).json({ error: `Unsupported provider: ${providerId}` })
-    //   return
-    // }
-    try {
-      await ensureWorkspaceDirectory(normalizedWorkspace)
-      if (personaId) {
-        try {
-          const persona = await readPersona(personaId)
-          if (!persona) {
-            res.status(400).json({ error: `Persona not found: ${personaId}` })
-            return
-          }
-        } catch (err: any) {
-          console.warn('[coding-agent] Failed to read persona file', { personaId, error: err?.message ?? String(err) })
-          res.status(400).json({ error: `Failed to read persona: ${personaId}` })
+
+    if (personaId) {
+      try {
+        const persona = await readPersona(personaId)
+        if (!persona) {
+          res.status(400).json({ error: `Persona not found: ${personaId}` })
           return
         }
+      } catch (err: any) {
+        console.warn('[coding-agent] Failed to read persona file', { personaId, error: err?.message ?? String(err) })
+        res.status(400).json({ error: `Failed to read persona: ${personaId}` })
+        return
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Workspace path is unavailable'
-      res.status(400).json({ error: message })
-      return
     }
+
     try {
+      /** @todo refactor */
       // ensure provider config and apply persona merges (copy persona into session)
-      await ensureProviderConfig(normalizedWorkspace, undefined, personaId)
+      // await ensureProviderConfig(normalizedWorkspace, undefined, personaId)
 
       const resolvedModel = typeof model === 'string' && model.trim().length ? model.trim() : DEFAULT_CODING_AGENT_MODEL
       const trimmedPrompt = prompt.trim()
-      /** @todo use provider abstraction in the future */
-      // if (adapter.validateModel) {
-      //   const ok = await Promise.resolve(adapter.validateModel(resolvedModel))
-      //   if (!ok) {
-      //     res.status(400).json({ error: `Model not supported by provider: ${resolvedModel}` })
-      //     return
-      //   }
-      // }
+
       logSessions('Starting coding agent run', { workspacePath: normalizedWorkspace, model: resolvedModel })
 
-      // For non-multi-agent runs we start a simple opencode session and
-      // prompt it with the initial text. This keeps the route as a thin
-      // wrapper over the opencode helpers.
       if (!multiAgentMode) {
-        // Start a single-agent loop in the background which will create and
-        // persist run metadata via the provenance helpers.
-        const sessionId = `ses_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`
-        const startedAt = new Date().toISOString()
-        const runRecord: RunMeta = { id: sessionId, agents: [], log: [], createdAt: startedAt, updatedAt: startedAt }
-        ;(async () => {
-          try {
-            await runSingleAgentLoop({
-              userInstructions: trimmedPrompt,
-              model: resolvedModel,
-              sessionDir: normalizedWorkspace,
-              runID: sessionId
-            })
-          } catch (err) {
-            logSessionsError('Single-agent loop failed', err, { sessionId })
-          }
-        })()
-        res.status(202).json({ run: runRecord })
+        const { runId } = await runSingleAgentLoop({
+          userInstructions: trimmedPrompt,
+          model: resolvedModel,
+          sessionDir: normalizedWorkspace
+        })
+        const run = loadRunMeta(runId, normalizedWorkspace)
+        res.status(202).json({ run })
         return
       }
 
-      // Multi-agent persona: kick off the verifier/worker loop in the
-      // background and return a minimal RunMeta immediately.
-      const sessionId = `ses_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`
-      const startedAt = new Date().toISOString()
-      const runRecord: RunMeta = { id: sessionId, agents: [], log: [], createdAt: startedAt, updatedAt: startedAt }
-      ;(async () => {
-        try {
-          await runVerifierWorkerLoop({
-            userInstructions: trimmedPrompt,
-            model: resolvedModel,
-            sessionDir: normalizedWorkspace,
-            runID: sessionId
-          })
-        } catch (err) {
-          logSessionsError('Multi-agent loop failed', err, { sessionId })
-        }
-      })()
-      res.status(202).json({ run: runRecord })
+      const { runId } = await runVerifierWorkerLoop({
+        userInstructions: trimmedPrompt,
+        model: resolvedModel,
+        sessionDir: normalizedWorkspace
+      })
+      const run = loadRunMeta(runId, normalizedWorkspace)
+      res.status(202).json({ run })
     } catch (error) {
       logSessionsError('Failed to start coding agent session', error, { workspacePath: normalizedWorkspace })
       const message = error instanceof Error ? error.message : 'Failed to start coding agent session'
@@ -628,12 +386,6 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
     try {
       // Determine workspace (prefer explicit query)
       const workspaceQuery = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : process.cwd()
-      try {
-        await ensureWorkspaceDirectory(workspaceQuery)
-      } catch {
-        res.status(400).json({ error: 'Session workspace is unavailable' })
-        return
-      }
 
       const resolvedModelId = requestedModelId ?? DEFAULT_CODING_AGENT_MODEL
       logSessions('Posting coding agent message (opencode prompt)', { sessionId, modelId: resolvedModelId, role })
@@ -807,11 +559,11 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
   router.put('/api/coding-agent/personas/:id', wrapAsync(updatePersonaHandler))
   router.delete('/api/coding-agent/personas/:id', wrapAsync(deletePersonaHandler))
   router.get('/api/coding-agent/sessions', wrapAsync(listCodingAgentSessionsHandler))
-  router.get('/api/coding-agent/sessions/:sessionId', wrapAsync(getCodingAgentSessionHandler))
+  router.get('/api/coding-agent/sessions/:runId', wrapAsync(getCodingAgentSessionHandler))
   router.get('/api/coding-agent/runs', wrapAsync(listCodingAgentRunsHandler))
   router.post('/api/coding-agent/sessions', wrapAsync(startCodingAgentSessionHandler))
-  router.post('/api/coding-agent/sessions/:sessionId/kill', wrapAsync(killCodingAgentSessionHandler))
-  router.post('/api/coding-agent/sessions/:sessionId/messages', wrapAsync(postCodingAgentMessageHandler))
+  router.post('/api/coding-agent/sessions/:runId/kill', wrapAsync(killCodingAgentSessionHandler))
+  router.post('/api/coding-agent/sessions/:runId/messages', wrapAsync(postCodingAgentMessageHandler))
 
   return router
 }

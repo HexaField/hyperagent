@@ -1,5 +1,7 @@
 // Provider concepts removed — model selection is handled in the UI module
 
+import { Part } from '@opencode-ai/sdk'
+
 export type CodingAgentSessionSummary = {
   id: string
   title: string | null
@@ -15,23 +17,13 @@ export type CodingAgentSessionSummary = {
   }
 }
 
-export type CodingAgentMessagePart = {
-  id: string
-  type: string
-  text?: string
-  start?: string | null
-  end?: string | null
-  [key: string]: unknown
-}
-
 export type CodingAgentMessage = {
   id: string
   role: string
   createdAt: string
   completedAt: string | null
   modelId: string | null
-  text: string
-  parts: CodingAgentMessagePart[]
+  parts: Part[]
 }
 
 export type CodingAgentSessionDetail = {

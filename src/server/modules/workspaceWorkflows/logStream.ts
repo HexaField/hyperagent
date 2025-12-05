@@ -99,7 +99,7 @@ export const createWorkflowLogStream = (): WorkflowLogStream => {
       model: typeof data.model === 'string' ? data.model : '',
       chunk: extractTextFromParts((data as any).parts),
       timestamp: payload.timestamp ?? new Date().toISOString(),
-      sessionId: data.sessionId ?? null
+      sessionId: data.runId ?? null
     }
     appendEntry(entry)
   }

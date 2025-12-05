@@ -4,13 +4,18 @@ import { extractResponseText, promptSession } from './opencode'
 
 const MAX_JSON_ATTEMPTS = 3
 
+export type AgentRunResponse<T = unknown> = {
+  runId: string
+  result: Promise<T>
+}
+
 export type AgentStreamEvent = {
   role: string
   round: number
   parts: Part[]
   model: string
   attempt: number
-  sessionId?: string
+  runId?: string
 }
 
 export type AgentStreamCallback = (event: AgentStreamEvent) => void
@@ -41,7 +46,7 @@ export async function invokeStructuredJsonCall<T>(options: {
         payload: {
           attempt,
           prompt,
-          rawResponse: raw
+          response: response.parts
         }
       },
       options.directory
@@ -56,7 +61,7 @@ export async function invokeStructuredJsonCall<T>(options: {
         parts: response.parts,
         model: options.model,
         attempt: 1,
-        sessionId: options.session.id
+        runId: options.session.id
       })
       return { raw, parsed }
     } catch (error) {

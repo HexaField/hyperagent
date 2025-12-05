@@ -9,7 +9,6 @@ import { fetchJson } from '../shared/api/httpClient'
 
 export type {
   CodingAgentMessage,
-  CodingAgentMessagePart,
   CodingAgentSessionDetail,
   CodingAgentSessionSummary,
   RunMeta

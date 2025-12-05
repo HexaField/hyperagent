@@ -6,10 +6,15 @@
 */
 import { Session } from '@opencode-ai/sdk'
 import { createRunMeta, hasRunMeta, loadRunMeta, saveRunMeta } from '../provenance/provenance'
-import { AgentStreamCallback, coerceString, invokeStructuredJsonCall, parseJsonPayload } from './agent'
-export type { AgentStreamCallback } from './agent'
-export type { AgentStreamEvent } from './agent'
+import {
+  AgentRunResponse,
+  AgentStreamCallback,
+  coerceString,
+  invokeStructuredJsonCall,
+  parseJsonPayload
+} from './agent'
 import { createSession, getSession } from './opencode'
+export type { AgentStreamCallback, AgentStreamEvent } from './agent'
 
 const WORKER_SYSTEM_PROMPT = `You are a meticulous senior engineer agent focused on producing concrete, technically sound deliverables. Follow verifier instructions with discipline.
 
@@ -98,7 +103,7 @@ export type AgentLoopResult = {
   rounds: ConversationRound[]
 }
 
-export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
+export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<AgentRunResponse<AgentLoopResult>> {
   const model = options.model ?? 'llama3.2'
   const maxRounds = options.maxRounds ?? 10
   const directory = options.sessionDir
@@ -125,7 +130,7 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
   const verifierSessionID = metaData.agents.find((a) => a.role === 'verifier')?.sessionId
 
   if (!workerSessionID || !verifierSessionID) {
-    throw new Error('Missing worker or verifier session ID in run meta')
+    throw new Error('Failed to find worker or verifier session IDs in run meta')
   }
 
   const workerSession = await getSession(directory, workerSessionID)
@@ -134,109 +139,116 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
   if (!workerSession) throw new Error(`Worker session not found: ${workerSessionID}`)
   if (!verifierSession) throw new Error(`Verifier session not found: ${verifierSessionID}`)
 
-  const rounds: ConversationRound[] = []
+  const result = new Promise<AgentLoopResult>(async (resolve) => {
+    const rounds: ConversationRound[] = []
 
-  async function invokeVerifier(args: {
-    model: string
-    session: Session
-    userInstructions: string
-    workerTurn: WorkerTurn | null
-    round: number
-    onStream?: AgentStreamCallback
-    runId: string
-    directory: string
-  }): Promise<VerifierTurn> {
-    const query = buildVerifierPrompt(args.userInstructions, args.workerTurn, args.round)
-    const { raw, parsed } = await invokeStructuredJsonCall({
-      role: 'verifier',
-      systemPrompt: VERIFIER_SYSTEM_PROMPT,
-      basePrompt: query,
-      model: args.model,
-      session: args.session,
-      runId: args.runId,
-      directory: args.directory,
-      onStream: args.onStream,
-      parseResponse: (response) => parseVerifierResponse('verifier', response)
-    })
-    return { round: args.round, raw, parsed }
-  }
-
-  const bootstrap = await invokeVerifier({
-    model,
-    session: verifierSession,
-    userInstructions: options.userInstructions,
-    workerTurn: null,
-    round: 0,
-    onStream: streamCallback,
-    runId,
-    directory
-  })
-
-  let pendingInstructions = bootstrap.parsed.instructions || options.userInstructions
-  let latestCritique = bootstrap.parsed.critique
-
-  for (let round = 1; round <= maxRounds; round++) {
-    const workerTurn = await invokeWorker({
-      model,
-      session: workerSession,
-      userInstructions: options.userInstructions,
-      verifierInstructions: pendingInstructions,
-      verifierCritique: latestCritique,
-      round,
-      onStream: streamCallback,
-      runId,
-      directory
-    })
-
-    if (workerTurn.parsed.status === 'blocked') {
-      return {
-        outcome: 'failed',
-        reason: workerTurn.parsed.requests || 'worker reported blocked status',
-        bootstrap,
-        rounds: [...rounds, { worker: workerTurn, verifier: minimalVerifierEcho(workerTurn, round) }]
-      }
+    async function invokeVerifier(args: {
+      model: string
+      session: Session
+      userInstructions: string
+      workerTurn: WorkerTurn | null
+      round: number
+      onStream?: AgentStreamCallback
+      runId: string
+      directory: string
+    }): Promise<VerifierTurn> {
+      const query = buildVerifierPrompt(args.userInstructions, args.workerTurn, args.round)
+      const { raw, parsed } = await invokeStructuredJsonCall({
+        role: 'verifier',
+        systemPrompt: VERIFIER_SYSTEM_PROMPT,
+        basePrompt: query,
+        model: args.model,
+        session: args.session,
+        runId: args.runId,
+        directory: args.directory,
+        onStream: args.onStream,
+        parseResponse: (response) => parseVerifierResponse('verifier', response)
+      })
+      return { round: args.round, raw, parsed }
     }
 
-    const verifierTurn = await invokeVerifier({
+    const bootstrap = await invokeVerifier({
       model,
       session: verifierSession,
       userInstructions: options.userInstructions,
-      workerTurn,
-      round,
+      workerTurn: null,
+      round: 0,
       onStream: streamCallback,
       runId,
       directory
     })
 
-    rounds.push({ worker: workerTurn, verifier: verifierTurn })
+    let pendingInstructions = bootstrap.parsed.instructions || options.userInstructions
+    let latestCritique = bootstrap.parsed.critique
 
-    if (verifierTurn.parsed.verdict === 'approve') {
-      return {
-        outcome: 'approved',
-        reason: verifierTurn.parsed.critique || 'Verifier approved the work',
-        bootstrap,
-        rounds
+    for (let round = 1; round <= maxRounds; round++) {
+      const workerTurn = await invokeWorker({
+        model,
+        session: workerSession,
+        userInstructions: options.userInstructions,
+        verifierInstructions: pendingInstructions,
+        verifierCritique: latestCritique,
+        round,
+        onStream: streamCallback,
+        runId,
+        directory
+      })
+
+      if (workerTurn.parsed.status === 'blocked') {
+        return {
+          outcome: 'failed',
+          reason: workerTurn.parsed.requests || 'worker reported blocked status',
+          bootstrap,
+          rounds: [...rounds, { worker: workerTurn, verifier: minimalVerifierEcho(workerTurn, round) }]
+        }
       }
+
+      const verifierTurn = await invokeVerifier({
+        model,
+        session: verifierSession,
+        userInstructions: options.userInstructions,
+        workerTurn,
+        round,
+        onStream: streamCallback,
+        runId,
+        directory
+      })
+
+      rounds.push({ worker: workerTurn, verifier: verifierTurn })
+
+      if (verifierTurn.parsed.verdict === 'approve') {
+        resolve({
+          outcome: 'approved',
+          reason: verifierTurn.parsed.critique || 'Verifier approved the work',
+          bootstrap,
+          rounds
+        })
+      }
+
+      if (verifierTurn.parsed.verdict === 'fail') {
+        resolve({
+          outcome: 'failed',
+          reason: verifierTurn.parsed.critique || 'Verifier rejected the work',
+          bootstrap,
+          rounds
+        })
+      }
+
+      pendingInstructions = verifierTurn.parsed.instructions || pendingInstructions
+      latestCritique = verifierTurn.parsed.critique
     }
 
-    if (verifierTurn.parsed.verdict === 'fail') {
-      return {
-        outcome: 'failed',
-        reason: verifierTurn.parsed.critique || 'Verifier rejected the work',
-        bootstrap,
-        rounds
-      }
-    }
-
-    pendingInstructions = verifierTurn.parsed.instructions || pendingInstructions
-    latestCritique = verifierTurn.parsed.critique
-  }
+    resolve({
+      outcome: 'max-rounds',
+      reason: `Verifier never approved within ${maxRounds} rounds`,
+      bootstrap,
+      rounds
+    })
+  })
 
   return {
-    outcome: 'max-rounds',
-    reason: `Verifier never approved within ${maxRounds} rounds`,
-    bootstrap,
-    rounds
+    runId,
+    result
   }
 }
 

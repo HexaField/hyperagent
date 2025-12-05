@@ -1,6 +1,6 @@
 import { Session } from '@opencode-ai/sdk'
 import { createRunMeta, hasRunMeta, loadRunMeta, saveRunMeta } from '../provenance/provenance'
-import { AgentStreamCallback, invokeStructuredJsonCall } from './agent'
+import { AgentRunResponse, AgentStreamCallback, invokeStructuredJsonCall } from './agent'
 import { createSession, getSession } from './opencode'
 
 export type AgentLoopOptions = {
@@ -11,7 +11,7 @@ export type AgentLoopOptions = {
   onStream?: AgentStreamCallback
 }
 
-export async function runSingleAgentLoop(options: AgentLoopOptions): Promise<string> {
+export async function runSingleAgentLoop(options: AgentLoopOptions): Promise<AgentRunResponse<string>> {
   const model = options.model ?? 'llama3.2'
   const directory = options.sessionDir
   if (!directory) throw new Error('sessionDir is required for runSingleAgentLoop')
@@ -27,23 +27,34 @@ export async function runSingleAgentLoop(options: AgentLoopOptions): Promise<str
 
   const metaData = loadRunMeta(runId, directory)
   const agentSessionID = metaData.agents.find((a) => a.role === 'agent')?.sessionId
-  if (!agentSessionID) throw new Error('Missing agent session ID in run meta')
+  if (!agentSessionID) {
+    throw new Error('Missing agent session ID in run meta')
+  }
 
   const agentSession = await getSession(directory, agentSessionID)
-  if (!agentSession) throw new Error(`Agent session not found: ${agentSessionID}`)
+  if (!agentSession) {
+    throw new Error(`Agent session not found: ${agentSessionID}`)
+  }
 
-  const { raw } = await invokeStructuredJsonCall<string>({
-    role: 'agent',
-    systemPrompt: '',
-    basePrompt: options.userInstructions,
-    model,
-    session: agentSession as Session,
-    runId,
-    directory,
-    onStream: options.onStream
+  const result = new Promise<string>(async (resolve) => {
+    const { raw } = await invokeStructuredJsonCall<string>({
+      role: 'agent',
+      systemPrompt: '',
+      basePrompt: options.userInstructions,
+      model,
+      session: agentSession as Session,
+      runId,
+      directory,
+      onStream: options.onStream
+    })
+
+    resolve(raw)
   })
 
-  return raw
+  return {
+    runId,
+    result
+  }
 }
 
 export default runSingleAgentLoop

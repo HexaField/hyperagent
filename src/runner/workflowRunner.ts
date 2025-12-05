@@ -151,7 +151,7 @@ const createAgentStreamLogger = (workflowId: string, stepId: string, runnerInsta
               provider: null,
               model: event.model,
               attempt: event.attempt,
-              sessionId: event.sessionId ?? null
+              sessionId: event.runId ?? null
             }
           }
       console.log(`${AGENT_STREAM_PREFIX} ${JSON.stringify(payload)}`)
