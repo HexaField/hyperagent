@@ -113,16 +113,6 @@ export async function deleteCodingAgentPersona(id: string): Promise<boolean> {
   }
 }
 
-export async function killCodingAgentSession(sessionId: string): Promise<boolean> {
-  const payload = await fetchJson<{ success: boolean }>(
-    `/api/coding-agent/sessions/${encodeURIComponent(sessionId)}/kill`,
-    {
-      method: 'POST'
-    }
-  )
-  return Boolean(payload.success)
-}
-
 export async function postCodingAgentMessage(
   sessionId: string,
   input: { role?: string; text: string; modelId?: string }

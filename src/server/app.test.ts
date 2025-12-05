@@ -1441,9 +1441,6 @@ describe('opencode session endpoints', () => {
       const runsPayload = (await runsRes.json()) as { runs: unknown[] }
       expect(Array.isArray(runsPayload.runs)).toBe(true)
 
-      const killRes = await fetch(`${harness.baseUrl}/api/coding-agent/sessions/${runId}/kill`, { method: 'POST' })
-      // Kill is not supported by the server build without a runner
-      expect(killRes.status).toBe(501)
     } finally {
       await harness.close()
       await fs.rm(workspaceRoot, { recursive: true, force: true })

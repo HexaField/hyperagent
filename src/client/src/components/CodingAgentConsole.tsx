@@ -8,7 +8,6 @@ import {
   fetchCodingAgentPersonas,
   fetchCodingAgentSessions,
   getCodingAgentPersona,
-  killCodingAgentSession,
   postCodingAgentMessage,
   startCodingAgentRun,
   updateCodingAgentPersona,
@@ -269,7 +268,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [draftPersonaId, setDraftPersonaId] = createSignal<string | null>(null)
   const [draftPersonaDetail, setDraftPersonaDetail] = createSignal<PersonaDetail | null>(null)
   const [newSessionPersonaId, setNewSessionPersonaId] = createSignal<string | null>(null)
-  const [killingSessionId, setKillingSessionId] = createSignal<string | null>(null)
   let drawerHideTimeout: number | null = null
   const scrollController = createConversationScrollController()
   const [selectedSessionPersonaDetail, setSelectedSessionPersonaDetail] = createSignal<PersonaDetail | null>(null)
@@ -420,23 +418,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       setError(message)
     } finally {
       setReplying(false)
-    }
-  }
-
-  const killSession = async (targetId?: string | null) => {
-    const sessionId = targetId ?? selectedSessionId()
-    if (!sessionId) return
-    setKillingSessionId(sessionId)
-    setError(null)
-    try {
-      await killCodingAgentSession(sessionId)
-      await refetchSessions()
-      if (sessionSettingsId() === sessionId) closeSessionSettings()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to end session'
-      setError(message)
-    } finally {
-      setKillingSessionId((current) => (current === sessionId ? null : current))
     }
   }
 
@@ -770,18 +751,12 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                       type="button"
                       class="w-full flex-1 rounded-xl border border-[var(--border)] px-3 py-2 text-left transition hover:border-blue-400"
                       classList={{
-                        'border-blue-500 bg-blue-50 dark:bg-blue-950/30': selectedSessionId() === session.id,
-                        'border-emerald-500 ring-2 ring-emerald-200 dark:ring-emerald-900': session.state === 'running'
+                        'border-blue-500 bg-blue-50 dark:bg-blue-950/30': selectedSessionId() === session.id
                       }}
                       onClick={() => handleSessionSelect(session.id)}
                     >
                       <div class="min-w-0">
                         <p class="truncate font-semibold text-[var(--text)]">{session.title || session.id}</p>
-                        <span
-                          class={`rounded-full px-2 py-0.5 text-xs font-semibold ${sessionStateBadgeClass(session.state)}`}
-                        >
-                          {sessionStateLabel(session.state)}
-                        </span>
                       </div>
                       <p class="mt-1 text-xs text-[var(--text-muted)]">
                         Updated {new Date(session.updatedAt).toLocaleString()}
@@ -1175,14 +1150,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                 onClick={handleSessionSettingsSave}
               >
                 Save
-              </button>
-              <button
-                type="button"
-                class="ml-auto rounded-xl border border-red-500 px-4 py-2 text-sm font-semibold text-red-500"
-                onClick={() => killSession(target.id)}
-                disabled={killingSessionId() === target.id}
-              >
-                {killingSessionId() === target.id ? 'Stopping…' : 'End session'}
               </button>
             </div>
           </div>

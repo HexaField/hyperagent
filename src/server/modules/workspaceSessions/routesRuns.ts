@@ -137,20 +137,6 @@ const createStartSessionHandler = ({ logSessions, logSessionsError }: ReturnType
 
 const resolveRunId = (params: Record<string, string | undefined>) => params.runId ?? params.sessionId ?? null
 
-const createKillSessionHandler = (): RequestHandler => async (req, res) => {
-  const runId = resolveRunId(req.params)
-  if (!runId) {
-    res.status(400).json({ error: 'runId is required' })
-    return
-  }
-  try {
-    res.status(501).json({ error: 'Kill run not supported in this server build' })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to terminate coding agent session'
-    res.status(500).json({ error: message })
-  }
-}
-
 const createPostMessageHandler = ({ logSessions, logSessionsError }: ReturnType<typeof createLogger>): RequestHandler =>
   async (req, res) => {
     const runId = resolveRunId(req.params)
@@ -252,7 +238,6 @@ export const createRunsRouter = (deps: WorkspaceSessionsDeps) => {
   router.get('/api/coding-agent/sessions', wrapAsync(createListSessionsHandler()))
   router.get('/api/coding-agent/runs', wrapAsync(createListRunsHandler()))
   router.post('/api/coding-agent/sessions', wrapAsync(createStartSessionHandler(logger)))
-  router.post('/api/coding-agent/sessions/:runId/kill', wrapAsync(createKillSessionHandler()))
   router.post('/api/coding-agent/sessions/:runId/messages', wrapAsync(createPostMessageHandler(logger)))
 
   return router

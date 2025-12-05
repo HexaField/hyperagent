@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { fetchJson } from '../shared/api/httpClient'
-import { fetchCodingAgentSessions, killCodingAgentSession, postCodingAgentMessage, startCodingAgentRun } from './codingAgent'
+import { fetchCodingAgentSessions, postCodingAgentMessage, startCodingAgentRun } from './codingAgent'
 
 vi.mock('../shared/api/httpClient', () => ({
   fetchJson: vi.fn()
@@ -19,7 +19,7 @@ describe('coding agent client helpers', () => {
     expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions?workspacePath=%2Frepo')
   })
 
-  it('starts and kills sessions', async () => {
+  it('starts sessions', async () => {
     fetchJsonMock.mockResolvedValue({ run: { id: 'ses_test', agents: [], log: [], createdAt: 'now', updatedAt: 'now' } })
     await startCodingAgentRun({ workspacePath: '/repo', prompt: 'Hello' })
     expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions', {
@@ -37,9 +37,6 @@ describe('coding agent client helpers', () => {
       body: JSON.stringify({ workspacePath: '/repo', prompt: 'Hello', personaId: 'senior-engineer' })
     })
 
-    fetchJsonMock.mockResolvedValue({ success: true })
-    await killCodingAgentSession('ses_test')
-    expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions/ses_test/kill', { method: 'POST' })
   })
 
   it('manages personas via the API', async () => {
