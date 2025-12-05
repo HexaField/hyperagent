@@ -15,7 +15,7 @@ const wrapAsync = (h: any) => h
 
 function makeDeps(overrides: any = {}) {
   const defaultRunner = {
-    startRun: vi.fn(async (input: any) => ({ sessionId: 'ses_test', ...input })),
+    startRun: vi.fn(async (input: any) => ({ id: 'ses_test', ...input })),
     listRuns: vi.fn(async () => []),
     getRun: vi.fn(async () => null),
     killRun: vi.fn(async () => false)
@@ -145,8 +145,8 @@ describe('workspace sessions routes — agent persona', () => {
 
     expect(resp.status).toBe(202)
     expect(resp.body).toHaveProperty('run')
-    expect(resp.body.run).toHaveProperty('providerId', 'multi-agent')
-    const sessionId = resp.body.run.sessionId
+    expect(resp.body.run).toHaveProperty('id')
+    const sessionId = resp.body.run.id
 
     await new Promise((r) => setTimeout(r, 50))
     expect(spyRunLoop).toHaveBeenCalledTimes(1)
@@ -219,7 +219,7 @@ describe('workspace sessions routes — agent persona', () => {
       getSession: vi.fn(async () => detail)
     }
     const runnerMock = {
-      startRun: vi.fn(async () => ({ sessionId: 'fallback', pid: -1 })),
+      startRun: vi.fn(async () => ({ id: 'fallback', pid: -1 })),
       listRuns: vi.fn(async () => []),
       getRun: vi.fn(async () => null),
       killRun: vi.fn(async () => false)

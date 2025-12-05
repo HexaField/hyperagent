@@ -2,10 +2,13 @@ import type {
   CodingAgentProvider,
   CodingAgentProviderListResponse,
   CodingAgentRunListResponse,
-  CodingAgentRunRecord,
+  RunMeta,
   CodingAgentSessionDetail,
   CodingAgentSessionListResponse,
-  CodingAgentSessionSummary
+  CodingAgentSessionSummary,
+  CodingAgentMessage,
+  CodingAgentMessagePart,
+  CodingAgentProviderModel
 } from '../../../interfaces/core/codingAgent'
 import { fetchJson } from '../shared/api/httpClient'
 
@@ -13,10 +16,9 @@ export type {
   CodingAgentMessage,
   CodingAgentMessagePart,
   CodingAgentProvider,
-  CodingAgentProviderModel,
-  CodingAgentRunRecord,
   CodingAgentSessionDetail,
-  CodingAgentSessionSummary
+  CodingAgentSessionSummary,
+  RunMeta
 } from '../../../interfaces/core/codingAgent'
 
 export async function fetchCodingAgentProviders(): Promise<CodingAgentProvider[]> {
@@ -49,7 +51,7 @@ export async function startCodingAgentRun(input: {
   model?: string
   providerId?: string
   personaId?: string
-}): Promise<CodingAgentRunRecord> {
+}): Promise<RunMeta> {
   // Keep payload backward-compatible: include personaId when provided
   const body: Record<string, unknown> = {
     workspacePath: input.workspacePath,
@@ -60,7 +62,7 @@ export async function startCodingAgentRun(input: {
   if (input.providerId) body.providerId = input.providerId
   if (input.personaId) body.personaId = input.personaId
 
-  const payload = await fetchJson<{ run: CodingAgentRunRecord }>(`/api/coding-agent/sessions`, {
+  const payload = await fetchJson<{ run: RunMeta }>(`/api/coding-agent/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -155,7 +157,7 @@ export async function killCodingAgentSession(sessionId: string): Promise<boolean
   return Boolean(payload.success)
 }
 
-export async function fetchCodingAgentRuns(): Promise<CodingAgentRunRecord[]> {
+export async function fetchCodingAgentRuns(): Promise<RunMeta[]> {
   const payload = await fetchJson<CodingAgentRunListResponse>(`/api/coding-agent/runs`)
   return payload.runs
 }

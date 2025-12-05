@@ -55,20 +55,13 @@ export type CodingAgentSessionDetail = {
   messages: CodingAgentMessage[]
 }
 
-export type CodingAgentRunRecord = {
-  sessionId: string
-  pid: number
-  workspacePath: string
-  prompt: string
-  title: string | null
-  model: string | null
-  providerId: string | null
-  logFile: string
-  startedAt: string
+// Simplified run meta shape used by agent flows (mirrors provenance RunMeta)
+export type RunMeta = {
+  id: string
+  agents: Array<{ role: string; sessionId: string }>
+  log: Array<{ entryId: string; model?: string; role?: string; payload: any; createdAt: string }>
+  createdAt: string
   updatedAt: string
-  status: string
-  exitCode: number | null
-  signal: string | null
 }
 
 export type CodingAgentSessionListResponse = {
@@ -76,5 +69,5 @@ export type CodingAgentSessionListResponse = {
 }
 
 export type CodingAgentRunListResponse = {
-  runs: CodingAgentRunRecord[]
+  runs: RunMeta[]
 }

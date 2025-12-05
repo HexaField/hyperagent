@@ -2,7 +2,7 @@ import type {
   CodingAgentMessage,
   CodingAgentProvider,
   CodingAgentProviderModel,
-  CodingAgentRunRecord,
+  RunMeta,
   CodingAgentSessionDetail,
   CodingAgentSessionSummary
 } from '../core/codingAgent'
@@ -12,4 +12,4 @@ export type WorkspaceSessionsProviderModel = CodingAgentProviderModel
 export type WorkspaceSessionsSessionSummary = CodingAgentSessionSummary
 export type WorkspaceSessionsSessionDetail = CodingAgentSessionDetail
 export type WorkspaceSessionsMessage = CodingAgentMessage
-export type WorkspaceSessionsRunRecord = CodingAgentRunRecord
+export type WorkspaceSessionsRunRecord = RunMeta

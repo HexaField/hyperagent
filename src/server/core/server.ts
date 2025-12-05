@@ -28,7 +28,7 @@ import { createWorkflowPolicyFromEnv } from '../../../src/modules/workflowPolicy
 import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
-import { runVerifierWorkerLoop, type AgentStreamEvent } from '../../modules/agent/multi-agent'
+import { runVerifierWorkerLoop } from '../../modules/agent/multi-agent'
 import { runGitCommand } from '../../modules/git'
 import { createSseStream } from '../lib/sse'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
@@ -129,6 +129,9 @@ export type CreateServerOptions = {
   corsOrigin?: string
   webSockets?: WebSocketBindings
   narratorRelay?: NarratorRelay
+  // optional coding agent integrations (injected runner/storage)
+  codingAgentRunner?: any
+  codingAgentStorage?: any
 }
 
 export type ServerInstance = {
@@ -643,7 +646,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       }
     })
 
-    const streamHandler = (event: AgentStreamEvent) => {
+    const streamHandler = (event: any) => {
       if (closed) return
       emit({ type: 'chunk', payload: event })
     }
@@ -1081,7 +1084,9 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
 
   const workspaceSessionsRouter = createWorkspaceSessionsRouter({
     wrapAsync,
-    ensureWorkspaceDirectory
+    ensureWorkspaceDirectory,
+    codingAgentRunner: options.codingAgentRunner,
+    codingAgentStorage: options.codingAgentStorage
   })
 
   const workspaceNarratorRouter = createWorkspaceNarratorRouter({

@@ -15,10 +15,12 @@ import {
   updateCodingAgentPersona,
   type CodingAgentMessage,
   type CodingAgentProvider,
-  type CodingAgentRunRecord,
   type CodingAgentSessionDetail,
-  type CodingAgentSessionSummary
+  type CodingAgentSessionSummary,
+  type PersonaSummary,
+  type PersonaDetail
 } from '../lib/codingAgent'
+import type { RunMeta } from '../../../interfaces/core/codingAgent'
 import ConversationPane from './ConversationPane'
 import { createConversationScrollController } from './conversationScrollController'
 
@@ -59,7 +61,7 @@ type PersistedState = {
 type SessionState = 'running' | 'waiting' | 'completed' | 'failed' | 'terminated'
 
 type SessionRow = CodingAgentSessionSummary & {
-  run: CodingAgentRunRecord | null
+  run: RunMeta | null
   state: SessionState
 }
 
@@ -95,7 +97,7 @@ function providerConfigFor(providerId: string | null | undefined): CodingAgentPr
 function normalizeModelId(providerId: string | null | undefined, value: string | null | undefined): string {
   const config = providerConfigFor(providerId)
   if (!value) return config.defaultModelId
-  return config.models.some((option) => option.id === value) ? value : config.defaultModelId
+  return config.models.some((option: any) => option.id === value) ? value : config.defaultModelId
 }
 
 function providerLabel(providerId: string | null | undefined): string {
@@ -105,32 +107,22 @@ function providerLabel(providerId: string | null | undefined): string {
 function modelLabel(providerId: string | null | undefined, modelId: string | null | undefined): string {
   const config = providerConfigFor(providerId)
   const normalizedModel = normalizeModelId(config.id, modelId)
-  return config.models.find((option) => option.id === normalizedModel)?.label ?? normalizedModel
+  return config.models.find((option: any) => option.id === normalizedModel)?.label ?? normalizedModel
 }
 
 function readStoredState(workspaceKey: string): PersistedState {
   if (typeof window === 'undefined') return {}
   try {
     const raw = window.localStorage.getItem(storageKeyFor(workspaceKey))
-    if (raw) {
-      const parsed = JSON.parse(raw) as PersistedState | null
-      if (parsed && typeof parsed === 'object') {
-        return parsed
-      }
+    if (!raw) return {}
+    try {
+      return (JSON.parse(raw) as PersistedState) ?? {}
+    } catch {
+      return {}
     }
-  } catch {}
-  return {}
-}
-
-function readPersistedState(workspaceKey: string): PersistedState {
-  const state: PersistedState = { ...readStoredState(workspaceKey) }
-  if (typeof window === 'undefined') return state
-  try {
-    const params = new URLSearchParams(window.location.search)
-    const parsed = parseSessionSearchParam(params.get(SEARCH_PARAM_SESSION))
-    if (parsed && parsed.workspaceKey === workspaceKey) state.selectedSessionId = parsed.sessionId
-  } catch {}
-  return state
+  } catch {
+    return {}
+  }
 }
 
 function persistState(workspaceKey: string, patch: Partial<PersistedState>) {
@@ -326,16 +318,16 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [sessionOverrides, setSessionOverrides] = createSignal<Record<string, SessionOverride>>({})
   const [defaultPersonaId, setDefaultPersonaId] = createSignal<string | null>(null)
   const [personasModalOpen, setPersonasModalOpen] = createSignal(false)
-  const [personasList, setPersonasList] = createSignal<Array<any>>([])
+  const [personasList, setPersonasList] = createSignal<PersonaSummary[]>([])
   const [editingPersonaId, setEditingPersonaId] = createSignal<string | null>(null)
   const [editingPersonaMarkdown, setEditingPersonaMarkdown] = createSignal<string>('')
   const [draftPersonaId, setDraftPersonaId] = createSignal<string | null>(null)
-  const [draftPersonaDetail, setDraftPersonaDetail] = createSignal<any | null>(null)
+  const [draftPersonaDetail, setDraftPersonaDetail] = createSignal<PersonaDetail | null>(null)
   const [newSessionPersonaId, setNewSessionPersonaId] = createSignal<string | null>(null)
   const [killingSessionId, setKillingSessionId] = createSignal<string | null>(null)
   let drawerHideTimeout: number | null = null
   const scrollController = createConversationScrollController()
-  const [selectedSessionPersonaDetail, setSelectedSessionPersonaDetail] = createSignal<any | null>(null)
+  const [selectedSessionPersonaDetail, setSelectedSessionPersonaDetail] = createSignal<PersonaDetail | null>(null)
 
   const closeSessionSettings = () => setSessionSettingsId(null)
 
@@ -451,9 +443,9 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         })
         setSessionOverrides((prev) => ({
           ...prev,
-          [run.sessionId]: {
+          [run.id]: {
             providerId,
-            modelId: normalizeModelId(providerId, run.model ?? modelId),
+            modelId: normalizeModelId(providerId, modelId),
             ...(personaToUse ? { personaId: personaToUse } : {})
           }
         }))
@@ -462,11 +454,11 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         setReplyText('')
         const ta = replyEl()
         if (ta) ta.style.height = 'auto'
-        setPendingSessionId(run.sessionId)
-        setSelectedSessionId(run.sessionId)
+        setPendingSessionId(run.id)
+        setSelectedSessionId(run.id)
         await Promise.all([refetchSessions(), refetchRuns()])
         scrollController.requestScrollIfAuto()
-        props.onRunStarted?.(run.sessionId)
+        props.onRunStarted?.(run.id)
         if (isMobile()) closeSessionDrawer()
         focusReplyInput()
         return
@@ -510,7 +502,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     const key = workspaceKey()
     if (!key || key === lastHydratedWorkspace) return
     lastHydratedWorkspace = key
-    const state = readPersistedState(key)
+    const state = readStoredState(key)
     if (state.selectedSessionId) {
       setSelectedSessionId(state.selectedSessionId)
       setPendingSessionId(null)
@@ -728,7 +720,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
 
   const sessionRows = createMemo<SessionRow[]>(() => {
     const currentSessions = sessions() ?? []
-    const runIndex = new Map((runs() ?? []).map((run) => [run.sessionId, run]))
+    const runIndex = new Map((runs() ?? []).map((run) => [run.id, run]))
     return currentSessions.map((session) => {
       const run = runIndex.get(session.id) ?? null
       return {
@@ -772,7 +764,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     const override = overrides?.[sessionId]
     if (override?.modelId) return normalizeModelId(providerId, override.modelId)
     const session = sessionRows().find((row) => row.id === sessionId)
-    return normalizeModelId(providerId, session?.run?.model)
+    return normalizeModelId(providerId, session?.modelId)
   }
 
   const resolveSessionProviderLabel = (sessionId: string | null | undefined): string => {
@@ -972,7 +964,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                 <Show when={selectedSessionPersonaDetail()} keyed>
                   {(pd) => (
                     <div class="ml-3 text-xs text-[var(--text-muted)]">
-                      Persona: {pd.label ?? pd.id} {pd.frontmatter?.model ? `· ${String(pd.frontmatter.model)}` : ''}
+                      Persona: {String(pd.frontmatter?.title ?? pd.id)} {pd.frontmatter?.model ? `· ${String(pd.frontmatter.model)}` : ''}
                     </div>
                   )}
                 </Show>
@@ -1515,21 +1507,9 @@ function messageSignature(message: CodingAgentMessage): string {
   }
 }
 
-function deriveSessionState(run: CodingAgentRunRecord | null | undefined): SessionState {
+function deriveSessionState(run: RunMeta | null | undefined): SessionState {
   if (!run) return 'waiting'
-  switch (run.status) {
-    case 'starting':
-    case 'running':
-      return 'running'
-    case 'failed':
-      return 'failed'
-    case 'terminated':
-      return 'terminated'
-    case 'exited':
-      return 'completed'
-    default:
-      return 'waiting'
-  }
+  return 'running'
 }
 
 function sessionStateLabel(state: SessionState): string {
