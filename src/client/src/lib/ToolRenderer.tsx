@@ -1,6 +1,7 @@
 import type { JSX } from 'solid-js'
 import { createSignal } from 'solid-js'
 import DiffViewer from '../components/DiffViewer'
+import type { Part } from './messageParts'
 import { extractDiffText } from './messageParts'
 
 function isJSON(s: string) {
@@ -20,7 +21,7 @@ function renderJson(s: string) {
   }
 }
 
-export default function ToolRenderer(props: { part: any }): JSX.Element {
+export default function ToolRenderer(props: { part: Part }): JSX.Element {
   const part = props.part
   const toolName: string = (part.tool ?? part.toolName ?? part.name ?? '').toString()
   const text: string | null = typeof part.text === 'string' ? part.text : null

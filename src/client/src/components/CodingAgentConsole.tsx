@@ -12,7 +12,7 @@ import {
   postCodingAgentMessage,
   startCodingAgentRun,
   updateCodingAgentPersona,
-  type CodingAgentMessage,
+  type LogEntry,
   type PersonaDetail,
   type PersonaSummary
 } from '../lib/codingAgent'
@@ -605,7 +605,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     return sessionsById().get(currentId) ?? null
   })
   const selectedRunSessionIds = createMemo(() => collectRunSessionIds(selectedRun()))
-  const messages = createMemo<CodingAgentMessage[]>((prev) => {
+  const messages = createMemo<LogEntry[]>((prev) => {
     if (draftingSession()) return []
     const run = selectedRun()
     if (!run) return []
@@ -1420,13 +1420,14 @@ const SESSION_STATE_META: Record<SessionState, { label: string; badgeClass: stri
   }
 }
 
-function reconcileMessages(prev: CodingAgentMessage[], incoming: CodingAgentMessage[]): CodingAgentMessage[] {
+function reconcileMessages(prev: LogEntry[], incoming: LogEntry[]): LogEntry[] {
   if (!incoming || incoming.length === 0) return []
   if (!prev || prev.length === 0) return incoming
-  const prevEntries = new Map(prev.map((message) => [message.id, { message, signature: messageSignature(message) }]))
+  const prevEntries = new Map(prev.map((message) => [logEntryKey(message), { message, signature: messageSignature(message) }]))
   let changed = prev.length !== incoming.length
   const next = incoming.map((message) => {
-    const prevEntry = prevEntries.get(message.id)
+    const key = logEntryKey(message)
+    const prevEntry = prevEntries.get(key)
     if (!prevEntry) {
       changed = true
       return message
@@ -1439,60 +1440,31 @@ function reconcileMessages(prev: CodingAgentMessage[], incoming: CodingAgentMess
   return changed ? next : prev
 }
 
-function messageSignature(message: CodingAgentMessage): string {
+const logEntryKey = (message: LogEntry): string => {
+  if (message.entryId) return message.entryId
+  if (message.createdAt) return message.createdAt
+  return messageSignature(message)
+}
+
+function messageSignature(message: LogEntry): string {
   try {
     return JSON.stringify({
-      text: message.text,
-      completedAt: message.completedAt,
-      modelId: message.modelId,
-      parts: message.parts,
-      role: message.role
+      payload: message.payload,
+      model: message.model,
+      role: message.role,
+      createdAt: message.createdAt
     })
   } catch {
-    return `${message.id}-${message.completedAt ?? ''}-${message.text ?? ''}-${message.parts?.length ?? 0}`
+    return `${message.entryId ?? ''}-${message.createdAt ?? ''}`
   }
 }
 
-function buildMessagesFromRun(run: RunMeta): CodingAgentMessage[] {
+function buildMessagesFromRun(run: RunMeta): LogEntry[] {
   const log = Array.isArray(run.log) ? run.log : []
   return log.map((entry, index) => ({
-    id: entry.entryId || `${run.id}-${index}`,
-    role: entry.role ?? 'agent',
-    createdAt: entry.createdAt,
-    completedAt: entry.createdAt,
-    modelId: entry.model ?? null,
-    parts: payloadToMessageParts(entry.payload),
-    text: resolvePayloadText(entry.payload)
+    ...entry,
+    entryId: entry.entryId || `${run.id}-${index}`
   }))
-}
-
-function payloadToMessageParts(payload: any): CodingAgentMessage['parts'] {
-  if (Array.isArray(payload)) return payload as CodingAgentMessage['parts']
-  if (payload && typeof payload === 'object' && Array.isArray(payload.parts)) {
-    return payload.parts as CodingAgentMessage['parts']
-  }
-  let textValue: string
-  if (typeof payload === 'string') textValue = payload
-  else {
-    try {
-      textValue = JSON.stringify(payload, null, 2)
-    } catch {
-      textValue = String(payload ?? '')
-    }
-  }
-  return [
-    {
-      id: `payload-${Math.random().toString(36).slice(2, 8)}`,
-      type: 'text',
-      text: textValue
-    }
-  ] as CodingAgentMessage['parts']
-}
-
-function resolvePayloadText(payload: any): string | undefined {
-  if (typeof payload === 'string') return payload
-  if (payload && typeof payload === 'object' && typeof payload.text === 'string') return payload.text
-  return undefined
 }
 
 function latestModelId(run: RunMeta | null | undefined): string | null {

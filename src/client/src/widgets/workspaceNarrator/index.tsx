@@ -2,7 +2,7 @@ import { Show, createEffect, createMemo, createResource, createSignal, onCleanup
 import type { WorkspaceNarratorEvent } from '../../../../interfaces/widgets/workspaceNarrator'
 import ConversationPane from '../../components/ConversationPane'
 import { createConversationScrollController } from '../../components/conversationScrollController'
-import type { CodingAgentMessage, CodingAgentMessagePart } from '../../lib/codingAgent'
+import type { LogEntry } from '../../lib/codingAgent'
 import { fetchNarratorFeed, fetchNarratorRawLog, postNarratorMessage } from '../../lib/narratorFeed'
 
 const POLL_INTERVAL_MS = 5000
@@ -20,6 +20,12 @@ const SEVERITY_ICONS: Record<WorkspaceNarratorEvent['severity'], string> = {
   info: 'ℹ️',
   warning: '⚠️',
   error: '❗'
+}
+
+type NarratorMessagePart = {
+  id: string
+  type: string
+  text: string
 }
 
 export type WorkspaceNarratorWidgetProps = {
@@ -80,17 +86,18 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
     onCleanup(() => clearTimeout(timer))
   })
 
-  const timelineMessages = createMemo<CodingAgentMessage[]>(() => {
+  const timelineMessages = createMemo<LogEntry[]>(() => {
     const events = (feed()?.events ?? []).filter((event) => event.source === 'narrator' || event.source === 'user')
     const ordered = [...events].reverse()
     return ordered.map((event) => ({
-      id: event.id,
+      entryId: event.id ?? `narrator-${event.timestamp}`,
       role: event.source === 'user' ? 'You' : 'Narrator',
       createdAt: event.timestamp,
-      completedAt: event.timestamp,
-      modelId: null,
-      text: formatEventBody(event),
-      parts: buildMessageParts(event)
+      model: undefined,
+      payload: {
+        text: formatEventBody(event),
+        parts: buildMessageParts(event)
+      }
     }))
   })
 
@@ -113,7 +120,7 @@ export function WorkspaceNarratorWidget(props: WorkspaceNarratorWidgetProps) {
   createEffect(() => {
     const messages = timelineMessages()
     const last = messages.length > 0 ? messages[messages.length - 1] : null
-    const key = last ? (last.id ?? last.createdAt ?? messages.length) : null
+    const key = last ? (last.entryId ?? last.createdAt ?? messages.length) : null
     scrollController.notifyLatestKey(key)
   })
 
@@ -332,8 +339,8 @@ function formatEventBody(event: WorkspaceNarratorEvent): string {
   return `${icon} ${typeLabel}: ${event.headline}${detail}`
 }
 
-function buildMessageParts(event: WorkspaceNarratorEvent): CodingAgentMessagePart[] {
-  const parts: CodingAgentMessagePart[] = [
+function buildMessageParts(event: WorkspaceNarratorEvent): NarratorMessagePart[] {
+  const parts: NarratorMessagePart[] = [
     {
       id: `${event.id}-headline`,
       type: 'text',

@@ -1,21 +1,7 @@
-import type { RunMeta } from '../../../modules/provenance/provenance'
+import type { LogEntry, RunMeta } from '../../../modules/provenance/provenance'
 import { fetchJson } from '../shared/api/httpClient'
 
-export type CodingAgentMessagePart = {
-  id: string
-  type: string
-  text?: string
-  [key: string]: unknown
-}
-export type CodingAgentMessage = {
-  id: string
-  role: string
-  createdAt: string
-  completedAt: string | null
-  modelId: string | null
-  parts: CodingAgentMessagePart[]
-  text?: string
-}
+export type { LogEntry, RunMeta }
 
 
 export async function fetchCodingAgentSessions(params?: {

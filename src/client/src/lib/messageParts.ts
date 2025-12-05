@@ -1,9 +1,9 @@
 export type Part = {
-  id: string
-  type: string
+  id?: string | number | null
+  type?: string | null
   text?: string | null
-  start?: string | null
-  end?: string | null
+  start?: string | number | null
+  end?: string | number | null
   [key: string]: any
 }
 
@@ -30,7 +30,7 @@ export function extractToolCalls(parts: Part[] | undefined): ToolCall[] {
         if (!isNaN(s) && !isNaN(e)) duration = Math.max(0, e - s)
       }
       calls.push({
-        id: p.id,
+        id: typeof p.id === 'string' && p.id.length ? p.id : `tool-${calls.length + 1}`,
         text: (p.text ?? '').toString(),
         start,
         end,

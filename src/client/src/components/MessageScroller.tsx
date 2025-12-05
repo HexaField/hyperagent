@@ -1,6 +1,7 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js'
-import type { CodingAgentMessage, CodingAgentMessagePart } from '../lib/codingAgent'
+import type { LogEntry } from '../lib/codingAgent'
+import type { Part } from '../lib/messageParts'
 import { extractDiffText, extractToolCalls } from '../lib/messageParts'
 import ToolRenderer from '../lib/ToolRenderer'
 import DiffViewer from './DiffViewer'
@@ -23,12 +24,25 @@ const safeParseJson = (raw: string): any | null => {
 }
 
 const extractNestedText = (payload: any): string | null => {
-  if (!payload || typeof payload !== 'object') return null
-  const candidates = [payload.text, payload.message, payload.output, payload.summary, payload.details, payload.value]
+  if (payload === null || payload === undefined) return null
+  if (typeof payload === 'string') {
+    const trimmed = payload.trim()
+    return trimmed.length ? trimmed : null
+  }
+  if (typeof payload !== 'object') return null
+  const candidates = [
+    payload.text,
+    payload.message,
+    payload.output,
+    payload.summary,
+    payload.details,
+    payload.value,
+    payload.raw
+  ]
   for (const candidate of candidates) {
     if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
   }
-  const nestedSources = [payload.part, payload.payload, payload.data]
+  const nestedSources = [payload.part, payload.payload, payload.data, payload.response]
   for (const source of nestedSources) {
     const nested = extractNestedText(source)
     if (nested) return nested
@@ -79,8 +93,71 @@ type SectionConfig = {
 }
 
 const SECTION_CONFIGS: Record<string, SectionConfig> = {
-  worker: { labels: ['Plan', 'Work', 'Requests'], defaultOpen: 'Requests' },
-  verifier: { labels: ['Verdict', 'Critique', 'Instructions'], defaultOpen: 'Verdict' }
+  worker: { labels: ['plan', 'work', 'requests'], defaultOpen: 'requests' },
+  verifier: { labels: ['verdict', 'critique', 'instructions'], defaultOpen: 'verdict' }
+}
+
+const SECTION_LABEL_LOOKUP = new Set(
+  Object.values(SECTION_CONFIGS).flatMap((config) => config.labels.map((label) => label.toLowerCase()))
+)
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+const MAX_PART_EXTRACTION_DEPTH = 4
+
+const isLikelyPart = (value: unknown): value is Part => {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Record<string, unknown>
+  return (
+    typeof candidate.type === 'string' ||
+    typeof candidate.tool === 'string' ||
+    typeof candidate.toolName === 'string' ||
+    typeof candidate.text === 'string'
+  )
+}
+
+const extractPartsFromPayload = (payload: unknown, depth = 0): Part[] | null => {
+  if (payload === null || payload === undefined || depth > MAX_PART_EXTRACTION_DEPTH) return null
+  if (Array.isArray(payload)) return payload as Part[]
+  if (isLikelyPart(payload)) return [payload]
+  if (isPlainObject(payload)) {
+    for (const value of Object.values(payload)) {
+      const resolved = extractPartsFromPayload(value, depth + 1)
+      if (resolved && resolved.length) return resolved
+    }
+  }
+  if (typeof payload === 'string') {
+    const trimmed = payload.trim()
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      const parsed = safeParseJson(trimmed)
+      if (parsed) return extractPartsFromPayload(parsed, depth + 1)
+    }
+  }
+  return null
+}
+
+const resolveMessageText = (payload: unknown): string | null => {
+  if (payload === null || payload === undefined) return null
+  if (typeof payload === 'string') {
+    const trimmed = payload.trim()
+    if (!trimmed) return null
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      const parsed = safeParseJson(trimmed)
+      if (parsed) {
+        const extracted = extractNestedText(parsed)
+        if (extracted) return extracted
+      }
+    }
+    return trimmed
+  }
+  const extracted = extractNestedText(payload)
+  if (extracted) return extracted
+  if (isPlainObject(payload) && typeof payload.raw === 'string') {
+    return resolveMessageText(payload.raw)
+  }
+  return null
 }
 
 const CollapsibleSection = (props: { title: string; defaultOpen?: boolean; children?: JSX.Element }) => {
@@ -149,8 +226,76 @@ function extractLabeledSections(text: string, labels: string[]): SectionExtracti
   return { prefix: prefix || null, sections }
 }
 
-const renderStructuredSections = (body: string | null, role?: string | null): JSX.Element | null => {
+const formatSectionValue = (value: unknown): string | null => {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed.length ? trimmed : null
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (Array.isArray(value)) {
+    if (value.every((item) => typeof item === 'string')) return value.filter(Boolean).join('\n') || null
+    try {
+      const serialized = JSON.stringify(value, null, 2)
+      return serialized ?? null
+    } catch {
+      return null
+    }
+  }
+  if (typeof value === 'object') {
+    try {
+      const serialized = JSON.stringify(value, null, 2)
+      return serialized ?? null
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function extractSectionsFromObject(obj: Record<string, unknown>, labels: string[]): SectionExtractionResult {
+  const normalized = new Map(labels.map((label) => [label.toLowerCase(), label]))
+  const lowerToSourceKey = new Map(Object.keys(obj).map((key) => [key.toLowerCase(), key]))
+  const sections: Record<string, string | null> = {}
+  for (const label of labels) {
+    const sourceKey = lowerToSourceKey.get(label.toLowerCase())
+    const rawValue = sourceKey ? obj[sourceKey] : undefined
+    sections[label] = formatSectionValue(rawValue)
+  }
+
+  const prefixLines: string[] = []
+  for (const [key, value] of Object.entries(obj)) {
+    if (normalized.has(key.toLowerCase())) continue
+    const formatted = formatSectionValue(value)
+    if (formatted) prefixLines.push(`${key}: ${formatted}`)
+  }
+
+  const prefix = prefixLines.join('\n').trim()
+  return { prefix: prefix || null, sections }
+}
+
+const coerceSectionPayload = (value: string | Record<string, unknown>): string | Record<string, unknown> | null => {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      const parsed = safeParseJson(trimmed)
+      if (parsed && isPlainObject(parsed)) return parsed
+    }
+    return trimmed
+  }
+  return isPlainObject(value) ? value : null
+}
+
+const renderStructuredSections = (
+  body: string | Record<string, unknown> | null,
+  role?: string | null
+): JSX.Element | null => {
   if (!body) return null
+  const payload = coerceSectionPayload(body)
+  if (!payload) return null
   const normalizedRole = role?.toLowerCase() ?? null
   const candidateKeys: string[] = []
   if (normalizedRole && SECTION_CONFIGS[normalizedRole]) candidateKeys.push(normalizedRole)
@@ -161,9 +306,13 @@ const renderStructuredSections = (body: string | null, role?: string | null): JS
   for (const key of candidateKeys) {
     const config = SECTION_CONFIGS[key]
     if (!config) continue
-    const extraction = extractLabeledSections(body, config.labels)
+    const extraction =
+      typeof payload === 'string'
+        ? extractLabeledSections(payload, config.labels)
+        : extractSectionsFromObject(payload, config.labels)
     const hasAnySection = config.labels.some((label) => Boolean(extraction.sections[label]))
-    if (!hasAnySection) continue
+    const hasPrefix = Boolean(extraction.prefix)
+    if (!hasAnySection && !hasPrefix) continue
     return (
       <div class="space-y-2">
         {extraction.prefix ? <p class="whitespace-pre-wrap text-sm text-[var(--text)]">{extraction.prefix}</p> : null}
@@ -203,15 +352,157 @@ const renderStepPart = (part: any, label: string, role?: string | null): JSX.Ele
   )
 }
 
+const STRUCTURED_BODY_PATHS = ['body', 'payload', 'data', 'response', 'value', 'message', 'content', 'result', 'state']
+const MAX_STRUCTURED_BODY_DEPTH = 4
+
+const hasSectionLabelKeys = (obj: Record<string, unknown>): boolean => {
+  return Object.keys(obj).some((key) => SECTION_LABEL_LOOKUP.has(key.toLowerCase()))
+}
+
+const extractStructuredBody = (payload: unknown, depth = 0): Record<string, unknown> | null => {
+  if (depth > MAX_STRUCTURED_BODY_DEPTH || payload === null || payload === undefined) return null
+  if (typeof payload === 'string') {
+    const trimmed = payload.trim()
+    if (!trimmed) return null
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      const parsed = safeParseJson(trimmed)
+      if (parsed) return extractStructuredBody(parsed, depth + 1)
+    }
+    return null
+  }
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      const nested = extractStructuredBody(item, depth + 1)
+      if (nested) return nested
+    }
+    return null
+  }
+  if (!isPlainObject(payload)) return null
+  if (hasSectionLabelKeys(payload)) return payload
+  for (const key of STRUCTURED_BODY_PATHS) {
+    if (Object.prototype.hasOwnProperty.call(payload, key)) {
+      const nested = extractStructuredBody(payload[key], depth + 1)
+      if (nested) return nested
+    }
+  }
+  return null
+}
+
+type TodoPayload = {
+  content?: string
+  text?: string
+  id?: string | number
+  priority?: 'high' | 'medium' | 'low'
+  status?: 'pending' | 'in_progress' | 'completed' | 'cancelled'
+}
+
+const parseTodoListPayload = (candidate: string | null) => {
+  if (!candidate) return null
+  try {
+    const parsed: unknown = JSON.parse(candidate)
+    if (!Array.isArray(parsed)) return null
+    const entries = parsed.filter((item): item is TodoPayload => isPlainObject(item) && ('content' in item || 'text' in item))
+    if (entries.length === 0) return null
+    return entries.map((entry, index) => ({
+      content: String(entry.content ?? entry.text ?? ''),
+      id: String(entry.id ?? `todo-${index + 1}`),
+      priority: entry.priority ?? 'low',
+      status: entry.status ?? 'pending'
+    }))
+  } catch {
+    return null
+  }
+}
+
+type FileTagPayload = { path?: string; preview?: string }
+type DiagnosticEntry = { severity?: string; level?: string; message?: string; msg?: string; range?: unknown }
+type DiagnosticsPayload = { path?: string; diagnostics?: DiagnosticEntry[] }
+
+const coerceDiagnosticEntries = (value: unknown): DiagnosticEntry[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+  const entries = value.filter((item): item is DiagnosticEntry => isPlainObject(item))
+  return entries.length ? entries : undefined
+}
+
+const parseFileTagPayload = (
+  candidate: string | null
+):
+  | { type: 'file'; value: FileTagPayload }
+  | { type: 'file-diagnostic'; value: DiagnosticsPayload }
+  | { type: 'project-diagnostic'; value: DiagnosticsPayload }
+  | { type: 'file-diagnostic-array'; value: DiagnosticsPayload[] }
+  | null => {
+  if (!candidate) return null
+  try {
+    const parsed: unknown = JSON.parse(candidate)
+    if (isPlainObject(parsed)) {
+      const path = typeof parsed.path === 'string' ? parsed.path : undefined
+      const preview = typeof parsed.preview === 'string' ? parsed.preview : undefined
+      if (parsed.type === 'file' && path) return { type: 'file', value: { path, preview } }
+      const diagnostics = coerceDiagnosticEntries(parsed.diagnostics)
+      if (diagnostics) {
+        const payload: DiagnosticsPayload = { path, diagnostics }
+        if (parsed.type === 'file-diagnostic' && path) return { type: 'file-diagnostic', value: payload }
+        if (parsed.type === 'project-diagnostic') return { type: 'project-diagnostic', value: payload }
+      }
+    }
+    if (Array.isArray(parsed)) {
+      const diagnostics: DiagnosticsPayload[] = []
+      for (const item of parsed) {
+        if (!isPlainObject(item) || typeof item.path !== 'string') continue
+        const entries = coerceDiagnosticEntries(item.diagnostics)
+        if (!entries || entries.length === 0) continue
+        diagnostics.push({ path: item.path, diagnostics: entries })
+      }
+      if (diagnostics.length) return { type: 'file-diagnostic-array', value: diagnostics }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+const renderFileTag = (fileObj: FileTagPayload) => (
+  <div class="mb-2 rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3 text-sm">
+    <div class="font-semibold">File: {fileObj.path}</div>
+    {fileObj.preview ? <pre class="mt-2 whitespace-pre-wrap">{String(fileObj.preview)}</pre> : null}
+  </div>
+)
+
+const renderDiagnosticsTag = (diagObj: DiagnosticsPayload) => {
+  const diags: DiagnosticEntry[] = Array.isArray(diagObj.diagnostics) ? diagObj.diagnostics : []
+  return (
+    <div class="mb-2 rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3 text-sm">
+      <div class="font-semibold">Diagnostics for {diagObj.path ?? 'project'}</div>
+      <ul class="mt-2 list-disc pl-4">
+        {diags.map((d) => (
+          <li>
+            <div class="font-semibold">{d.severity ?? d.level ?? 'info'}</div>
+            <div class="text-xs text-[var(--text-muted)]">{d.message ?? d.msg ?? ''}</div>
+            {d.range ? <div class="text-xs text-[var(--text-muted)]">{JSON.stringify(d.range)}</div> : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 export type MessageScrollerProps = {
-  messages: CodingAgentMessage[]
+  messages: LogEntry[]
   class?: string
   onAutoScrollChange?: (v: boolean) => void
   scrollToBottomTrigger?: number
   sessionId?: string | null
-  onMessageClick?: (message: CodingAgentMessage) => void
+  onMessageClick?: (message: LogEntry) => void
   selectedMessageId?: string | null
   footer?: JSX.Element | null
+}
+
+const resolveMessageKey = (message: LogEntry | null | undefined): string | null => {
+  if (!message) return null
+  if (message.entryId) return String(message.entryId)
+  if (message.createdAt) return String(message.createdAt)
+  return null
 }
 
 export default function MessageScroller(props: MessageScrollerProps) {
@@ -223,10 +514,21 @@ export default function MessageScroller(props: MessageScrollerProps) {
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
   // store per-session scroll positions to restore after remount
-  const SCROLL_POSITIONS: Map<string, number> = (globalThis as any).__MessageScrollerPositions || new Map()
-  try {
-    ;(globalThis as any).__MessageScrollerPositions = SCROLL_POSITIONS
-  } catch {}
+  const SCROLL_POSITIONS_KEY = '__MessageScrollerPositions'
+  const existingPositions = (() => {
+    try {
+      const candidate = Reflect.get(globalThis, SCROLL_POSITIONS_KEY)
+      return candidate instanceof Map ? candidate : null
+    } catch {
+      return null
+    }
+  })()
+  const SCROLL_POSITIONS: Map<string, number> = existingPositions ?? new Map()
+  if (!existingPositions) {
+    try {
+      Reflect.set(globalThis, SCROLL_POSITIONS_KEY, SCROLL_POSITIONS)
+    } catch {}
+  }
 
   function scrollToBottom(el: HTMLElement, smooth = true) {
     if (!el) return
@@ -289,7 +591,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
     const should = autoScroll()
     // derive a stable key for the last message to detect real appends/changes
     const last = msgs.length > 0 ? msgs[msgs.length - 1] : null
-    const currentKey = last ? String((last as any).id ?? (last as any).createdAt ?? (last as any).text ?? '') : null
+    const currentKey = resolveMessageKey(last)
     if (should && currentKey && currentKey !== lastMessageKey) {
       try {
         const sid = props.sessionId
@@ -432,20 +734,20 @@ export default function MessageScroller(props: MessageScrollerProps) {
     )
   }
 
-  function toolPartClipboardText(message: CodingAgentMessage, part: CodingAgentMessagePart): string {
+  function toolPartClipboardText(message: LogEntry, part: Part): string {
     const meta: string[] = []
-    const toolName = String((part as any)?.tool ?? (part as any)?.toolName ?? (part as any)?.name ?? '')
+    const toolName = String(part.tool ?? part.toolName ?? part.name ?? '')
     if (toolName) meta.push(`Tool: ${toolName}`)
-    if ((part as any)?.title) meta.push(String((part as any).title))
+    if (part.title) meta.push(String(part.title))
     if (message.createdAt) meta.push(new Date(message.createdAt).toLocaleString())
 
     const body: string[] = []
     const append = (value: string | null | undefined) => {
       if (typeof value === 'string' && value.trim()) body.push(value.trim())
     }
-    append(part.text)
-    append((part as any)?.output)
-    append((part as any)?.state?.output)
+    append(typeof part.text === 'string' ? part.text : undefined)
+    append(part.output)
+    append(part.state?.output)
     const diffText = extractDiffText(part)
     if (diffText) body.push(diffText)
 
@@ -551,14 +853,13 @@ export default function MessageScroller(props: MessageScrollerProps) {
     onCleanup(() => document.removeEventListener('keydown', handleKeyDown))
   })
 
-  function renderMessageParts(message: CodingAgentMessage) {
-    const parts: any[] = (message as any).parts ?? []
-    if (!parts || parts.length === 0) {
-      const fallback = typeof message.text === 'string' ? message.text : ''
-      if (!fallback) return null
-      return fallback.split('\n').map((line) => <p class="mb-1 last:mb-0 break-words">{line}</p>)
-    }
+  function renderMessageParts(message: LogEntry) {
+    const parts = extractPartsFromPayload(message.payload) ?? []
+    const fallback = resolveMessageText(message.payload)
+
     const elements: JSX.Element[] = []
+    const toolCalls = extractToolCalls(parts)
+
     for (let index = 0; index < parts.length; index++) {
       const part = parts[index]
       if (!part) continue
@@ -570,6 +871,11 @@ export default function MessageScroller(props: MessageScrollerProps) {
       }
 
       if (normalizedType === 'text' || normalizedType === 'step-finish') {
+        const structured = renderStructuredSections(part.text ?? part.state?.output ?? null, message.role)
+        if (structured) {
+          elements.push(structured)
+          continue
+        }
         if (typeof part.text === 'string' && part.text.trim()) {
           elements.push(<p class="mb-1 last:mb-0 break-words">{part.text.trim()}</p>)
         }
@@ -580,138 +886,25 @@ export default function MessageScroller(props: MessageScrollerProps) {
         const toolName = String(part.tool ?? part.toolName ?? part.name ?? '')
         const title = part.title ?? part.state?.title ?? ''
         const text = typeof part.text === 'string' && part.text.trim() ? part.text.trim() : null
-        const output =
-          typeof (part.state?.output ?? part.output) === 'string' ? (part.state?.output ?? part.output) : null
+        const outputValue = part.state?.output ?? part.output
+        const output = typeof outputValue === 'string' && outputValue.trim() ? outputValue : null
 
         if (!text && output && parseStepEventPayload(output)) {
           continue
         }
 
-        // Heuristic: tool name indicates todowrite
         const nameIndicatesTodo =
           toolName.toLowerCase().includes('todo') || toolName.toLowerCase().includes('todowrite')
 
-        const tryParseTodos = (candidate: string | null) => {
-          if (!candidate) return null
-          try {
-            const parsed = JSON.parse(candidate)
-            if (!Array.isArray(parsed)) return null
-            const ok = parsed.every(
-              (it) => it && typeof it === 'object' && ('content' in it || 'text' in it) && 'id' in it
-            )
-            if (!ok) return null
-            const todos = parsed.map((it: any) => ({
-              content: String(it.content ?? it.text ?? ''),
-              id: String(it.id ?? Math.random().toString(36).slice(2, 8)),
-              priority:
-                it.priority === 'high' || it.priority === 'medium' || it.priority === 'low' ? it.priority : 'low',
-              status:
-                it.status === 'pending' ||
-                it.status === 'in_progress' ||
-                it.status === 'completed' ||
-                it.status === 'cancelled'
-                  ? it.status
-                  : 'pending'
-            }))
-            return todos
-          } catch {
-            return null
-          }
-        }
-
-        // Diagnostic / file tag parsers
-        const tryParseFileTags = (candidate: string | null) => {
-          if (!candidate) return null
-          try {
-            const parsed = JSON.parse(candidate)
-            if (!parsed || typeof parsed !== 'object') return null
-            // single file object
-            if (parsed.type === 'file' && typeof parsed.path === 'string') return { type: 'file', value: parsed }
-            if (
-              parsed.type === 'file-diagnostic' &&
-              typeof parsed.path === 'string' &&
-              Array.isArray(parsed.diagnostics)
-            )
-              return { type: 'file-diagnostic', value: parsed }
-            if (parsed.type === 'project-diagnostic' && Array.isArray(parsed.diagnostics))
-              return { type: 'project-diagnostic', value: parsed }
-            // array of diagnostics (common for read/edit/write tools)
-            if (Array.isArray(parsed) && parsed.every((it) => it && typeof it === 'object')) {
-              // if items have 'path' and 'diagnostics'
-              if (parsed.every((it) => typeof it.path === 'string' && Array.isArray(it.diagnostics))) {
-                return { type: 'file-diagnostic-array', value: parsed }
-              }
-            }
-            return null
-          } catch {
-            return null
-          }
-        }
-
-        // Small renderers for file/diagnostic tags
-        const renderFile = (fileObj: any) => (
-          <div class="mb-2 rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3 text-sm">
-            <div class="font-semibold">File: {fileObj.path}</div>
-            {fileObj.preview ? <pre class="mt-2 whitespace-pre-wrap">{String(fileObj.preview)}</pre> : null}
-          </div>
-        )
-
-        const renderDiagnostics = (diagObj: any) => {
-          const diags: any[] = Array.isArray(diagObj.diagnostics) ? diagObj.diagnostics : []
-          return (
-            <div class="mb-2 rounded-md border border-[var(--border)] bg-[var(--bg-card)] p-3 text-sm">
-              <div class="font-semibold">Diagnostics for {diagObj.path ?? 'project'}</div>
-              <ul class="mt-2 list-disc pl-4">
-                {diags.map((d) => (
-                  <li>
-                    <div class="font-semibold">{d.severity ?? d.level ?? 'info'}</div>
-                    <div class="text-xs text-[var(--text-muted)]">{d.message ?? d.msg ?? ''}</div>
-                    {d.range ? <div class="text-xs text-[var(--text-muted)]">{JSON.stringify(d.range)}</div> : null}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )
-        }
-
-        // Prefer parsing when name suggests todo
-        if (nameIndicatesTodo) {
-          const candidate = output ?? text
-          const parsed = tryParseTodos(candidate)
-          if (parsed) {
-            elements.push(<TodoList todos={parsed} />)
-            continue
-          }
-        }
-
-        // Otherwise, attempt to parse output/text as JSON todo array
-        const parsedAny = tryParseTodos(output ?? text)
-        if (parsedAny) {
-          elements.push(<TodoList todos={parsedAny} />)
-          continue
-        }
-
-        // Try parsing file/diagnostic tags used by read/edit/write tools
-        const parsedTags = tryParseFileTags(output ?? text)
-        if (parsedTags) {
-          switch (parsedTags.type) {
-            case 'file':
-              elements.push(renderFile(parsedTags.value))
-              break
-            case 'file-diagnostic':
-              elements.push(renderDiagnostics(parsedTags.value))
-              break
-            case 'project-diagnostic':
-              elements.push(renderDiagnostics(parsedTags.value))
-              break
-            case 'file-diagnostic-array':
-              for (const item of parsedTags.value) elements.push(renderDiagnostics(item))
-              break
-          }
-          continue
-        }
-
-        // Render tool output inside a collapsed details block by default
+        const candidatePayload = output ?? text
+        const parsedTodos = parseTodoListPayload(candidatePayload)
+        const parsedTags = parseFileTagPayload(candidatePayload)
+        const structured = renderStructuredSections(candidatePayload, message.role)
+        const diffText = extractDiffText(part)
+        const summaryText = toolName || text || 'Tool'
+        const messageKey = resolveMessageKey(message) ?? 'message'
+        const partKey = String(part.id ?? `${messageKey}-${index}`)
+        const toolCopyPayload = toolPartClipboardText(message, part)
         const durationLabel = (() => {
           const start = part.start ? String(part.start) : null
           const end = part.end ? String(part.end) : null
@@ -722,65 +915,48 @@ export default function MessageScroller(props: MessageScrollerProps) {
           return ''
         })()
 
-        const diffText = extractDiffText(part)
-        const summaryText = toolName || (text ?? 'Tool')
-        const partKey = String(part.id ?? `${message.id}-${index}`)
-        const toolCopyPayload = toolPartClipboardText(message, part)
+        if (nameIndicatesTodo && parsedTodos) {
+          elements.push(<TodoList todos={parsedTodos} />)
+          continue
+        }
+
+        if (structured && !parsedTodos && !parsedTags && !diffText) {
+          elements.push(structured)
+          continue
+        }
 
         elements.push(
           <DetailsWithToggle
             summaryText={summaryText}
             duration={durationLabel}
             title={title}
-            copyHint={toolCopyPayload ? { payload: toolCopyPayload, key: `tool:${message.id}:${partKey}` } : undefined}
+            copyHint={toolCopyPayload ? { payload: toolCopyPayload, key: `tool:${messageKey}:${partKey}` } : undefined}
           >
-            {/* Try to render todos or file/diagnostic tags first */}
-            {nameIndicatesTodo
+            {parsedTodos ? <TodoList todos={parsedTodos} /> : null}
+            {parsedTags
               ? (() => {
-                  const candidate = output ?? text
-                  const parsed = tryParseTodos(candidate)
-                  if (parsed) return <TodoList todos={parsed} />
-                  return null
+                  switch (parsedTags.type) {
+                    case 'file':
+                      return renderFileTag(parsedTags.value)
+                    case 'file-diagnostic':
+                    case 'project-diagnostic':
+                      return renderDiagnosticsTag(parsedTags.value)
+                    case 'file-diagnostic-array':
+                      return parsedTags.value.map((item: any) => renderDiagnosticsTag(item))
+                    default:
+                      return null
+                  }
                 })()
               : null}
-
-            {(() => {
-              const parsedAny = tryParseTodos(output ?? text)
-              if (parsedAny) return <TodoList todos={parsedAny} />
-              return null
-            })()}
-
-            {(() => {
-              const parsedTags = tryParseFileTags(output ?? text)
-              if (!parsedTags) return null
-              switch (parsedTags.type) {
-                case 'file':
-                  return renderFile(parsedTags.value)
-                case 'file-diagnostic':
-                  return renderDiagnostics(parsedTags.value)
-                case 'project-diagnostic':
-                  return renderDiagnostics(parsedTags.value)
-                case 'file-diagnostic-array':
-                  return parsedTags.value.map((item: any) => renderDiagnostics(item))
-              }
-              return null
-            })()}
-
             {diffText ? (
               <div class="mt-2 mb-2">
                 <DiffViewer diffText={diffText} />
               </div>
-            ) : (output || text) && !(nameIndicatesTodo && tryParseTodos(output ?? text)) ? (
+            ) : (output || text) && !parsedTodos ? (
               <ToolRenderer part={part} />
             ) : null}
           </DetailsWithToggle>
         )
-
-        // If there are multiple tool parts in the message, show a summarized list
-        const toolCalls = extractToolCalls(parts)
-        if (toolCalls.length > 1) {
-          elements.push(<ToolCallList calls={toolCalls as any} />)
-        }
 
         continue
       }
@@ -795,13 +971,27 @@ export default function MessageScroller(props: MessageScrollerProps) {
         continue
       }
     }
-    if (elements.length === 0) return null
+
+    if (toolCalls.length > 1) {
+      elements.push(<ToolCallList calls={toolCalls} />)
+    }
+
+    if (!elements.length) {
+      const structuredCandidate = extractStructuredBody(message.payload)
+      const structured = renderStructuredSections(structuredCandidate ?? fallback, message.role)
+      if (structured) return structured
+      if (fallback) {
+        return fallback.split('\n').map((line: string) => <p class="mb-1 last:mb-0 break-words">{line}</p>)
+      }
+      return null
+    }
+
     return elements
   }
 
   type MessageGroup = {
     role: string
-    messages: CodingAgentMessage[]
+    messages: LogEntry[]
     timestamp: string
   }
 
@@ -810,8 +1000,9 @@ export default function MessageScroller(props: MessageScrollerProps) {
     const groups: MessageGroup[] = []
     for (const m of msgs) {
       if (!m) continue
-      if (groups.length === 0 || groups[groups.length - 1].role !== m.role) {
-        groups.push({ role: m.role, messages: [m], timestamp: String(m.createdAt) })
+      const roleLabel = typeof m.role === 'string' && m.role.trim().length ? m.role : 'Message'
+      if (groups.length === 0 || groups[groups.length - 1].role !== roleLabel) {
+        groups.push({ role: roleLabel, messages: [m], timestamp: String(m.createdAt) })
       } else {
         // append to existing group and update timestamp to most recent message
         groups[groups.length - 1].messages.push(m)
@@ -836,7 +1027,8 @@ export default function MessageScroller(props: MessageScrollerProps) {
                   <div
                     class="relative mb-3 rounded-xl border border-transparent transition hover:border-[var(--border)] last:mb-0"
                     classList={{
-                      'border-blue-500 bg-blue-50 dark:bg-blue-950/30': props.selectedMessageId === message.id,
+                      'border-blue-500 bg-blue-50 dark:bg-blue-950/30':
+                        props.selectedMessageId === resolveMessageKey(message),
                       'cursor-pointer': Boolean(props.onMessageClick)
                     }}
                     role={props.onMessageClick ? 'button' : undefined}

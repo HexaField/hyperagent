@@ -1,16 +1,15 @@
 import { render } from '@solidjs/testing-library'
 import { describe, expect, it } from 'vitest'
+import type { LogEntry } from '../../lib/codingAgent'
 import MessageScroller from '../MessageScroller'
 
-// Minimal message shape matching CodingAgentMessage used by MessageScroller
-const makeToolMessage = (diff: string | null) =>
-  ({
-    id: 'm1',
-    role: 'assistant',
-    createdAt: new Date().toISOString(),
-    completedAt: null,
-    modelId: null,
-    text: '',
+// Minimal log entry shape consumed by MessageScroller
+const makeToolMessage = (diff: string | null): LogEntry => ({
+  entryId: 'm1',
+  role: 'assistant',
+  createdAt: new Date().toISOString(),
+  model: undefined,
+  payload: {
     parts: [
       {
         id: 'p1',
@@ -20,7 +19,8 @@ const makeToolMessage = (diff: string | null) =>
         state: diff ? { metadata: { diff } } : {}
       }
     ]
-  }) as any
+  }
+})
 
 describe('MessageScroller tool part diff rendering', () => {
   it('renders DiffViewer when tool part has metadata.diff', async () => {

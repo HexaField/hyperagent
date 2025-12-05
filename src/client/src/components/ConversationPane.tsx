@@ -1,10 +1,10 @@
 import type { JSX } from 'solid-js'
 import { Show, createMemo, createSignal } from 'solid-js'
-import type { CodingAgentMessage } from '../lib/codingAgent'
+import type { LogEntry } from '../lib/codingAgent'
 import MessageScroller from './MessageScroller'
 
 export type ConversationPaneProps = {
-  messages: CodingAgentMessage[]
+  messages: LogEntry[]
   sessionId?: string | null
   emptyPlaceholder?: JSX.Element | string
   footer?: JSX.Element

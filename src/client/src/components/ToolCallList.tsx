@@ -1,11 +1,5 @@
 import { For } from 'solid-js'
-
-export type ToolCall = {
-  id: string
-  text: string
-  durationMs?: number | null
-  metadata?: Record<string, unknown>
-}
+import type { ToolCall } from '../lib/messageParts'
 
 export default function ToolCallList(props: { calls: ToolCall[] }) {
   const calls = props.calls ?? []
