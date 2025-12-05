@@ -4,7 +4,7 @@ import os from 'os'
 import path from 'path'
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createOpencodeStorage, type OpencodeStorage } from '../../../../src/modules/agent/opencode'
+import type { CodingAgentSessionDetail, CodingAgentSessionSummary } from '../../../../src/modules/agent/opencode'
 import type { CodingAgentSessionDetail } from '../../../interfaces/core/codingAgent'
 import * as agentModule from '../../../modules/agent/multi-agent'
 
@@ -42,12 +42,73 @@ const NON_MULTI_PERSONA_ID = 'builder-persona'
 const TEST_PROMPT = 'Please do the task'
 
 describe('workspace sessions routes — agent persona', () => {
+  // Local test helper: lightweight filesystem-backed storage for runs.
+  type LocalOpencodeStorage = {
+    rootDir?: string
+    listSessions: (opts?: { workspacePath?: string }) => Promise<CodingAgentSessionSummary[]>
+    getSession: (sessionId: string) => Promise<CodingAgentSessionDetail | null>
+  }
+
+  function createOpencodeStorage(opts: { rootDir?: string }): LocalOpencodeStorage {
+    const rootDir = opts?.rootDir ?? process.env.OPENCODE_STORAGE_ROOT ?? './.opencode'
+    const runsDir = path.join(rootDir, 'runs')
+
+    async function ensureRunsDir(): Promise<void> {
+      try {
+        await fs.mkdir(runsDir, { recursive: true })
+      } catch {
+        // ignore
+      }
+    }
+
+    async function listRunFiles(): Promise<string[]> {
+      await ensureRunsDir()
+      try {
+        const entries = await fs.readdir(runsDir, { withFileTypes: true })
+        return entries.filter((e) => e.isFile() && e.name.endsWith('.json')).map((e) => path.join(runsDir, e.name))
+      } catch {
+        return []
+      }
+    }
+
+    async function readRunFile(filePath: string): Promise<CodingAgentSessionDetail | null> {
+      try {
+        const raw = await fs.readFile(filePath, 'utf8')
+        const parsed = JSON.parse(raw)
+        return parsed as CodingAgentSessionDetail
+      } catch {
+        return null
+      }
+    }
+
+    return {
+      rootDir,
+      listSessions: async ({ workspacePath } = {}) => {
+        const files = await listRunFiles()
+        const sessions: CodingAgentSessionSummary[] = []
+        for (const file of files) {
+          const detail = await readRunFile(file)
+          if (!detail) continue
+          const session = detail.session
+          if (workspacePath && session.workspacePath !== workspacePath) continue
+          sessions.push(session)
+        }
+        sessions.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+        return sessions
+      },
+      getSession: async (sessionId: string) => {
+        const filePath = path.join(runsDir, `${sessionId}.json`)
+        return await readRunFile(filePath)
+      }
+    }
+  }
+
   let tmpHome = ''
   let app: express.Express
   let spyRunLoop: any
   let depsUnderTest: ReturnType<typeof makeDeps>
   let storageRoot: string
-  let opencodeStorage: OpencodeStorage
+  let opencodeStorage: LocalOpencodeStorage
 
   beforeEach(async () => {
     tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), 'ha-test-home-'))

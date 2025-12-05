@@ -2,13 +2,10 @@ import type {
   CodingAgentProvider,
   CodingAgentProviderListResponse,
   CodingAgentRunListResponse,
-  RunMeta,
   CodingAgentSessionDetail,
   CodingAgentSessionListResponse,
   CodingAgentSessionSummary,
-  CodingAgentMessage,
-  CodingAgentMessagePart,
-  CodingAgentProviderModel
+  RunMeta
 } from '../../../interfaces/core/codingAgent'
 import { fetchJson } from '../shared/api/httpClient'
 

@@ -126,7 +126,7 @@ export type WorkspaceSessionsDeps = {
       model?: string
       providerId?: string | null
       personaId?: string | null
-    }) => Promise<RunMeta>
+    }) => Promise<RunMeta | Record<string, any>>
     killRun: (sessionId: string) => Promise<boolean>
   }
 }

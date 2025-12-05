@@ -17,8 +17,6 @@ import type WebSocketType from 'ws'
 import type { WebSocketServer as WebSocketServerType, RawData as WsRawData } from 'ws'
 import type { CodeServerController, CodeServerHandle, CodeServerOptions } from '../../src/modules/codeServer'
 import type { TerminalSessionRecord } from '../../src/modules/database'
-import { createOpencodeStorage, type OpencodeSessionDetail, type OpencodeSessionSummary, type OpencodeStorage } from '../../src/modules/agent/opencode'
-import type { OpencodeRunner } from '../../src/modules/provider'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import type { LiveTerminalSession, TerminalModule } from '../../src/modules/terminal'
 import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from '../../src/modules/workflowRunnerGateway'
@@ -72,6 +70,68 @@ const loadWsServerBindings = async (): Promise<{
     throw new Error('Unable to load ws server bindings')
   }
   return { WebSocket, WebSocketServer }
+}
+
+// Local helper: small filesystem-backed storage used by tests in place of the removed
+// exported factory. Mirrors the previous `createOpencodeStorage` behavior.
+type LocalOpencodeStorage = {
+  rootDir?: string
+  listSessions: (opts?: { workspacePath?: string }) => Promise<CodingAgentSessionSummary[]>
+  getSession: (sessionId: string) => Promise<CodingAgentSessionDetail | null>
+}
+
+function createOpencodeStorage(opts: { rootDir?: string }): LocalOpencodeStorage {
+  const rootDir = opts?.rootDir ?? process.env.OPENCODE_STORAGE_ROOT ?? './.opencode'
+  const runsDir = path.join(rootDir, 'runs')
+
+  async function ensureRunsDir(): Promise<void> {
+    try {
+      await fs.mkdir(runsDir, { recursive: true })
+    } catch {
+      // ignore
+    }
+  }
+
+  async function listRunFiles(): Promise<string[]> {
+    await ensureRunsDir()
+    try {
+      const entries = await fs.readdir(runsDir, { withFileTypes: true })
+      return entries.filter((e) => e.isFile() && e.name.endsWith('.json')).map((e) => path.join(runsDir, e.name))
+    } catch {
+      return []
+    }
+  }
+
+  async function readRunFile(filePath: string): Promise<CodingAgentSessionDetail | null> {
+    try {
+      const raw = await fs.readFile(filePath, 'utf8')
+      const parsed = JSON.parse(raw)
+      return parsed as CodingAgentSessionDetail
+    } catch {
+      return null
+    }
+  }
+
+  return {
+    rootDir,
+    listSessions: async ({ workspacePath } = {}) => {
+      const files = await listRunFiles()
+      const sessions: CodingAgentSessionSummary[] = []
+      for (const file of files) {
+        const detail = await readRunFile(file)
+        if (!detail) continue
+        const session = detail.session
+        if (workspacePath && session.workspacePath !== workspacePath) continue
+        sessions.push(session)
+      }
+      sessions.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+      return sessions
+    },
+    getSession: async (sessionId: string) => {
+      const filePath = path.join(runsDir, `${sessionId}.json`)
+      return await readRunFile(filePath)
+    }
+  }
 }
 
 const mockResult: AgentLoopResult = {
@@ -284,7 +344,7 @@ async function createIntegrationHarness(options?: {
   radicleModule?: RadicleModule
   terminalModule?: TerminalModule
   publicOrigin?: string
-  opencodeStorage?: OpencodeStorage
+  opencodeStorage?: LocalOpencodeStorage
   opencodeRunner?: OpencodeRunner
   opencodeCommandRunner?: CreateServerOptions['codingAgentCommandRunner']
   webSockets?: {
@@ -1389,7 +1449,7 @@ describe('opencode session endpoints', () => {
     })
     const resA = await fetch(`${harnessA.baseUrl}/api/coding-agent/sessions`)
     expect(resA.status).toBe(200)
-    const payloadA = (await resA.json()) as { sessions: OpencodeSessionSummary[] }
+    const payloadA = (await resA.json()) as { sessions: CodingAgentSessionSummary[] }
     expect(payloadA.sessions.length).toBeGreaterThanOrEqual(2)
     await harnessA.close()
 
@@ -1399,7 +1459,7 @@ describe('opencode session endpoints', () => {
     })
     const resB = await fetch(`${harnessB.baseUrl}/api/coding-agent/sessions`)
     expect(resB.status).toBe(200)
-    const payloadB = (await resB.json()) as { sessions: OpencodeSessionSummary[] }
+    const payloadB = (await resB.json()) as { sessions: CodingAgentSessionSummary[] }
     expect(payloadB.sessions.length).toBe(payloadA.sessions.length)
     await harnessB.close()
   })
@@ -1435,7 +1495,7 @@ describe('opencode session endpoints', () => {
     const workspacePath = path.join(workspaceRoot, 'repo-alpha')
     await fs.mkdir(workspacePath, { recursive: true })
 
-    const summary: OpencodeSessionSummary = {
+    const summary: CodingAgentSessionSummary = {
       id: 'ses_alpha',
       title: 'Alpha Session',
       workspacePath,
@@ -1444,7 +1504,7 @@ describe('opencode session endpoints', () => {
       updatedAt: new Date(0).toISOString(),
       summary: { additions: 1, deletions: 0, files: 1 }
     }
-    const detail: OpencodeSessionDetail = {
+    const detail: CodingAgentSessionDetail = {
       session: summary,
       messages: []
     }
@@ -1465,7 +1525,7 @@ describe('opencode session endpoints', () => {
 
       const detailRes = await fetch(`${harness.baseUrl}/api/coding-agent/sessions/${summary.id}`)
       expect(detailRes.status).toBe(200)
-      const detailPayload = (await detailRes.json()) as OpencodeSessionDetail
+      const detailPayload = (await detailRes.json()) as CodingAgentSessionDetail
       expect(detailPayload.session.id).toBe(summary.id)
 
       const runsRes = await fetch(`${harness.baseUrl}/api/coding-agent/runs`)
@@ -1487,7 +1547,7 @@ describe('opencode session endpoints', () => {
     const workspacePath = path.join(workspaceRoot, 'repo-beta')
     await fs.mkdir(workspacePath, { recursive: true })
 
-    const summary: OpencodeSessionSummary = {
+    const summary: CodingAgentSessionSummary = {
       id: 'ses_beta',
       title: 'Beta Session',
       workspacePath,
@@ -1496,7 +1556,7 @@ describe('opencode session endpoints', () => {
       updatedAt: new Date(0).toISOString(),
       summary: { additions: 4, deletions: 2, files: 1 }
     }
-    const detail: OpencodeSessionDetail = {
+    const detail: CodingAgentSessionDetail = {
       session: summary,
       messages: [
         {
@@ -1527,7 +1587,7 @@ describe('opencode session endpoints', () => {
         body: JSON.stringify({ role: 'user', text: 'Continue the plan' })
       })
       expect(response.status).toBe(201)
-      const payload = (await response.json()) as OpencodeSessionDetail
+      const payload = (await response.json()) as CodingAgentSessionDetail
       expect(payload.session.id).toBe(summary.id)
       expect(cliRunner).toHaveBeenCalledTimes(1)
       const [args, commandOptions] = cliRunner.mock.calls[0] as unknown as [string[], { cwd?: string }]
@@ -1551,19 +1611,11 @@ describe('opencode session endpoints', () => {
 
 function createFakeOpencodeRunnerStub(): OpencodeRunner {
   const record = {
-    sessionId: 'ses_alpha',
-    pid: 1234,
-    workspacePath: '/workspace/repo-alpha',
-    prompt: 'Ship it',
-    title: 'Alpha Session',
-    providerId: null,
-    model: null,
-    logFile: '/tmp/log',
-    startedAt: new Date(0).toISOString(),
-    updatedAt: new Date(0).toISOString(),
-    status: 'running' as const,
-    exitCode: null,
-    signal: null
+    id: 'ses_alpha',
+    agents: [],
+    log: [],
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString()
   }
   return {
     startRun: vi.fn(async () => record),
@@ -1573,7 +1625,7 @@ function createFakeOpencodeRunnerStub(): OpencodeRunner {
   }
 }
 
-function createFakeOpencodeStorageStub(detail: OpencodeSessionDetail): OpencodeStorage {
+function createFakeOpencodeStorageStub(detail: CodingAgentSessionDetail): LocalOpencodeStorage {
   return {
     rootDir: '/tmp/opencode',
     listSessions: vi.fn(async () => [detail.session]),

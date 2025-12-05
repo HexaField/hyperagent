@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import crypto from 'crypto'
 import fs from 'fs/promises'
 import path from 'path'
-import type { AgentRunRecord, AgentRunsRepository } from './agent/multi-agent'
+import type { AgentRunRecord, AgentRunsRepository } from './agent/agent-persistence'
 import type { PersistenceContext, PersistenceModule, Timestamp } from './database'
 import type { ProjectRecord, ProjectsRepository } from './projects'
 import type {

@@ -132,6 +132,8 @@ export type CreateServerOptions = {
   // optional coding agent integrations (injected runner/storage)
   codingAgentRunner?: any
   codingAgentStorage?: any
+  // optional command-runner override for provider CLIs (e.g. opencode)
+  codingAgentCommandRunner?: ((args: string[], opts?: { cwd?: string }) => Promise<{ stdout: string; stderr: string }>) | any
 }
 
 export type ServerInstance = {

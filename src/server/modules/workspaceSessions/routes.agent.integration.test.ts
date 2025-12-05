@@ -5,8 +5,7 @@ import os from 'os'
 import path from 'path'
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { OpencodeRunRecord } from '../../../../src/modules/agent/opencode'
-import { createOpencodeStorage, type OpencodeStorage } from '../../../../src/modules/agent/opencode'
+import { CodingAgentSessionDetail, CodingAgentSessionSummary } from '../../../interfaces/core/codingAgent'
 import { createWorkspaceSessionsRouter } from './routes'
 
 const MULTI_AGENT_PERSONA_ID = 'multi-agent'
@@ -21,8 +20,68 @@ const commandExists = (cmd: string): boolean => {
 
 describe('workspace sessions routes — multi-agent opencode integration', () => {
   let tmpRoot = ''
-  let storage: OpencodeStorage
+  type LocalOpencodeStorage = {
+    rootDir?: string
+    listSessions: (opts?: { workspacePath?: string }) => Promise<CodingAgentSessionSummary[]>
+    getSession: (sessionId: string) => Promise<CodingAgentSessionDetail | null>
+  }
+
+  let storage: LocalOpencodeStorage
   let app: express.Express
+  // Local helper to provide the same small FS-backed storage used previously.
+  function createOpencodeStorage(opts: { rootDir?: string }): LocalOpencodeStorage {
+    const rootDir = opts?.rootDir ?? process.env.OPENCODE_STORAGE_ROOT ?? './.opencode'
+    const runsDir = path.join(rootDir, 'runs')
+
+    async function ensureRunsDir(): Promise<void> {
+      try {
+        await fs.mkdir(runsDir, { recursive: true })
+      } catch {
+        // ignore
+      }
+    }
+
+    async function listRunFiles(): Promise<string[]> {
+      await ensureRunsDir()
+      try {
+        const entries = await fs.readdir(runsDir, { withFileTypes: true })
+        return entries.filter((e) => e.isFile() && e.name.endsWith('.json')).map((e) => path.join(runsDir, e.name))
+      } catch {
+        return []
+      }
+    }
+
+    async function readRunFile(filePath: string): Promise<CodingAgentSessionDetail | null> {
+      try {
+        const raw = await fs.readFile(filePath, 'utf8')
+        const parsed = JSON.parse(raw)
+        return parsed as CodingAgentSessionDetail
+      } catch {
+        return null
+      }
+    }
+
+    return {
+      rootDir,
+      listSessions: async ({ workspacePath } = {}) => {
+        const files = await listRunFiles()
+        const sessions: CodingAgentSessionSummary[] = []
+        for (const file of files) {
+          const detail = await readRunFile(file)
+          if (!detail) continue
+          const session = detail.session
+          if (workspacePath && session.workspacePath !== workspacePath) continue
+          sessions.push(session)
+        }
+        sessions.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+        return sessions
+      },
+      getSession: async (sessionId: string) => {
+        const filePath = path.join(runsDir, `${sessionId}.json`)
+        return await readRunFile(filePath)
+      }
+    }
+  }
   beforeEach(async () => {
     const exists = commandExists('opencode')
     expect(exists, "Required CLI 'opencode' not found on PATH").toBe(true)
@@ -40,20 +99,12 @@ describe('workspace sessions routes — multi-agent opencode integration', () =>
     storage = createOpencodeStorage({ rootDir: storageRoot })
 
     const nowIso = new Date().toISOString()
-    const mockRunRecord: OpencodeRunRecord = {
-      sessionId: 'noop',
-      pid: -1,
-      workspacePath: '',
-      prompt: '',
-      title: null,
-      model: null,
-      providerId: null,
-      logFile: '',
-      startedAt: nowIso,
-      updatedAt: nowIso,
-      status: 'running',
-      exitCode: null,
-      signal: null
+    const mockRunRecord = {
+      id: 'noop',
+      agents: [],
+      log: [],
+      createdAt: nowIso,
+      updatedAt: nowIso
     }
     const deps = {
       wrapAsync,

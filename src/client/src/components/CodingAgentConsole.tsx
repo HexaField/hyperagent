@@ -1,5 +1,6 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
+import type { RunMeta } from '../../../interfaces/core/codingAgent'
 import { WIDGET_TEMPLATES } from '../constants/widgetTemplates'
 import {
   createCodingAgentPersona,
@@ -17,10 +18,9 @@ import {
   type CodingAgentProvider,
   type CodingAgentSessionDetail,
   type CodingAgentSessionSummary,
-  type PersonaSummary,
-  type PersonaDetail
+  type PersonaDetail,
+  type PersonaSummary
 } from '../lib/codingAgent'
-import type { RunMeta } from '../../../interfaces/core/codingAgent'
 import ConversationPane from './ConversationPane'
 import { createConversationScrollController } from './conversationScrollController'
 
@@ -964,7 +964,8 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                 <Show when={selectedSessionPersonaDetail()} keyed>
                   {(pd) => (
                     <div class="ml-3 text-xs text-[var(--text-muted)]">
-                      Persona: {String(pd.frontmatter?.title ?? pd.id)} {pd.frontmatter?.model ? `· ${String(pd.frontmatter.model)}` : ''}
+                      Persona: {String(pd.frontmatter?.title ?? pd.id)}{' '}
+                      {pd.frontmatter?.model ? `· ${String(pd.frontmatter.model)}` : ''}
                     </div>
                   )}
                 </Show>

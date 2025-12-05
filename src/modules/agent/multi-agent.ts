@@ -7,6 +7,8 @@
 import { Session } from '@opencode-ai/sdk'
 import { createRunMeta, hasRunMeta, loadRunMeta, saveRunMeta } from '../provenance/provenance'
 import { AgentStreamCallback, coerceString, invokeStructuredJsonCall, parseJsonPayload } from './agent'
+export type { AgentStreamCallback } from './agent'
+export type { AgentStreamEvent } from './agent'
 import { createSession, getSession } from './opencode'
 
 const WORKER_SYSTEM_PROMPT = `You are a meticulous senior engineer agent focused on producing concrete, technically sound deliverables. Follow verifier instructions with discipline.
