@@ -24,7 +24,7 @@ export async function invokeStructuredJsonCall<T>(options: {
   runId: string
   directory: string
   onStream?: AgentStreamCallback
-  parseResponse: (res: string) => T
+  parseResponse?: (res: string) => T
 }): Promise<{ raw: string; parsed: T }> {
   let prompt = options.basePrompt
   let lastError: Error | null = null
@@ -48,7 +48,7 @@ export async function invokeStructuredJsonCall<T>(options: {
     )
 
     try {
-      const parsed = options.parseResponse(raw)
+      const parsed = options.parseResponse ? options.parseResponse(raw) : (undefined! as T)
 
       options.onStream?.({
         role: options.role,
