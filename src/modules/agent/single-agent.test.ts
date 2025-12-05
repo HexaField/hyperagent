@@ -37,11 +37,14 @@ describe('Single agent loop', () => {
 
     const scenario = `Create a readme.md file that includes the text "Hello, single agent".`
 
-    const parsed = await runSingleAgentLoop({
+    const agentRun = await runSingleAgentLoop({
       userInstructions: scenario,
       model: model,
       sessionDir
     })
+
+    const parsed = await agentRun.result
+    expect(typeof agentRun.runId).toBe('string')
 
     expect(typeof parsed).toBe('string')
     const hyperagentDir = path.join(sessionDir, '.hyperagent')

@@ -80,6 +80,17 @@ const invokeOpencodeAdapter = async (ctx: { sessionDir?: string; sessionId?: str
   return res.data
 }
 
+const extractRunSessionIds = (run: any): string[] => {
+  if (!run || !Array.isArray(run.agents)) return []
+  const ids = new Set<string>()
+  for (const agent of run.agents) {
+    const raw = typeof agent?.sessionId === 'string' ? agent.sessionId.trim() : ''
+    if (!raw) continue
+    ids.add(raw)
+  }
+  return [...ids]
+}
+
 // Real e2e tests split into two `it` blocks. Shared setup/teardown lives in beforeEach/afterEach.
 describe('opencode real e2e', () => {
   let tmpBase: string
@@ -214,8 +225,10 @@ describe('opencode real e2e', () => {
     expect(startRes1.status).toBe(202)
     const startPayload1 = await startRes1.json()
     const run1 = startPayload1?.run
-    if (!run1 || !run1.sessionId) throw new Error('Single-agent run did not return sessionId')
-    console.log('[e2e] single-agent sessionId:', run1.sessionId)
+    const run1SessionIds = extractRunSessionIds(run1)
+    const primarySessionId = run1SessionIds[0]
+    if (!run1 || !primarySessionId) throw new Error('Single-agent run did not return agent session identifiers')
+    console.log('[e2e] single-agent sessionId:', primarySessionId)
 
     // Ensure the run appears in the runs list
     const runStart = Date.now()
@@ -224,35 +237,12 @@ describe('opencode real e2e', () => {
       expect(runsRes.status).toBe(200)
       const runsPayload = await runsRes.json()
       const runs = runsPayload.runs ?? []
-      if (runs.some((r: any) => r.sessionId === run1.sessionId)) break
+      if (runs.some((r: any) => extractRunSessionIds(r).includes(primarySessionId))) break
       await new Promise((r) => setTimeout(r, 500))
     }
 
-    // Verify the opencode runner log contains the emitted session id (more reliable than `opencode session list`)
-    const waitForLogContains = async (logPath: string, text: string, timeoutMs = 60_000) => {
-      const start = Date.now()
-      while (Date.now() - start < timeoutMs) {
-        try {
-          const content = await fs.readFile(logPath, 'utf8')
-          if (content.includes(text)) return true
-        } catch {
-          // ignore until file exists
-        }
-        await delay(500)
-      }
-      return false
-    }
-
-    if (!run1.logFile || typeof run1.logFile !== 'string') {
-      throw new Error('Run record missing logFile; cannot verify opencode session output')
-    }
-
-    const logContains = await waitForLogContains(run1.logFile, run1.sessionId, 60_000)
-    if (!logContains) {
-      const sample = await fs.readFile(run1.logFile, 'utf8').catch(() => '')
-      console.error('[e2e] opencode run log (sample):', sample.slice(0, 2000))
-    }
-    expect(logContains).toBe(true)
+    const sessionData = await invokeOpencodeAdapter({ sessionDir: repoPath, sessionId: primarySessionId })
+    expect(sessionData.id).toBe(primarySessionId)
   }, 180_000)
 
   it('runs multi-agent session (persona) with real opencode', async () => {
@@ -268,20 +258,26 @@ describe('opencode real e2e', () => {
     })
     expect([200, 202]).toContain(startRes2.status)
     const startText2 = await startRes2.text()
-    let sessionId: string | null = null
+    let runId: string | null = null
+    let primarySessionId: string | null = null
     if (startRes2.status === 202) {
       const payload = JSON.parse(startText2)
-      sessionId = payload?.run?.sessionId ?? null
+      const sessions = extractRunSessionIds(payload?.run)
+      primarySessionId = sessions[0] ?? null
+      runId = payload?.run?.id ?? null
     } else if (startRes2.status === 200) {
       try {
         const payload = JSON.parse(startText2)
-        sessionId = payload?.run?.sessionId ?? payload?.session?.id ?? null
+        const sessions = extractRunSessionIds(payload?.run)
+        primarySessionId = sessions[0] ?? payload?.session?.id ?? null
+        runId = payload?.run?.id ?? null
       } catch {
-        sessionId = null
+        primarySessionId = null
+        runId = null
       }
     }
-    if (!sessionId) throw new Error('Unable to determine sessionId for multi-agent run')
-    console.log('[e2e] multi-agent sessionId:', sessionId)
+    if (!runId) throw new Error('Unable to determine runId for multi-agent run')
+    console.log('[e2e] multi-agent runId:', runId, 'primary session:', primarySessionId)
 
     // Verify persona file was copied into the workspace
     const copiedPersonaPath = path.join(repoPath, '.opencode', 'agent', 'multi-agent.md')
@@ -308,7 +304,7 @@ describe('opencode real e2e', () => {
     const seen = { worker: false, verifier: false }
     const sessionStart = Date.now()
     while (Date.now() - sessionStart < 160_000) {
-      const detailRes = await fetch(`${baseUrl}/api/coding-agent/sessions/${encodeURIComponent(sessionId)}`, {
+      const detailRes = await fetch(`${baseUrl}/api/coding-agent/sessions/${encodeURIComponent(runId)}`, {
         agent
       })
       if (detailRes.status === 200) {

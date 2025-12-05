@@ -114,8 +114,8 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
   const runId = options.runID ?? `run-${Date.now()}`
 
   if (!hasRunMeta(runId, directory)) {
-    const workerSession = await createSession(directory)
-    const verifierSession = await createSession(directory)
+    const workerSession = await createSession(directory, { name: `${runId}-worker` })
+    const verifierSession = await createSession(directory, { name: `${runId}-verifier` })
     const agents = [
       { role: 'worker', sessionId: workerSession.id },
       { role: 'verifier', sessionId: verifierSession.id }
@@ -139,10 +139,10 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
   if (!workerSession) throw new Error(`Worker session not found: ${workerSessionID}`)
   if (!verifierSession) throw new Error(`Verifier session not found: ${verifierSessionID}`)
 
-  const result = new Promise<AgentLoopResult>(async (resolve) => {
+  const result: Promise<AgentLoopResult> = (async (): Promise<AgentLoopResult> => {
     const rounds: ConversationRound[] = []
 
-    async function invokeVerifier(args: {
+    const invokeVerifier = async (args: {
       model: string
       session: Session
       userInstructions: string
@@ -151,7 +151,7 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
       onStream?: AgentStreamCallback
       runId: string
       directory: string
-    }): Promise<VerifierTurn> {
+    }): Promise<VerifierTurn> => {
       const query = buildVerifierPrompt(args.userInstructions, args.workerTurn, args.round)
       const { raw, parsed } = await invokeStructuredJsonCall({
         role: 'verifier',
@@ -217,32 +217,39 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
       rounds.push({ worker: workerTurn, verifier: verifierTurn })
 
       if (verifierTurn.parsed.verdict === 'approve') {
-        resolve({
+        return {
           outcome: 'approved',
           reason: verifierTurn.parsed.critique || 'Verifier approved the work',
           bootstrap,
           rounds
-        })
+        }
       }
 
       if (verifierTurn.parsed.verdict === 'fail') {
-        resolve({
+        return {
           outcome: 'failed',
           reason: verifierTurn.parsed.critique || 'Verifier rejected the work',
           bootstrap,
           rounds
-        })
+        }
       }
 
       pendingInstructions = verifierTurn.parsed.instructions || pendingInstructions
       latestCritique = verifierTurn.parsed.critique
     }
 
-    resolve({
+    return {
       outcome: 'max-rounds',
       reason: `Verifier never approved within ${maxRounds} rounds`,
       bootstrap,
       rounds
+    }
+  })()
+
+  result.catch((error) => {
+    console.error('[agent] multi-agent loop failed', {
+      runId,
+      error: error instanceof Error ? { message: error.message, stack: error.stack } : error
     })
   })
 

@@ -7,7 +7,15 @@ export default defineConfig({
     fileParallelism: false,
     watch: false,
     passWithNoTests: true,
-    exclude: ['node_modules/**', 'dist/**', 'external/**', '**/.{tmp,temp}/**', '**/.tmp/**', '**/.tests/**'],
+    exclude: [
+      'node_modules/**',
+      'serve/node_modules/**',
+      'dist/**',
+      'external/**',
+      '**/.{tmp,temp}/**',
+      '**/.tmp/**',
+      '**/.tests/**'
+    ],
     environment: 'node',
     environmentMatchGlobs: [
       ['web/**', 'jsdom'],

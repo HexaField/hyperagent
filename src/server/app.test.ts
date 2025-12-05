@@ -1410,7 +1410,13 @@ describe('opencode session endpoints', () => {
     // persist a minimal RunMeta file so the session detail lookup succeeds
     const metaDir = metaDirectory(workspacePath)
     await fs.mkdir(metaDir, { recursive: true })
-    const runMeta = { id: runId, agents: [], log: [], createdAt: timestamps.createdAt, updatedAt: timestamps.updatedAt }
+    const runMeta = {
+      id: runId,
+      agents: [],
+      log: [],
+      createdAt: timestamps.createdAt,
+      updatedAt: timestamps.updatedAt
+    }
     await fs.writeFile(path.join(metaDir, `${runId}.json`), JSON.stringify(runMeta, null, 2), 'utf8')
 
     try {
@@ -1456,7 +1462,13 @@ describe('opencode session endpoints', () => {
     // create a minimal run meta so the session id is known to the server
     const metaDir = metaDirectory(workspacePath)
     await fs.mkdir(metaDir, { recursive: true })
-    const runMeta = { id: runId, agents: [], log: [], createdAt: timestamps.createdAt, updatedAt: timestamps.updatedAt }
+    const runMeta = {
+      id: runId,
+      agents: [],
+      log: [],
+      createdAt: timestamps.createdAt,
+      updatedAt: timestamps.updatedAt
+    }
     await fs.writeFile(path.join(metaDir, `${runId}.json`), JSON.stringify(runMeta, null, 2), 'utf8')
 
     try {

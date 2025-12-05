@@ -46,6 +46,7 @@ export async function invokeStructuredJsonCall<T>(options: {
         payload: {
           attempt,
           prompt,
+          raw,
           response: response.parts
         }
       },

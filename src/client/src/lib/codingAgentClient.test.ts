@@ -20,7 +20,7 @@ describe('coding agent client helpers', () => {
   })
 
   it('starts and kills sessions', async () => {
-    fetchJsonMock.mockResolvedValue({ run: { sessionId: 'ses_test' } })
+    fetchJsonMock.mockResolvedValue({ run: { id: 'ses_test', agents: [], log: [], createdAt: 'now', updatedAt: 'now' } })
     await startCodingAgentRun({ workspacePath: '/repo', prompt: 'Hello' })
     expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions', {
       method: 'POST',
@@ -29,7 +29,7 @@ describe('coding agent client helpers', () => {
     })
 
     // include personaId when provided
-    fetchJsonMock.mockResolvedValue({ run: { sessionId: 'ses_test2' } })
+    fetchJsonMock.mockResolvedValue({ run: { id: 'ses_test2', agents: [], log: [], createdAt: 'now', updatedAt: 'now' } })
     await startCodingAgentRun({ workspacePath: '/repo', prompt: 'Hello', personaId: 'senior-engineer' })
     expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions', {
       method: 'POST',

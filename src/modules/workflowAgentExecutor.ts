@@ -2,6 +2,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import { parseFrontmatter } from '../server/modules/workspaceSessions/personas'
 import { runVerifierWorkerLoop, type AgentLoopResult, type AgentStreamCallback } from './agent/multi-agent'
+import type { AgentRunResponse } from './agent/agent'
 import type { AgentExecutor, AgentExecutorArgs, AgentExecutorResult } from './workflows'
 
 export type AgentWorkflowExecutorOptions = {
@@ -32,7 +33,7 @@ export function createAgentWorkflowExecutor(options: AgentWorkflowExecutorOption
         sessionDir,
         onStream
       })
-      const loopResult = await loopResponse.result
+      const loopResult = await resolveLoopResult(loopResponse)
       const shouldCommit = loopResult.outcome === 'approved'
       const logsPath = await detectLogsPath(sessionDir)
       return {
@@ -45,6 +46,19 @@ export function createAgentWorkflowExecutor(options: AgentWorkflowExecutorOption
       return await buildFallbackAgentResult({ sessionDir, userInstructions, cause: error })
     }
   }
+}
+
+async function resolveLoopResult(
+  loopResponse: AgentRunResponse<AgentLoopResult> | AgentLoopResult
+): Promise<AgentLoopResult> {
+  if (isAgentRunResponse(loopResponse)) {
+    return await loopResponse.result
+  }
+  return loopResponse
+}
+
+function isAgentRunResponse(value: unknown): value is AgentRunResponse<AgentLoopResult> {
+  return typeof value === 'object' && value !== null && 'result' in value
 }
 
 function buildStepResultFromLoop(

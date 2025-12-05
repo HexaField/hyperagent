@@ -4,12 +4,20 @@ let opencodeServer: {
   url: string
   close(): void
 } | null = null
+const opencodeClients: { [directory: string]: OpencodeClient } = {}
+
+const resetOpencodeClients = () => {
+  for (const key of Object.keys(opencodeClients)) {
+    delete opencodeClients[key]
+  }
+}
 
 export const closeOpencodeServer = () => {
   if (opencodeServer) {
     opencodeServer.close()
     opencodeServer = null
   }
+  resetOpencodeClients()
 }
 
 // opencode freaks out if you try to import it statically
@@ -26,11 +34,19 @@ export const getOpencodeServer = async (): Promise<{
 }> => {
   if (opencodeServer) return opencodeServer
   const sdk = await getSdk()
-  opencodeServer = await sdk.createOpencodeServer()
+  const preferredPort = process.env.OPENCODE_SERVER_PORT
+  const port = preferredPort && Number.isFinite(Number(preferredPort)) ? Number(preferredPort) : 0
+  const server = await sdk.createOpencodeServer({ port })
+  opencodeServer = {
+    url: server.url,
+    close: () => {
+      server.close()
+      opencodeServer = null
+      resetOpencodeClients()
+    }
+  }
   return opencodeServer
 }
-
-const opencodeClients: { [directory: string]: OpencodeClient } = {}
 
 /**
  * Creates and returns an Opencode client connected to the singleton server.
@@ -39,6 +55,9 @@ const opencodeClients: { [directory: string]: OpencodeClient } = {}
  * @returns An instance of OpencodeClient.
  */
 export const getOpencodeClient = async (directory: string): Promise<OpencodeClient> => {
+  if (!opencodeServer) {
+    resetOpencodeClients()
+  }
   if (opencodeClients[directory]) return opencodeClients[directory]
   const server = await getOpencodeServer()
   const sdk = await getSdk()
@@ -46,7 +65,12 @@ export const getOpencodeClient = async (directory: string): Promise<OpencodeClie
     baseUrl: server.url,
     directory: directory
   })
+  opencodeClients[directory] = opencode
   return opencode
+}
+
+type CreateSessionOptions = {
+  name?: string
 }
 
 /**
@@ -55,13 +79,14 @@ export const getOpencodeClient = async (directory: string): Promise<OpencodeClie
  * @param directory - The directory for which the session is created.
  * @returns A Promise that resolves to a Session object.
  */
-export const createSession = async (directory: string): Promise<Session> => {
+export const createSession = async (directory: string, options: CreateSessionOptions = {}): Promise<Session> => {
   const opencode = await getOpencodeClient(directory)
 
   const session = await opencode.session.create({
     query: {
       directory
-    }
+    },
+    body: options.name ? { title: options.name } : undefined
   })
 
   if (!session?.data!) throw new Error('Failed to create Opencode session')

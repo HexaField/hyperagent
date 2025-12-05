@@ -4,9 +4,10 @@ import path from 'path'
 import { runVerifierWorkerLoop } from '../../../modules/agent/multi-agent'
 import { runSingleAgentLoop } from '../../../modules/agent/single-agent'
 import { loadRunMeta, metaDirectory, type RunMeta } from '../../../modules/provenance/provenance'
+import { ensureProviderConfig } from '../../../modules/workflowAgentExecutor'
 import { DEFAULT_CODING_AGENT_MODEL } from '../../core/config'
 import { readPersona } from './personas'
-import { normalizeWorkspacePath, readWorkspaceRuns, safeLoadRun } from './routesShared'
+import { normalizeWorkspacePath, readWorkspaceRuns, rememberWorkspacePath, safeLoadRun } from './routesShared'
 import type { WorkspaceSessionsDeps } from './routesTypes'
 
 const MULTI_AGENT_PERSONA_ID = 'multi-agent'
@@ -43,6 +44,7 @@ const createListSessionsHandler = (): RequestHandler => async (req, res) => {
       res.json({ runs: [] as RunMeta[] })
       return
     }
+    rememberWorkspacePath(workspacePath)
     const runs = readWorkspaceRuns(workspacePath)
     res.json({ runs })
   } catch (error) {
@@ -58,6 +60,7 @@ const createListRunsHandler = (): RequestHandler => async (req, res) => {
       res.json({ runs: [] as RunMeta[] })
       return
     }
+    rememberWorkspacePath(workspacePath)
     const runs = readWorkspaceRuns(workspacePath)
     res.json({ runs })
   } catch (error) {
@@ -81,6 +84,7 @@ const createStartSessionHandler = ({ logSessions, logSessionsError }: ReturnType
       return
     }
     const normalizedWorkspace = workspacePath.trim()
+    rememberWorkspacePath(normalizedWorkspace)
 
     if (personaId) {
       try {
@@ -101,6 +105,10 @@ const createStartSessionHandler = ({ logSessions, logSessionsError }: ReturnType
       const trimmedPrompt = prompt.trim()
 
       logSessions('Starting coding agent run', { workspacePath: normalizedWorkspace, model: resolvedModel })
+
+      if (personaId) {
+        await ensureProviderConfig(normalizedWorkspace, 'opencode', personaId)
+      }
 
       if (!multiAgentMode) {
         const { runId } = await runSingleAgentLoop({
@@ -127,10 +135,12 @@ const createStartSessionHandler = ({ logSessions, logSessionsError }: ReturnType
     }
   }
 
+const resolveRunId = (params: Record<string, string | undefined>) => params.runId ?? params.sessionId ?? null
+
 const createKillSessionHandler = (): RequestHandler => async (req, res) => {
-  const sessionId = req.params.sessionId
-  if (!sessionId) {
-    res.status(400).json({ error: 'sessionId is required' })
+  const runId = resolveRunId(req.params)
+  if (!runId) {
+    res.status(400).json({ error: 'runId is required' })
     return
   }
   try {
@@ -143,9 +153,9 @@ const createKillSessionHandler = (): RequestHandler => async (req, res) => {
 
 const createPostMessageHandler = ({ logSessions, logSessionsError }: ReturnType<typeof createLogger>): RequestHandler =>
   async (req, res) => {
-    const sessionId = req.params.sessionId
-    if (!sessionId) {
-      res.status(400).json({ error: 'sessionId is required' })
+    const runId = resolveRunId(req.params)
+    if (!runId) {
+      res.status(400).json({ error: 'runId is required' })
       return
     }
     const body = req.body ?? {}
@@ -160,8 +170,9 @@ const createPostMessageHandler = ({ logSessions, logSessionsError }: ReturnType<
       const workspacePath = normalizeWorkspacePath(req.query.workspacePath) ?? process.cwd()
 
       const resolvedModelId = requestedModelId ?? DEFAULT_CODING_AGENT_MODEL
+      rememberWorkspacePath(workspacePath)
       logSessions('Posting coding agent message (opencode prompt)', {
-        sessionId,
+        sessionId: runId,
         modelId: resolvedModelId,
         role,
         workspacePath
@@ -170,7 +181,7 @@ const createPostMessageHandler = ({ logSessions, logSessionsError }: ReturnType<
         const metaDir = metaDirectory(workspacePath)
         let isMultiAgent = false
         try {
-          const filePath = path.join(metaDir, `${sessionId}.json`)
+          const filePath = path.join(metaDir, `${runId}.json`)
           if (fs.existsSync(filePath)) {
             const raw = fs.readFileSync(filePath, 'utf-8')
             const parsed = JSON.parse(raw) as RunMeta
@@ -187,47 +198,47 @@ const createPostMessageHandler = ({ logSessions, logSessionsError }: ReturnType<
           ;(async () => {
             try {
               await runVerifierWorkerLoop({
-                runID: sessionId,
+                runID: runId,
                 userInstructions: text,
                 model: resolvedModelId,
                 sessionDir: workspacePath
               })
             } catch (err) {
-              logSessionsError('Multi-agent prompt failed', err, { sessionId, modelId: resolvedModelId })
+              logSessionsError('Multi-agent prompt failed', err, { sessionId: runId, modelId: resolvedModelId })
             }
           })()
         } else {
           ;(async () => {
             try {
               await runSingleAgentLoop({
-                runID: sessionId,
+                runID: runId,
                 userInstructions: text,
                 model: resolvedModelId,
                 sessionDir: workspacePath
               })
             } catch (err) {
-              logSessionsError('Single-agent prompt failed', err, { sessionId, modelId: resolvedModelId })
+              logSessionsError('Single-agent prompt failed', err, { sessionId: runId, modelId: resolvedModelId })
             }
           })()
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Provider invocation failed'
-        logSessionsError('Opencode prompt failed', err, { sessionId, modelId: resolvedModelId })
+        logSessionsError('Opencode prompt failed', err, { sessionId: runId, modelId: resolvedModelId })
         res.status(500).json({ error: message })
         return
       }
 
       const fallbackRun: RunMeta = {
-        id: sessionId,
+        id: runId,
         agents: [],
         log: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       }
-      const run = safeLoadRun(sessionId, workspacePath) ?? fallbackRun
+      const run = safeLoadRun(runId, workspacePath) ?? fallbackRun
       res.status(201).json({ run })
     } catch (error) {
-      logSessionsError('Failed to post coding agent message', error, { sessionId })
+      logSessionsError('Failed to post coding agent message', error, { sessionId: runId })
       const message = error instanceof Error ? error.message : 'Failed to post coding agent message'
       res.status(500).json({ error: message })
     }

@@ -76,7 +76,7 @@ describe('workspace sessions routes — multi-agent opencode integration', () =>
         }
         const raw = await fsp.readFile(file, 'utf8')
         const parsed = JSON.parse(raw) as RunMeta
-        const entry = parsed.log.find((e) => e.role === role && e.payload && (e.payload.rawResponse || e.payload.raw))
+        const entry = parsed.log.find((e) => e.role === role && e.payload && e.payload.raw)
         if (entry) return entry
       } catch {
         // ignore transient errors
@@ -102,7 +102,7 @@ describe('workspace sessions routes — multi-agent opencode integration', () =>
     expect(typeof sessionId).toBe('string')
 
     const workerEntry = await waitForRoleLog(sessionDir, sessionId, 'worker')
-    const workerText = workerEntry.payload?.rawResponse ?? workerEntry.payload?.raw
+    const workerText = workerEntry.payload?.raw
     expect(typeof workerText).toBe('string')
     expect(workerText.toLowerCase().startsWith('snapshot:')).toBe(false)
     // workerText may be structured JSON or human text; accept either but
@@ -118,7 +118,7 @@ describe('workspace sessions routes — multi-agent opencode integration', () =>
     }
 
     const verifierEntry = await waitForRoleLog(sessionDir, sessionId, 'verifier')
-    const verifierText = verifierEntry.payload?.rawResponse ?? verifierEntry.payload?.raw
+    const verifierText = verifierEntry.payload?.raw
     expect(typeof verifierText).toBe('string')
     expect(verifierText.toLowerCase().startsWith('snapshot:')).toBe(false)
     let verifierParsed: any = null

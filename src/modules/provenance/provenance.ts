@@ -3,6 +3,8 @@ import path from 'path'
 
 export const META_FOLDER = '.hyperagent'
 
+const normalizeRunId = (runId: string) => path.basename(path.resolve(runId))
+
 export function metaDirectory(directory: string): string {
   const dir = path.join(directory, META_FOLDER)
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
@@ -11,7 +13,7 @@ export function metaDirectory(directory: string): string {
 
 function metaFile(runId: string, directory: string) {
   const dir = metaDirectory(directory)
-  const idForFile = path.basename(path.resolve(runId))
+  const idForFile = normalizeRunId(runId)
   return path.join(dir, `${idForFile}.json`)
 }
 
@@ -41,8 +43,9 @@ export function createRunMeta(
   runId: string,
   agents: Array<{ role: string; sessionId: string }>
 ): RunMeta {
+  const normalizedId = normalizeRunId(runId)
   const runMeta: RunMeta = {
-    id: path.basename(runId),
+    id: normalizedId,
     agents: agents,
     log: [],
     createdAt: new Date().toISOString(),
@@ -57,8 +60,15 @@ export function loadRunMeta(runId: string, directory: string): RunMeta {
   if (!fs.existsSync(file)) throw new Error(`Run meta file does not exist: ${file}`)
   const raw = fs.readFileSync(file, 'utf-8')
   const parsed = JSON.parse(raw)
-  parsed.log = Array.isArray(parsed.log) ? parsed.log : []
-  return parsed
+  const normalizedId = typeof parsed.id === 'string' && parsed.id.length ? parsed.id : normalizeRunId(runId)
+  const agents = Array.isArray(parsed.agents) ? parsed.agents : []
+  return {
+    id: normalizedId,
+    agents,
+    log: Array.isArray(parsed.log) ? parsed.log : [],
+    createdAt: typeof parsed.createdAt === 'string' ? parsed.createdAt : new Date().toISOString(),
+    updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date().toISOString()
+  }
 }
 
 export function saveRunMeta(meta: RunMeta, runId: string, directory: string) {

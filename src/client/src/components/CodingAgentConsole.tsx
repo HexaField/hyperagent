@@ -604,6 +604,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     if (!currentId) return null
     return sessionsById().get(currentId) ?? null
   })
+  const selectedRunSessionIds = createMemo(() => collectRunSessionIds(selectedRun()))
   const messages = createMemo<CodingAgentMessage[]>((prev) => {
     if (draftingSession()) return []
     const run = selectedRun()
@@ -875,31 +876,53 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
             }
           >
             {(run) => (
-              <div class="flex items-center gap-3">
-                <h3 class={`text-base font-semibold text-[var(--text)] ${isMobileVariant ? 'truncate' : ''}`}>
-                  {run.id}
-                </h3>
-                <Show when={selectedSessionPersonaDetail()} keyed>
-                  {(pd) => (
-                    <div class="ml-3 text-xs text-[var(--text-muted)]">
-                      Persona: {String(pd.frontmatter?.title ?? pd.id)}{' '}
-                      {pd.frontmatter?.model ? `· ${String(pd.frontmatter.model)}` : ''}
-                    </div>
-                  )}
-                </Show>
-                <Show when={!isMobileVariant}>
-                  <Show when={selectedSessionMeta()?.state} keyed>
-                    {(state) => (
-                      <span class={`rounded-full px-2 py-0.5 text-xs font-semibold ${sessionStateBadgeClass(state)}`}>
-                        {sessionStateLabel(state)}
-                      </span>
+              <div class="flex flex-col gap-2">
+                <div class="flex flex-wrap items-center gap-3">
+                  <h3 class={`text-base font-semibold text-[var(--text)] ${isMobileVariant ? 'truncate' : ''}`}>
+                    {run.id}
+                  </h3>
+                  <Show when={selectedSessionPersonaDetail()} keyed>
+                    {(pd) => (
+                      <div class="ml-3 text-xs text-[var(--text-muted)]">
+                        Persona: {String(pd.frontmatter?.title ?? pd.id)}{' '}
+                        {pd.frontmatter?.model ? `· ${String(pd.frontmatter.model)}` : ''}
+                      </div>
                     )}
                   </Show>
-                </Show>
-                <Show when={isMobileVariant}>
-                  <Show when={selectedSessionMeta()?.state} keyed>
-                    {(state) => <span class={`${sessionStateDotClass(state)} ml-2`} />}
+                  <Show when={!isMobileVariant}>
+                    <Show when={selectedSessionMeta()?.state} keyed>
+                      {(state) => (
+                        <span class={`rounded-full px-2 py-0.5 text-xs font-semibold ${sessionStateBadgeClass(state)}`}>
+                          {sessionStateLabel(state)}
+                        </span>
+                      )}
+                    </Show>
                   </Show>
+                  <Show when={isMobileVariant}>
+                    <Show when={selectedSessionMeta()?.state} keyed>
+                      {(state) => <span class={`${sessionStateDotClass(state)} ml-2`} />}
+                    </Show>
+                  </Show>
+                </div>
+                <Show
+                  when={selectedRunSessionIds().length > 0}
+                  fallback={<p class="text-xs text-[var(--text-muted)]">No opencode sessions linked yet.</p>}
+                >
+                  <div class="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
+                    <span class="font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">
+                      Opencode sessions
+                    </span>
+                    <For each={selectedRunSessionIds()}>
+                      {(sessionId) => (
+                        <code
+                          class="rounded-full border border-[var(--border)] bg-[var(--bg-muted)] px-2 py-0.5 font-mono text-[var(--text)]"
+                          title={sessionId}
+                        >
+                          {formatSessionIdDisplay(sessionId)}
+                        </code>
+                      )}
+                    </For>
+                  </div>
                 </Show>
               </div>
             )}
@@ -1096,6 +1119,29 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
               <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">Session settings</p>
               <h3 class="text-lg font-semibold text-[var(--text)]">{target.title || target.id}</h3>
               <p class="text-xs text-[var(--text-muted)]">ID: {target.id}</p>
+              {(() => {
+                const ids = collectRunSessionIds(target.run)
+                if (!ids.length) {
+                  return <p class="text-xs text-[var(--text-muted)]">No opencode sessions linked yet.</p>
+                }
+                return (
+                  <div class="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
+                    <span class="font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">
+                      Opencode sessions
+                    </span>
+                    <For each={ids}>
+                      {(sessionId) => (
+                        <code
+                          class="rounded-full border border-[var(--border)] bg-[var(--bg-muted)] px-2 py-0.5 font-mono text-[var(--text)]"
+                          title={sessionId}
+                        >
+                          {formatSessionIdDisplay(sessionId)}
+                        </code>
+                      )}
+                    </For>
+                  </div>
+                )
+              })()}
             </div>
             <div class="space-y-4">
               {/* Provider selection removed — model-only settings */}
@@ -1462,6 +1508,23 @@ function latestModelId(run: RunMeta | null | undefined): string | null {
 function deriveSessionState(run: RunMeta | null | undefined): SessionState {
   if (!run) return 'waiting'
   return Array.isArray(run.log) && run.log.length > 0 ? 'running' : 'waiting'
+}
+
+function collectRunSessionIds(run: RunMeta | null | undefined): string[] {
+  if (!run || !Array.isArray(run.agents)) return []
+  const ids: string[] = []
+  for (const agent of run.agents) {
+    if (!agent) continue
+    const value = typeof agent.sessionId === 'string' ? agent.sessionId.trim() : ''
+    if (!value || ids.includes(value)) continue
+    ids.push(value)
+  }
+  return ids
+}
+
+function formatSessionIdDisplay(value: string): string {
+  if (value.length <= 12) return value
+  return `${value.slice(0, 6)}…${value.slice(-4)}`
 }
 
 function sessionStateLabel(state: SessionState): string {

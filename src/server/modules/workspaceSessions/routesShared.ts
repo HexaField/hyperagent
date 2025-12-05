@@ -1,6 +1,28 @@
 import fs from 'fs'
 import path from 'path'
-import { loadRunMeta, metaDirectory, type RunMeta } from '../../../modules/provenance/provenance'
+import { hasRunMeta, loadRunMeta, metaDirectory, type RunMeta } from '../../../modules/provenance/provenance'
+
+const knownWorkspaces = new Set<string>()
+
+export const rememberWorkspacePath = (workspacePath: string | null | undefined) => {
+  if (!workspacePath) return
+  const normalized = workspacePath.trim()
+  if (!normalized.length) return
+  knownWorkspaces.add(normalized)
+}
+
+export const findWorkspaceForRun = (runId: string): string | null => {
+  for (const workspace of knownWorkspaces) {
+    try {
+      if (hasRunMeta(runId, workspace)) {
+        return workspace
+      }
+    } catch {
+      // ignore and continue searching
+    }
+  }
+  return null
+}
 
 export const normalizeWorkspacePath = (value: unknown): string | null => {
   if (typeof value !== 'string') return null

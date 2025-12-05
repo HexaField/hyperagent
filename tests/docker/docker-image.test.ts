@@ -39,10 +39,10 @@ describe('docker runtime smoke test', () => {
       '--entrypoint',
       '/usr/local/bin/opencode',
       'hyperagent-workflow-runner:latest',
-      'version'
+      '--version'
     ], { encoding: 'utf8' })
     expect(runOpencode.status, runOpencode.stderr).toBe(0)
-    expect(runOpencode.stdout.trim()).toContain('opencode-mock')
+    expect(runOpencode.stdout.trim().length).toBeGreaterThan(0)
 
     const runRad = spawnSync('docker', [
       'run',

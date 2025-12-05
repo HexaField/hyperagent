@@ -1,7 +1,38 @@
 import { Router, type RequestHandler } from 'express'
-import { hasRunMeta, loadRunMeta } from '../../../modules/provenance/provenance'
-import { normalizeWorkspacePath } from './routesShared'
+import { hasRunMeta, loadRunMeta, type RunMeta } from '../../../modules/provenance/provenance'
+import { findWorkspaceForRun, normalizeWorkspacePath } from './routesShared'
 import type { WorkspaceSessionsDeps } from './routesTypes'
+
+type RunMessage = {
+  id: string
+  role: string
+  roleLabel: string
+  modelId: string | null
+  createdAt: string
+  text?: string
+  payload: unknown
+}
+
+const extractMessageText = (payload: unknown): string | undefined => {
+  if (typeof payload === 'string') return payload
+  if (payload && typeof payload === 'object' && typeof (payload as any).text === 'string') {
+    return (payload as any).text
+  }
+  return undefined
+}
+
+const buildMessagesFromRun = (run: RunMeta): RunMessage[] => {
+  const log = Array.isArray(run.log) ? run.log : []
+  return log.map((entry, index) => ({
+    id: entry.entryId || `${run.id}-${index}`,
+    role: entry.role ?? 'agent',
+    roleLabel: entry.role ?? 'agent',
+    modelId: entry.model ?? null,
+    createdAt: entry.createdAt,
+    text: extractMessageText(entry.payload),
+    payload: entry.payload ?? null
+  }))
+}
 
 const createGetSessionHandler = (): RequestHandler => async (req, res) => {
   const runId = req.params.runId
@@ -9,10 +40,13 @@ const createGetSessionHandler = (): RequestHandler => async (req, res) => {
     res.status(400).json({ error: 'runId is required' })
     return
   }
-  const workspacePath = normalizeWorkspacePath(req.query.workspacePath)
+  let workspacePath = normalizeWorkspacePath(req.query.workspacePath)
   if (!workspacePath) {
-    res.status(400).json({ error: 'workspacePath query parameter is required' })
-    return
+    workspacePath = findWorkspaceForRun(runId)
+    if (!workspacePath) {
+      res.status(400).json({ error: 'workspacePath query parameter is required' })
+      return
+    }
   }
 
   if (!hasRunMeta(runId, workspacePath)) {
@@ -22,7 +56,8 @@ const createGetSessionHandler = (): RequestHandler => async (req, res) => {
 
   try {
     const run = loadRunMeta(runId, workspacePath)
-    res.json(run)
+    const messages = buildMessagesFromRun(run)
+    res.json({ ...run, messages })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load coding agent session'
     res.status(500).json({ error: message })
