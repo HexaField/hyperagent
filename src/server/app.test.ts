@@ -22,6 +22,7 @@ import type { LiveTerminalSession, TerminalModule } from '../../src/modules/term
 import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from '../../src/modules/workflowRunnerGateway'
 import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../modules/agent/multi-agent'
 import { createServerApp, type CreateServerOptions } from './app'
+import type { CodingAgentSessionDetail, CodingAgentSessionSummary } from '../interfaces/core/codingAgent'
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
 
@@ -82,31 +83,125 @@ type LocalOpencodeStorage = {
 
 function createOpencodeStorage(opts: { rootDir?: string }): LocalOpencodeStorage {
   const rootDir = opts?.rootDir ?? process.env.OPENCODE_STORAGE_ROOT ?? './.opencode'
+
+  // Support both legacy `runs/*.json` layout and the opencode SDK storage layout
   const runsDir = path.join(rootDir, 'runs')
+  const storageSessionDir = path.join(rootDir, 'storage', 'session')
 
-  async function ensureRunsDir(): Promise<void> {
-    try {
-      await fs.mkdir(runsDir, { recursive: true })
-    } catch {
-      // ignore
-    }
-  }
-
-  async function listRunFiles(): Promise<string[]> {
-    await ensureRunsDir()
+  async function listSessionsFromRuns(): Promise<CodingAgentSessionSummary[]> {
     try {
       const entries = await fs.readdir(runsDir, { withFileTypes: true })
-      return entries.filter((e) => e.isFile() && e.name.endsWith('.json')).map((e) => path.join(runsDir, e.name))
+      const files = entries.filter((e) => e.isFile() && e.name.endsWith('.json')).map((e) => path.join(runsDir, e.name))
+      const sessions: CodingAgentSessionSummary[] = []
+      for (const file of files) {
+        try {
+          const raw = await fs.readFile(file, 'utf8')
+          const parsed = JSON.parse(raw)
+          if (parsed && parsed.session) sessions.push(parsed.session as CodingAgentSessionSummary)
+        } catch {}
+      }
+      return sessions.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
     } catch {
       return []
     }
   }
 
-  async function readRunFile(filePath: string): Promise<CodingAgentSessionDetail | null> {
+  async function listSessionsFromStorageDir(): Promise<CodingAgentSessionSummary[]> {
     try {
-      const raw = await fs.readFile(filePath, 'utf8')
-      const parsed = JSON.parse(raw)
-      return parsed as CodingAgentSessionDetail
+      const projectDirs = await fs.readdir(storageSessionDir, { withFileTypes: true })
+      const sessions: CodingAgentSessionSummary[] = []
+      for (const proj of projectDirs) {
+        if (!proj.isDirectory()) continue
+        const projPath = path.join(storageSessionDir, proj.name)
+        const files = await fs.readdir(projPath)
+        for (const f of files) {
+          if (!f.endsWith('.json')) continue
+          try {
+            const raw = await fs.readFile(path.join(projPath, f), 'utf8')
+            const parsed = JSON.parse(raw)
+            const summary: CodingAgentSessionSummary = {
+              id: parsed.id,
+              title: parsed.title ?? null,
+              workspacePath: parsed.directory ?? '',
+              projectId: parsed.projectID ?? parsed.projectId ?? proj.name,
+              createdAt: new Date((parsed.time?.created ?? Date.now())).toISOString(),
+              updatedAt: new Date((parsed.time?.updated ?? Date.now())).toISOString(),
+              summary: parsed.summary ?? { additions: 0, deletions: 0, files: 0 }
+            }
+            sessions.push(summary)
+          } catch {}
+        }
+      }
+      return sessions.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+    } catch {
+      return []
+    }
+  }
+
+  async function getSessionFromStorage(sessionId: string): Promise<CodingAgentSessionDetail | null> {
+    try {
+      let sessionMeta: any = null
+      const projectDirs = await fs.readdir(storageSessionDir, { withFileTypes: true })
+      for (const proj of projectDirs) {
+        if (!proj.isDirectory()) continue
+        const projPath = path.join(storageSessionDir, proj.name)
+        const candidate = path.join(projPath, `${sessionId}.json`)
+        try {
+          const raw = await fs.readFile(candidate, 'utf8')
+          sessionMeta = JSON.parse(raw)
+          break
+        } catch {}
+      }
+      if (!sessionMeta) return null
+      const summary: CodingAgentSessionSummary = {
+        id: sessionMeta.id,
+        title: sessionMeta.title ?? null,
+        workspacePath: sessionMeta.directory ?? '',
+        projectId: sessionMeta.projectID ?? sessionMeta.projectId ?? null,
+        createdAt: new Date((sessionMeta.time?.created ?? Date.now())).toISOString(),
+        updatedAt: new Date((sessionMeta.time?.updated ?? Date.now())).toISOString(),
+        summary: sessionMeta.summary ?? { additions: 0, deletions: 0, files: 0 }
+      }
+
+      const messagesDir = path.join(rootDir, 'storage', 'message', sessionId)
+      const partDirRoot = path.join(rootDir, 'storage', 'part')
+      const messages: any[] = []
+      try {
+        const msgFiles = await fs.readdir(messagesDir)
+        for (const mf of msgFiles) {
+          if (!mf.endsWith('.json')) continue
+          try {
+            const raw = await fs.readFile(path.join(messagesDir, mf), 'utf8')
+            const m = JSON.parse(raw)
+            const partsDir = path.join(partDirRoot, mf.replace('.json', ''))
+            const parts: any[] = []
+            try {
+              const partFiles = await fs.readdir(partsDir)
+              for (const pf of partFiles) {
+                if (!pf.endsWith('.json')) continue
+                try {
+                  const pr = JSON.parse(await fs.readFile(path.join(partsDir, pf), 'utf8'))
+                  const part: any = { id: pr.id, type: pr.type }
+                  if (pr.text) part.text = pr.text
+                  parts.push(part)
+                } catch {}
+              }
+            } catch {}
+            messages.push({
+              id: m.id,
+              role: m.role,
+              createdAt: new Date((m.time?.created ?? Date.now())).toISOString(),
+              completedAt: m.time?.completed ? new Date(m.time.completed).toISOString() : null,
+              modelId: m.modelID ?? null,
+              providerId: m.providerID ?? null,
+              text: parts.map((p) => p.text ?? '').join('\n'),
+              parts
+            })
+          } catch {}
+        }
+      } catch {}
+
+      return { session: summary, messages }
     } catch {
       return null
     }
@@ -115,21 +210,24 @@ function createOpencodeStorage(opts: { rootDir?: string }): LocalOpencodeStorage
   return {
     rootDir,
     listSessions: async ({ workspacePath } = {}) => {
-      const files = await listRunFiles()
-      const sessions: CodingAgentSessionSummary[] = []
-      for (const file of files) {
-        const detail = await readRunFile(file)
-        if (!detail) continue
-        const session = detail.session
-        if (workspacePath && session.workspacePath !== workspacePath) continue
-        sessions.push(session)
-      }
-      sessions.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-      return sessions
+      try {
+        const stat = await fs.stat(storageSessionDir)
+        if (stat && stat.isDirectory()) {
+          const sessions = await listSessionsFromStorageDir()
+          return workspacePath ? sessions.filter((s) => s.workspacePath === workspacePath) : sessions
+        }
+      } catch {}
+      return await listSessionsFromRuns()
     },
     getSession: async (sessionId: string) => {
-      const filePath = path.join(runsDir, `${sessionId}.json`)
-      return await readRunFile(filePath)
+      const detail = await getSessionFromStorage(sessionId)
+      if (detail) return detail
+      try {
+        const raw = await fs.readFile(path.join(runsDir, `${sessionId}.json`), 'utf8')
+        return JSON.parse(raw) as CodingAgentSessionDetail
+      } catch {
+        return null
+      }
     }
   }
 }
@@ -345,7 +443,7 @@ async function createIntegrationHarness(options?: {
   terminalModule?: TerminalModule
   publicOrigin?: string
   opencodeStorage?: LocalOpencodeStorage
-  opencodeRunner?: OpencodeRunner
+  opencodeRunner?: any
   opencodeCommandRunner?: CreateServerOptions['codingAgentCommandRunner']
   webSockets?: {
     WebSocket: typeof WebSocketType
@@ -1609,7 +1707,7 @@ describe('opencode session endpoints', () => {
   })
 })
 
-function createFakeOpencodeRunnerStub(): OpencodeRunner {
+function createFakeOpencodeRunnerStub(): any {
   const record = {
     id: 'ses_alpha',
     agents: [],

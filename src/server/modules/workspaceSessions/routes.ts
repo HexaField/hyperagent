@@ -129,6 +129,7 @@ export type WorkspaceSessionsDeps = {
     }) => Promise<RunMeta | Record<string, any>>
     killRun: (sessionId: string) => Promise<boolean>
   }
+  codingAgentCommandRunner?: (args: string[], opts?: { cwd?: string }) => Promise<{ stdout: string; stderr: string }>
 }
 
 /**
@@ -148,6 +149,7 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
   const codingAgentStorage =
     (deps as any).codingAgentStorage ??
     ({ rootDir: process.env.OPENCODE_STORAGE_ROOT, listSessions: async () => [], getSession: async () => null } as any)
+  const codingAgentCommandRunner = (deps as any).codingAgentCommandRunner ?? null
 
   // provide a simple in-process default runner when none is injected. This runner
   // starts either the single-agent or verifier-worker loop in the background and
@@ -314,10 +316,39 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
    * @returns An array of provider descriptions suitable for client display
    */
   const listCodingAgentProviders = async (): Promise<CodingAgentProvider[]> => {
+    // If an opencode CLI runner was injected, prefer to query it for available
+    // models so the UI can present an up-to-date list. Otherwise fall back to
+    // a conservative default model list.
+    if (codingAgentCommandRunner) {
+      try {
+        const result = await codingAgentCommandRunner(['models'])
+        const lines = (result.stdout ?? '')
+          .split(/\r?\n/)
+          .map((l: string) => l.trim())
+          .filter(Boolean)
+        const models = lines.map((m: string) => ({ id: m, label: formatCodingAgentModelLabel(m) }))
+        // Ensure the configured default model appears first in the list so
+        // the UI has a stable preferred selection regardless of provider
+        // CLI ordering.
+        const defaultIndex = models.findIndex((x: { id: string }) => x.id === DEFAULT_CODING_AGENT_MODEL)
+        if (defaultIndex === -1) {
+          models.unshift({ id: DEFAULT_CODING_AGENT_MODEL, label: formatCodingAgentModelLabel(DEFAULT_CODING_AGENT_MODEL) })
+        } else if (defaultIndex > 0) {
+          const [def] = models.splice(defaultIndex, 1)
+          models.unshift(def)
+        }
+        return [
+          { id: 'opencode', label: 'Opencode', defaultModelId: DEFAULT_CODING_AGENT_MODEL, models }
+        ]
+      } catch (err) {
+        // log and fallthrough to default list
+        logSessionsError('Failed to query opencode CLI for models', err)
+      }
+    }
     // Simplified provider listing: advertise only the built-in opencode provider
     return [
       {
-        id: CODING_AGENT_PROVIDER_ID,
+        id: 'opencode',
         label: 'Opencode',
         defaultModelId: DEFAULT_CODING_AGENT_MODEL,
         models: [{ id: DEFAULT_CODING_AGENT_MODEL, label: formatCodingAgentModelLabel(DEFAULT_CODING_AGENT_MODEL) }]
@@ -622,9 +653,17 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
         role
       })
       try {
-        // Use opencode directly to prompt the workspace session
-        const opSession = await createSession(existing.session.workspacePath)
-        await promptSession(opSession, [text], resolvedModelId)
+        // If a CLI runner override is available (in tests or alternate envs),
+        // prefer invoking the opencode CLI rather than starting an in-process
+        // opencode server. This keeps the server test harness deterministic.
+        if (codingAgentCommandRunner) {
+          const args = ['run', text, '--session', sessionId, '--format', 'json', '--model', resolvedModelId]
+          await codingAgentCommandRunner(args, { cwd: existing.session.workspacePath })
+        } else {
+          // Use opencode directly to prompt the workspace session
+          const opSession = await createSession(existing.session.workspacePath)
+          await promptSession(opSession, [text], resolvedModelId)
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Provider invocation failed'
         logSessionsError('Opencode prompt failed', err, {

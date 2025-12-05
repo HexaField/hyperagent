@@ -1088,7 +1088,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     wrapAsync,
     ensureWorkspaceDirectory,
     codingAgentRunner: options.codingAgentRunner,
-    codingAgentStorage: options.codingAgentStorage
+    codingAgentStorage: options.codingAgentStorage,
+    codingAgentCommandRunner: options.codingAgentCommandRunner
   })
 
   const workspaceNarratorRouter = createWorkspaceNarratorRouter({
