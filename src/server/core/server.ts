@@ -129,11 +129,9 @@ export type CreateServerOptions = {
   corsOrigin?: string
   webSockets?: WebSocketBindings
   narratorRelay?: NarratorRelay
-  // optional coding agent integrations (injected runner/storage)
-  codingAgentRunner?: any
-  codingAgentStorage?: any
-  // optional command-runner override for provider CLIs (e.g. opencode)
-  codingAgentCommandRunner?: ((args: string[], opts?: { cwd?: string }) => Promise<{ stdout: string; stderr: string }>) | any
+  // NOTE: old injected coding agent runner/storage/command-runner
+  // options have been removed. The router now uses the opencode
+  // runtime and provenance helpers directly.
 }
 
 export type ServerInstance = {
@@ -1087,7 +1085,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   const workspaceSessionsRouter = createWorkspaceSessionsRouter({
     wrapAsync,
     ensureWorkspaceDirectory,
-    // routes call agent/opencode/provenance helpers directly
+    // No injected coding-agent runner/storage supported; router uses
+    // opencode runtime and provenance directly.
   })
 
   const workspaceNarratorRouter = createWorkspaceNarratorRouter({

@@ -3,6 +3,7 @@ import { Router, type RequestHandler } from 'express'
 // filesystem logging and direct storage writes are handled in the agent module now
 import fs from 'fs'
 import path from 'path'
+import { ensureProviderConfig } from '../../../../src/modules/workflowAgentExecutor'
 import type {
   CodingAgentMessage,
   CodingAgentRunListResponse,
@@ -11,19 +12,14 @@ import type {
   CodingAgentSessionSummary,
   RunMeta
 } from '../../../interfaces/core/codingAgent'
-import { createSession, getSession as getOpencodeSession, promptSession } from '../../../modules/agent/opencode'
+import { runVerifierWorkerLoop } from '../../../modules/agent/multi-agent'
+import { getSession as getOpencodeSession } from '../../../modules/agent/opencode'
+import { runSingleAgentLoop } from '../../../modules/agent/single-agent'
 import { metaDirectory, RunMeta as ProvRunMeta } from '../../../modules/provenance/provenance'
 import { DEFAULT_CODING_AGENT_MODEL } from '../../core/config'
-
-import { ensureProviderConfig } from '../../../../src/modules/workflowAgentExecutor'
-import { runVerifierWorkerLoop } from '../../../modules/agent/multi-agent'
-import { runSingleAgentLoop } from '../../../modules/agent/single-agent'
 import { deletePersona, listPersonas, readPersona, writePersona } from './personas'
-
-const MULTI_AGENT_PERSONA_ID = 'multi-agent'
-
 type WrapAsync = (handler: RequestHandler) => RequestHandler
-
+const MULTI_AGENT_PERSONA_ID = 'multi-agent'
 /**
  * Deduplicate consecutive messages that are semantically identical.
  *
@@ -32,10 +28,11 @@ type WrapAsync = (handler: RequestHandler) => RequestHandler
  * returning session detail responses to avoid noisy duplicate stream
  * chunks in the UI.
  *
- * @param messages - Array of persisted `CodingAgentMessage` objects
+ * @param messages - Array of persisted CodingAgentMessage objects
  * @returns A filtered array with consecutive duplicates removed
  */
-const dedupeSequentialMessages = (messages: CodingAgentMessage[]): CodingAgentMessage[] => {
+
+export const dedupeSequentialMessages = (messages: CodingAgentMessage[]): CodingAgentMessage[] => {
   if (!Array.isArray(messages) || messages.length <= 1) return messages ?? []
   const result: CodingAgentMessage[] = []
   let previousSignature: string | null = null
@@ -203,7 +200,50 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
         } catch {
           // fall through and return empty list
         }
+        // If no run metadata exists in the .hyperagent folder, also
+        // inspect legacy opencode storage layout under `storage/session`.
+        if (payload.length === 0) {
+          try {
+            const storageSessionDir = path.join(workspacePath, 'storage', 'session')
+            if (fs.existsSync(storageSessionDir)) {
+              const projects = fs.readdirSync(storageSessionDir)
+              for (const proj of projects) {
+                try {
+                  const files = fs.readdirSync(path.join(storageSessionDir, proj)).filter((f) => f.endsWith('.json'))
+                  for (const file of files) {
+                    try {
+                      const raw = fs.readFileSync(path.join(storageSessionDir, proj, file), 'utf-8')
+                      const parsed = JSON.parse(raw) as any
+                      payload.push({
+                        id: parsed.id || path.basename(file, '.json'),
+                        title: parsed.title || `Run ${parsed.id || path.basename(file, '.json')}`,
+                        workspacePath: parsed.directory || workspacePath,
+                        projectId: parsed.projectID || null,
+                        createdAt: parsed.time?.created
+                          ? new Date(parsed.time.created).toISOString()
+                          : new Date().toISOString(),
+                        updatedAt: parsed.time?.updated
+                          ? new Date(parsed.time.updated).toISOString()
+                          : new Date().toISOString(),
+                        summary: parsed.summary || { additions: 0, deletions: 0, files: 0 }
+                      })
+                    } catch {
+                      // ignore malformed session files
+                    }
+                  }
+                } catch {
+                  // ignore per-project errors
+                }
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
       }
+      // When no workspacePath is provided we return an empty list. The
+      // router no longer supports injected storage enumerators.
+
       const response: CodingAgentSessionListResponse = { sessions: payload }
       res.json(response)
     } catch (error) {
@@ -225,40 +265,132 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       return
     }
     try {
-      // Try to load session via opencode runtime for the requested workspace
-      const workspaceQuery = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : process.cwd()
+      // Determine workspace: prefer explicit query, otherwise we'll try
+      // to discover a persisted RunMeta file for the session across the
+      // repository (supports tests which write meta files without passing
+      // the workspace path on the request).
+      let workspaceQuery = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : undefined
       let detail: CodingAgentSessionDetail | null = null
-      try {
-        // Attempt to use the opencode session API if available in this workspace
-        const opSession = await getOpencodeSession(workspaceQuery, sessionId).catch(() => null)
-        if (opSession) {
-          detail = {
-            session: {
-              id: sessionId,
-              workspacePath: workspaceQuery,
-              modelId: DEFAULT_CODING_AGENT_MODEL,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-              title: null,
-              projectId: null as any,
-              summary: { additions: 0, deletions: 0, files: 0 }
-            },
-            messages: []
+      // Helper: search for run meta file in common layouts when no workspace provided
+      const findRunMetaFile = (id: string): string | null => {
+        const root = process.cwd()
+        const ignored = new Set(['node_modules', '.git'])
+        const stack: string[] = [root]
+        while (stack.length) {
+          const dir = stack.pop() as string
+          let entries: string[] = []
+          try {
+            entries = fs.readdirSync(dir)
+          } catch {
+            continue
+          }
+          for (const name of entries) {
+            if (ignored.has(name)) continue
+            const full = path.join(dir, name)
+            let stat: fs.Stats
+            try {
+              stat = fs.statSync(full)
+            } catch {
+              continue
+            }
+            if (stat.isDirectory()) {
+              // If we find a .hyperagent dir containing the id, return it
+              if (name === '.hyperagent') {
+                const candidate = path.join(full, `${id}.json`)
+                if (fs.existsSync(candidate)) return candidate
+              }
+              // Look for legacy opencode storage layout
+              if (name === 'storage') {
+                // check storage/session/**/<id>.json
+                const sessionDir = path.join(full, 'session')
+                if (fs.existsSync(sessionDir)) {
+                  try {
+                    const projects = fs.readdirSync(sessionDir)
+                    for (const p of projects) {
+                      const candidate = path.join(sessionDir, p, `${id}.json`)
+                      if (fs.existsSync(candidate)) return candidate
+                    }
+                  } catch {
+                    // ignore
+                  }
+                }
+              }
+              // push directory for further traversal
+              stack.push(full)
+            }
           }
         }
-      } catch (e) {
-        // ignore opencode lookup failures
-        console.error('opencode session lookup failed', e)
+        return null
       }
-      if (!detail) {
-        // Fallback: try to find a persisted RunMeta for this session id in the
-        // current workspace metadata directory.
+
+      if (workspaceQuery) {
         try {
-          const metaDir = metaDirectory(workspaceQuery)
-          const filePath = path.join(metaDir, `${sessionId}.json`)
-          if (fs.existsSync(filePath)) {
-            const raw = fs.readFileSync(filePath, 'utf-8')
+          const opSession = await getOpencodeSession(workspaceQuery, sessionId).catch(() => null)
+          if (opSession) {
+            detail = {
+              session: {
+                id: sessionId,
+                workspacePath: workspaceQuery,
+                modelId: DEFAULT_CODING_AGENT_MODEL,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                title: null,
+                projectId: null as any,
+                summary: { additions: 0, deletions: 0, files: 0 }
+              },
+              messages: []
+            }
+          }
+        } catch (e) {
+          console.error('opencode session lookup failed', e)
+        }
+        if (!detail) {
+          try {
+            const metaDir = metaDirectory(workspaceQuery)
+            const filePath = path.join(metaDir, `${sessionId}.json`)
+            if (fs.existsSync(filePath)) {
+              const raw = fs.readFileSync(filePath, 'utf-8')
+              const parsed = JSON.parse(raw) as ProvRunMeta
+              detail = {
+                session: {
+                  id: parsed.id,
+                  workspacePath: workspaceQuery,
+                  modelId: DEFAULT_CODING_AGENT_MODEL,
+                  createdAt: parsed.createdAt,
+                  updatedAt: parsed.updatedAt,
+                  title: null,
+                  projectId: null as any,
+                  summary: { additions: 0, deletions: 0, files: 0 }
+                },
+                messages: []
+              }
+            }
+          } catch (err) {
+            console.error('run meta lookup failed', err)
+          }
+        }
+      } else {
+        // No workspace query provided: try to discover a RunMeta file
+        // elsewhere in the repository (supports test fixtures and legacy
+        // opencode storage layouts).
+        const found = findRunMetaFile(sessionId)
+        if (found) {
+          try {
+            const raw = fs.readFileSync(found, 'utf-8')
             const parsed = JSON.parse(raw) as ProvRunMeta
+            // compute workspace root based on file layout
+            let inferredWorkspace = process.cwd()
+            if (
+              found.includes(`${path.sep}.hyperagent${path.sep}`) ||
+              found.endsWith(`${path.sep}.hyperagent${path.sep}${sessionId}.json`)
+            ) {
+              inferredWorkspace = path.dirname(path.dirname(found))
+            } else if (found.includes(`${path.sep}storage${path.sep}session${path.sep}`)) {
+              inferredWorkspace = found.split(`${path.sep}storage${path.sep}session`)[0]
+            } else {
+              inferredWorkspace = path.dirname(path.dirname(found))
+            }
+            workspaceQuery = inferredWorkspace
             detail = {
               session: {
                 id: parsed.id,
@@ -272,9 +404,9 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
               },
               messages: []
             }
+          } catch (err) {
+            console.error('discovered run meta parse failed', err)
           }
-        } catch (err) {
-          console.error('run meta lookup failed', err)
         }
       }
       if (!detail) {
@@ -461,7 +593,9 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       return
     }
     try {
-      // This server build does not support programmatic kill of runs.
+      // Kill semantics are provided by the agent runtime; this router no
+      // longer exposes a programmatic kill command. Return 501 to indicate
+      // the operation is not supported in this build.
       res.status(501).json({ error: 'Kill run not supported in this server build' })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to terminate coding agent session'
@@ -492,7 +626,7 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
       return
     }
     try {
-      // Determine the workspace to operate in (prefer explicit query)
+      // Determine workspace (prefer explicit query)
       const workspaceQuery = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : process.cwd()
       try {
         await ensureWorkspaceDirectory(workspaceQuery)
@@ -500,23 +634,76 @@ export const createWorkspaceSessionsRouter = (deps: WorkspaceSessionsDeps) => {
         res.status(400).json({ error: 'Session workspace is unavailable' })
         return
       }
+
       const resolvedModelId = requestedModelId ?? DEFAULT_CODING_AGENT_MODEL
       logSessions('Posting coding agent message (opencode prompt)', { sessionId, modelId: resolvedModelId, role })
       try {
-        // Use opencode directly to prompt the workspace session
-        const opSession = await createSession(workspaceQuery)
-        await promptSession(opSession, [text], resolvedModelId)
+        // Determine whether this session is a multi-agent run by checking
+        // for an existing provenance RunMeta file. If present we dispatch
+        // to the verifier/worker loop; otherwise we use the single-agent
+        // loop. Both loops handle creating sessions and persisting run
+        // metadata when necessary.
+        const metaDir = metaDirectory(workspaceQuery)
+        let isMultiAgent = false
+        try {
+          const filePath = path.join(metaDir, `${sessionId}.json`)
+          if (fs.existsSync(filePath)) {
+            const raw = fs.readFileSync(filePath, 'utf-8')
+            const parsed = JSON.parse(raw) as ProvRunMeta
+            const roles = Array.isArray(parsed.agents) ? parsed.agents.map((a) => a.role) : []
+            // If the run has both worker/verifier or multiple agents,
+            // treat it as a multi-agent run.
+            if (roles.includes('worker') || roles.includes('verifier') || roles.length > 1) {
+              isMultiAgent = true
+            }
+          }
+        } catch {
+          // If run meta parsing fails, fall back to single-agent behavior
+          isMultiAgent = false
+        }
+
+        // Kick off the appropriate agent loop in the background so the
+        // HTTP response can return quickly while the agent processes the
+        // prompt. The loops will persist provenance themselves.
+        if (isMultiAgent) {
+          ;(async () => {
+            try {
+              await runVerifierWorkerLoop({
+                runID: sessionId,
+                userInstructions: text,
+                model: resolvedModelId,
+                sessionDir: workspaceQuery
+              })
+            } catch (err) {
+              logSessionsError('Multi-agent prompt failed', err, { sessionId, modelId: resolvedModelId })
+            }
+          })()
+        } else {
+          ;(async () => {
+            try {
+              await runSingleAgentLoop({
+                runID: sessionId,
+                userInstructions: text,
+                model: resolvedModelId,
+                sessionDir: workspaceQuery
+              })
+            } catch (err) {
+              logSessionsError('Single-agent prompt failed', err, { sessionId, modelId: resolvedModelId })
+            }
+          })()
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Provider invocation failed'
         logSessionsError('Opencode prompt failed', err, { sessionId, modelId: resolvedModelId })
         res.status(500).json({ error: message })
         return
       }
+
       // Return a minimal updated session detail to the caller
       res.status(201).json({
         session: {
           id: sessionId,
-          workspacePath: typeof req.query.workspacePath === 'string' ? req.query.workspacePath : process.cwd(),
+          workspacePath: workspaceQuery,
           modelId: resolvedModelId,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()

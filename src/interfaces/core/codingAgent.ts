@@ -1,18 +1,4 @@
-export type CodingAgentProviderModel = {
-  id: string
-  label: string
-}
-
-export type CodingAgentProvider = {
-  id: string
-  label: string
-  defaultModelId: string
-  models: CodingAgentProviderModel[]
-}
-
-export type CodingAgentProviderListResponse = {
-  providers?: CodingAgentProvider[]
-}
+// Provider concepts removed — model selection is handled in the UI module
 
 export type CodingAgentSessionSummary = {
   id: string
