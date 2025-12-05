@@ -69,6 +69,20 @@ export const createSession = async (directory: string): Promise<Session> => {
   return session?.data!
 }
 
+export const getSession = async (directory: string, id: string): Promise<Session | null> => {
+  const opencode = await getOpencodeClient(directory)
+
+  const sessions = await opencode.session.list({
+    query: {
+      directory
+    }
+  })
+
+  if (!sessions?.data || sessions.data.length === 0) return null
+
+  return sessions.data.find((session) => session.id === id) || null
+}
+
 /** Prompts the specified Opencode session with a given prompt.
  *
  * @param directory - The directory associated with the session.

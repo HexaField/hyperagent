@@ -1,22 +1,22 @@
-import { Part, Session } from '@opencode-ai/sdk'
-import crypto from 'crypto'
-import type { PersistenceContext, PersistenceModule, Timestamp } from '../database'
-import { appendLogEntry, loadSessionMeta } from '../provenance/provenance'
-import { createSession, extractResponseText, promptSession } from './opencode'
-
-type WorkerStatus = 'working' | 'done' | 'blocked'
-type VerifierVerdict = 'instruct' | 'approve' | 'fail'
-
-const MAX_JSON_ATTEMPTS = 3
+/*
+  Original multi-agent implementation restored and adjusted to import shared
+  helpers from `agent.ts`. This file keeps the verifier/worker orchestration
+  and relies on the shared `invokeWorker`, `invokeStructuredJsonCall`, and
+  parsing helpers implemented in `agent.ts`.
+*/
+import { Session } from '@opencode-ai/sdk'
+import { createRunMeta, hasRunMeta, loadRunMeta, saveRunMeta } from '../provenance/provenance'
+import { AgentStreamCallback, coerceString, invokeStructuredJsonCall, parseJsonPayload } from './agent'
+import { createSession, getSession } from './opencode'
 
 const WORKER_SYSTEM_PROMPT = `You are a meticulous senior engineer agent focused on producing concrete, technically sound deliverables. Follow verifier instructions with discipline.
 
 Always return STRICT JSON with the shape:
 {
-	"status": "working" | "done" | "blocked",
-	"plan": "short bullet-style plan clarifying approach",
-	"work": "precise description of what you produced or analysed",
-	"requests": "questions or additional info you need (empty string if none)"
+\t"status": "working" | "done" | "blocked",
+\t"plan": "short bullet-style plan clarifying approach",
+\t"work": "precise description of what you produced or analysed",
+\t"requests": "questions or additional info you need (empty string if none)"
 }
 
 Rules:
@@ -46,17 +46,8 @@ Response policy:
 - Keep critiques grounded in evidence and reference specific user needs or defects.
 - Assume future turns depend solely on your guidance—be explicit about quality bars, edge cases, and verification steps.`
 
-export type WorkerTurn = {
-  round: number
-  raw: string
-  parsed: WorkerStructuredResponse
-}
-
-export type VerifierTurn = {
-  round: number
-  raw: string
-  parsed: VerifierStructuredResponse
-}
+type WorkerStatus = 'working' | 'done' | 'blocked'
+type VerifierVerdict = 'instruct' | 'approve' | 'fail'
 
 export type WorkerStructuredResponse = {
   status: WorkerStatus
@@ -72,18 +63,29 @@ export type VerifierStructuredResponse = {
   priority: number
 }
 
+export type WorkerTurn = {
+  round: number
+  raw: string
+  parsed: WorkerStructuredResponse
+}
+
+export type VerifierTurn = {
+  round: number
+  raw: string
+  parsed: VerifierStructuredResponse
+}
+
 export type ConversationRound = {
   worker: WorkerTurn
   verifier: VerifierTurn
 }
 
 export type AgentLoopOptions = {
+  runID?: string
   userInstructions: string
   model?: string
   maxRounds?: number
   sessionDir?: string
-  workerSessionId?: string
-  verifierSessionId?: string
   onStream?: AgentStreamCallback
 }
 
@@ -94,17 +96,6 @@ export type AgentLoopResult = {
   rounds: ConversationRound[]
 }
 
-export type AgentStreamEvent = {
-  role: 'worker' | 'verifier'
-  round: number
-  parts: Part[]
-  model: string
-  attempt: number
-  sessionId?: string
-}
-
-export type AgentStreamCallback = (event: AgentStreamEvent) => void
-
 export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
   const model = options.model ?? 'llama3.2'
   const maxRounds = options.maxRounds ?? 10
@@ -113,11 +104,60 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
 
   const streamCallback = options.onStream
 
-  const runId = `run-${Date.now()}`
-  const workerSession = await createSession(directory)
-  const verifierSession = await createSession(directory)
+  const runId = options.runID ?? `run-${Date.now()}`
+
+  if (!hasRunMeta(runId, directory)) {
+    const workerSession = await createSession(directory)
+    const verifierSession = await createSession(directory)
+    const agents = [
+      { role: 'worker', sessionId: workerSession.id },
+      { role: 'verifier', sessionId: verifierSession.id }
+    ]
+    const runMeta = createRunMeta(directory, runId, agents)
+    saveRunMeta(runMeta, runId, directory)
+  }
+
+  const metaData = loadRunMeta(runId, directory)
+
+  const workerSessionID = metaData.agents.find((a) => a.role === 'worker')?.sessionId
+  const verifierSessionID = metaData.agents.find((a) => a.role === 'verifier')?.sessionId
+
+  if (!workerSessionID || !verifierSessionID) {
+    throw new Error('Missing worker or verifier session ID in run meta')
+  }
+
+  const workerSession = await getSession(directory, workerSessionID)
+  const verifierSession = await getSession(directory, verifierSessionID)
+
+  if (!workerSession) throw new Error(`Worker session not found: ${workerSessionID}`)
+  if (!verifierSession) throw new Error(`Verifier session not found: ${verifierSessionID}`)
 
   const rounds: ConversationRound[] = []
+
+  async function invokeVerifier(args: {
+    model: string
+    session: Session
+    userInstructions: string
+    workerTurn: WorkerTurn | null
+    round: number
+    onStream?: AgentStreamCallback
+    runId: string
+    directory: string
+  }): Promise<VerifierTurn> {
+    const query = buildVerifierPrompt(args.userInstructions, args.workerTurn, args.round)
+    const { raw, parsed } = await invokeStructuredJsonCall({
+      role: 'verifier',
+      systemPrompt: VERIFIER_SYSTEM_PROMPT,
+      basePrompt: query,
+      model: args.model,
+      session: args.session,
+      runId: args.runId,
+      directory: args.directory,
+      onStream: args.onStream,
+      parseResponse: (response) => parseVerifierResponse('verifier', response)
+    })
+    return { round: args.round, raw, parsed }
+  }
 
   const bootstrap = await invokeVerifier({
     model,
@@ -198,7 +238,46 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
   }
 }
 
-type WorkerInvokeArgs = {
+function normalizeWorkerStatus(value: unknown): WorkerStatus {
+  const asString = typeof value === 'string' ? value.toLowerCase() : 'working'
+  if (asString === 'done' || asString === 'blocked') {
+    return asString
+  }
+  return 'working'
+}
+
+function normalizeVerifierVerdict(value: unknown): VerifierVerdict {
+  const asString = typeof value === 'string' ? value.toLowerCase() : 'instruct'
+  if (asString === 'approve' || asString === 'fail') {
+    return asString
+  }
+  return 'instruct'
+}
+
+function parseWorkerResponse(role: 'worker', res: string): WorkerStructuredResponse {
+  const obj = parseJsonPayload(role, res)
+  const status = normalizeWorkerStatus(obj.status)
+  return {
+    status,
+    plan: coerceString(obj.plan ?? obj.analysis ?? obj.summary ?? obj.reasoning ?? obj.work ?? ''),
+    work: coerceString(obj.work ?? obj.output ?? obj.result ?? obj.answer ?? obj.plan ?? ''),
+    requests: coerceString(obj.requests ?? obj.questions ?? obj.blockers ?? '')
+  }
+}
+
+export function parseVerifierResponse(role: 'verifier', res: string): VerifierStructuredResponse {
+  const obj = parseJsonPayload(role, res)
+  const verdict = normalizeVerifierVerdict(obj.verdict ?? obj.status)
+  const priority = Number.isInteger(obj.priority) ? obj.priority : 3
+  return {
+    verdict,
+    critique: coerceString(obj.critique ?? obj.feedback ?? ''),
+    instructions: coerceString(obj.instructions ?? obj.next_steps ?? obj.plan ?? obj.guidance ?? ''),
+    priority: priority as number
+  }
+}
+
+export async function invokeWorker(args: {
   model: string
   session: Session
   userInstructions: string
@@ -208,20 +287,7 @@ type WorkerInvokeArgs = {
   onStream?: AgentStreamCallback
   runId: string
   directory: string
-}
-
-type VerifierInvokeArgs = {
-  model: string
-  session: Session
-  userInstructions: string
-  workerTurn: WorkerTurn | null
-  round: number
-  onStream?: AgentStreamCallback
-  runId: string
-  directory: string
-}
-
-async function invokeWorker(args: WorkerInvokeArgs): Promise<WorkerTurn> {
+}): Promise<WorkerTurn> {
   const query = buildWorkerPrompt(args.userInstructions, args.verifierInstructions, args.verifierCritique, args.round)
   const { raw, parsed } = await invokeStructuredJsonCall({
     role: 'worker',
@@ -238,21 +304,19 @@ async function invokeWorker(args: WorkerInvokeArgs): Promise<WorkerTurn> {
   return { round: args.round, raw, parsed }
 }
 
-async function invokeVerifier(args: VerifierInvokeArgs): Promise<VerifierTurn> {
-  const query = buildVerifierPrompt(args.userInstructions, args.workerTurn, args.round)
-  const { raw, parsed } = await invokeStructuredJsonCall({
-    role: 'verifier',
-    systemPrompt: VERIFIER_SYSTEM_PROMPT,
-    basePrompt: query,
-    model: args.model,
-    session: args.session,
-    runId: args.runId,
-    directory: args.directory,
-    onStream: args.onStream,
-    parseResponse: (response) => parseVerifierResponse('verifier', response)
-  })
-  console.log(raw, parsed)
-  return { round: args.round, raw, parsed }
+function buildVerifierPrompt(userInstructions: string, workerTurn: WorkerTurn | null, round: number): string {
+  if (!workerTurn) {
+    return [
+      `User instructions:\n${userInstructions}`,
+      'The worker has not produced any output yet. Provide the first set of instructions that sets them up for success.'
+    ].join('\n\n')
+  }
+
+  return [
+    `User instructions:\n${userInstructions}`,
+    `Latest worker JSON (round #${round}):\n${workerTurn.raw}`,
+    'Evaluate the worker output, note gaps, and craft the next set of instructions. '
+  ].join('\n\n')
 }
 
 function buildWorkerPrompt(
@@ -272,85 +336,7 @@ function buildWorkerPrompt(
     .join('\n\n')
 }
 
-function buildVerifierPrompt(userInstructions: string, workerTurn: WorkerTurn | null, round: number): string {
-  if (!workerTurn) {
-    return [
-      `User instructions:\n${userInstructions}`,
-      'The worker has not produced any output yet. Provide the first set of instructions that sets them up for success.'
-    ].join('\n\n')
-  }
-
-  return [
-    `User instructions:\n${userInstructions}`,
-    `Latest worker JSON (round #${round}):\n${workerTurn.raw}`,
-    'Evaluate the worker output, note gaps, and craft the next set of instructions. '
-  ].join('\n\n')
-}
-
-function parseWorkerResponse(role: 'worker', res: string): WorkerStructuredResponse {
-  const obj = parseJsonPayload(role, res)
-  const status = normalizeWorkerStatus(obj.status)
-  return {
-    status,
-    plan: coerceString(obj.plan ?? obj.analysis ?? obj.summary ?? obj.reasoning ?? obj.work ?? ''),
-    work: coerceString(obj.work ?? obj.output ?? obj.result ?? obj.answer ?? obj.plan ?? ''),
-    requests: coerceString(obj.requests ?? obj.questions ?? obj.blockers ?? '')
-  }
-}
-
-function parseVerifierResponse(role: 'verifier', res: string): VerifierStructuredResponse {
-  const obj = parseJsonPayload(role, res)
-  const verdict = normalizeVerifierVerdict(obj.verdict ?? obj.status)
-  const priority = Number.isInteger(obj.priority) ? obj.priority : 3
-  return {
-    verdict,
-    critique: coerceString(obj.critique ?? obj.feedback ?? ''),
-    instructions: coerceString(obj.instructions ?? obj.next_steps ?? obj.plan ?? obj.guidance ?? ''),
-    priority: priority as number
-  }
-}
-
-function parseJsonPayload(role: string, res: string): any {
-  // if (!res.success || !res.data) {
-  //   throw new Error(`${role} LLM call failed: ${res.error || 'unknown error'}`)
-  // }
-  const jsonText = extractJson(res)
-  try {
-    return JSON.parse(jsonText)
-  } catch (error) {
-    throw new Error(`${role} returned invalid JSON: ${error}`)
-  }
-}
-
-function extractJson(raw: string): string {
-  const match = raw.match(/```json\s*([\s\S]*?)```/i)
-  if (match && match[1]) {
-    return match[1].trim()
-  }
-  return raw.trim()
-}
-
-function coerceString(value: unknown, fallback = ''): string {
-  return typeof value === 'string' ? value : fallback
-}
-
-function normalizeWorkerStatus(value: unknown): WorkerStatus {
-  const asString = typeof value === 'string' ? value.toLowerCase() : 'working'
-  if (asString === 'done' || asString === 'blocked') {
-    return asString
-  }
-  return 'working'
-}
-
-function normalizeVerifierVerdict(value: unknown): VerifierVerdict {
-  const asString = typeof value === 'string' ? value.toLowerCase() : 'instruct'
-  if (asString === 'approve' || asString === 'fail') {
-    return asString
-  }
-  return 'instruct'
-}
-
-function minimalVerifierEcho(workerTurn: WorkerTurn, round: number): VerifierTurn {
+export function minimalVerifierEcho(workerTurn: WorkerTurn, round: number): VerifierTurn {
   return {
     round,
     raw: JSON.stringify({ verdict: 'fail', critique: workerTurn.parsed.requests, instructions: '', priority: 1 }),
@@ -360,240 +346,5 @@ function minimalVerifierEcho(workerTurn: WorkerTurn, round: number): VerifierTur
       instructions: '',
       priority: 1
     }
-  }
-}
-
-type StructuredJsonCallOptions<T> = {
-  role: 'worker' | 'verifier'
-  systemPrompt: string
-  basePrompt: string
-  model: string
-  session: Session
-  runId: string
-  directory: string
-  onStream?: AgentStreamCallback
-  parseResponse: (res: string) => T
-}
-
-async function invokeStructuredJsonCall<T>(options: StructuredJsonCallOptions<T>): Promise<{ raw: string; parsed: T }> {
-  let prompt = options.basePrompt
-  let lastError: Error | null = null
-
-  const meta = loadSessionMeta(options.runId, options.directory)
-
-  for (let attempt = 1; attempt <= MAX_JSON_ATTEMPTS; attempt++) {
-    const response = await promptSession(options.session, [options.systemPrompt, prompt], options.model)
-    const raw = extractResponseText(response.parts)
-
-    appendLogEntry(
-      options.runId,
-      meta,
-      {
-        provider: 'opencode',
-        model: options.model,
-        role: options.role,
-        payload: {
-          attempt,
-          prompt,
-          rawResponse: raw
-        }
-      },
-      options.directory
-    )
-
-    try {
-      const parsed = options.parseResponse(raw)
-
-      options.onStream?.({
-        role: options.role,
-        round: attempt,
-        parts: response.parts,
-        model: options.model,
-        attempt: 1,
-        sessionId: options.session.id
-      })
-      return { raw, parsed }
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error))
-      console.warn('[agent] structured JSON call failed', {
-        role: options.role,
-        attempt,
-        error: lastError.message
-      })
-      if (attempt === MAX_JSON_ATTEMPTS) {
-        throw lastError
-      }
-      prompt = buildRetryPrompt(options.basePrompt, lastError.message)
-    }
-  }
-
-  throw lastError ?? new Error('Structured agent call failed')
-}
-
-function buildRetryPrompt(basePrompt: string, errorMessage: string): string {
-  return `${basePrompt}
-
-IMPORTANT: Your previous response was invalid JSON (${errorMessage}). Respond again with STRICT JSON only, without code fences or commentary.`
-}
-
-export type AgentRunStatus = 'running' | 'succeeded' | 'failed'
-
-export type AgentRunRecord = {
-  id: string
-  workflowStepId: string | null
-  projectId: string
-  branch: string
-  type: string
-  status: AgentRunStatus
-  startedAt: Timestamp
-  finishedAt: Timestamp | null
-  logsPath: string | null
-}
-
-export type AgentRunInput = {
-  id?: string
-  workflowStepId?: string | null
-  projectId: string
-  branch: string
-  type: string
-  status?: AgentRunStatus
-  logsPath?: string | null
-}
-
-export type AgentRunsRepository = {
-  create: (input: AgentRunInput) => AgentRunRecord
-  update: (id: string, patch: Partial<Pick<AgentRunRecord, 'status' | 'finishedAt' | 'logsPath'>>) => void
-  listByWorkflow: (workflowId: string) => AgentRunRecord[]
-}
-
-export type AgentRunsBindings = {
-  agentRuns: AgentRunsRepository
-}
-
-export const agentRunsPersistence: PersistenceModule<AgentRunsBindings> = {
-  name: 'agentRuns',
-  applySchema: (db) => {
-    ensureAgentRunsTable(db)
-  },
-  createBindings: ({ db }: PersistenceContext) => ({
-    agentRuns: createAgentRunsRepository(db)
-  })
-}
-
-function ensureAgentRunsTable(db: PersistenceContext['db']): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS agent_runs (
-      id TEXT PRIMARY KEY,
-      workflow_step_id TEXT REFERENCES workflow_steps(id),
-      project_id TEXT NOT NULL,
-      branch TEXT NOT NULL,
-      type TEXT NOT NULL,
-      status TEXT NOT NULL,
-      started_at TEXT NOT NULL,
-      finished_at TEXT,
-      logs_path TEXT
-    );
-  `)
-  const foreignKeys = db.prepare("PRAGMA foreign_key_list('agent_runs')").all() as Array<{ table: string }>
-  const referencesProjects = foreignKeys.some((fk) => fk.table === 'projects')
-  if (referencesProjects) {
-    migrateAgentRunsTableWithoutProjectFk(db)
-  }
-}
-
-function migrateAgentRunsTableWithoutProjectFk(db: PersistenceContext['db']): void {
-  const foreignKeysEnabled = Boolean(db.pragma('foreign_keys', { simple: true }))
-  if (foreignKeysEnabled) {
-    db.pragma('foreign_keys = OFF')
-  }
-  const migrate = db.transaction(() => {
-    db.exec('DROP TABLE IF EXISTS agent_runs_migration')
-    db.exec(`
-      CREATE TABLE agent_runs_migration (
-        id TEXT PRIMARY KEY,
-        workflow_step_id TEXT REFERENCES workflow_steps(id),
-        project_id TEXT NOT NULL,
-        branch TEXT NOT NULL,
-        type TEXT NOT NULL,
-        status TEXT NOT NULL,
-        started_at TEXT NOT NULL,
-        finished_at TEXT,
-        logs_path TEXT
-      );
-    `)
-    db.exec(`
-      INSERT INTO agent_runs_migration (id, workflow_step_id, project_id, branch, type, status, started_at, finished_at, logs_path)
-      SELECT id, workflow_step_id, project_id, branch, type, status, started_at, finished_at, logs_path FROM agent_runs;
-    `)
-    db.exec('DROP TABLE agent_runs')
-    db.exec('ALTER TABLE agent_runs_migration RENAME TO agent_runs')
-  })
-  migrate()
-  if (foreignKeysEnabled) {
-    db.pragma('foreign_keys = ON')
-  }
-}
-
-function createAgentRunsRepository(db: PersistenceContext['db']): AgentRunsRepository {
-  return {
-    create: (input) => {
-      const id = input.id ?? crypto.randomUUID()
-      const startedAt = new Date().toISOString()
-      db.prepare(
-        `INSERT INTO agent_runs (id, workflow_step_id, project_id, branch, type, status, started_at, finished_at, logs_path)
-         VALUES (@id, @workflowStepId, @projectId, @branch, @type, @status, @startedAt, NULL, @logsPath)`
-      ).run({
-        id,
-        workflowStepId: input.workflowStepId ?? null,
-        projectId: input.projectId,
-        branch: input.branch,
-        type: input.type,
-        status: input.status ?? 'running',
-        startedAt,
-        logsPath: input.logsPath ?? null
-      })
-      const row = db.prepare('SELECT * FROM agent_runs WHERE id = ?').get(id)
-      return mapAgentRun(row)
-    },
-    update: (id, patch) => {
-      const record = db.prepare('SELECT * FROM agent_runs WHERE id = ?').get(id) as any
-      if (!record) return
-      db.prepare(
-        `UPDATE agent_runs
-         SET status = ?, finished_at = ?, logs_path = ?
-         WHERE id = ?`
-      ).run(
-        patch.status ?? record.status,
-        patch.finishedAt ?? record.finished_at,
-        patch.logsPath ?? record.logs_path,
-        id
-      )
-    },
-    listByWorkflow: (workflowId) => {
-      const rows = db
-        .prepare(
-          `SELECT ar.*
-           FROM agent_runs ar
-           JOIN workflow_steps ws ON ar.workflow_step_id = ws.id
-           WHERE ws.workflow_id = ?
-           ORDER BY ar.started_at DESC`
-        )
-        .all(workflowId)
-      return rows.map(mapAgentRun)
-    }
-  }
-}
-
-function mapAgentRun(row: any): AgentRunRecord {
-  return {
-    id: row.id,
-    workflowStepId: row.workflow_step_id ?? null,
-    projectId: row.project_id,
-    branch: row.branch,
-    type: row.type,
-    status: row.status,
-    startedAt: row.started_at,
-    finishedAt: row.finished_at ?? null,
-    logsPath: row.logs_path ?? null
   }
 }

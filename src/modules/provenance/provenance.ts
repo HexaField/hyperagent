@@ -1,13 +1,7 @@
-// provenance operates on run ids and directories; Session type not required here
 import fs from 'fs'
 import path from 'path'
 
 export const META_FOLDER = '.hyperagent'
-
-export function sanitizeSessionId(sessionId: string): string {
-  const safe = sessionId.replace(/[^a-zA-Z0-9._-]/g, '_')
-  return safe.length ? safe : 'session'
-}
 
 export function metaDirectory(directory: string): string {
   const dir = path.join(directory, META_FOLDER)
@@ -17,56 +11,63 @@ export function metaDirectory(directory: string): string {
 
 function metaFile(runId: string, directory: string) {
   const dir = metaDirectory(directory)
-  const idForFile = sanitizeSessionId(path.basename(path.resolve(String(runId))))
+  const idForFile = path.basename(path.resolve(runId))
   return path.join(dir, `${idForFile}.json`)
 }
 
 export type LogEntry = {
   entryId: string
-  provider: string
   model?: string
   role?: string
   payload: any
   createdAt: string
 }
 
-export type SessionMeta = {
+export type RunMeta = {
   id: string
+  agents: Array<{ role: string; sessionId: string }>
   log: LogEntry[]
   createdAt: string
   updatedAt: string
 }
 
-export function loadSessionMeta(runId: string, directory: string): SessionMeta {
+export function hasRunMeta(runId: string, directory: string): boolean {
   const file = metaFile(runId, directory)
-  if (fs.existsSync(file)) {
-    try {
-      const raw = fs.readFileSync(file, 'utf-8')
-      const parsed = JSON.parse(raw)
-      parsed.log = Array.isArray(parsed.log) ? parsed.log : []
-      return parsed
-    } catch (e) {
-      console.log('Failed to parse session meta json; recreating', e)
-    }
-  }
-  const blank: SessionMeta = {
-    id: sanitizeSessionId(path.basename(String(runId))),
+  return fs.existsSync(file)
+}
+
+export function createRunMeta(
+  directory: string,
+  runId: string,
+  agents: Array<{ role: string; sessionId: string }>
+): RunMeta {
+  const runMeta: RunMeta = {
+    id: path.basename(runId),
+    agents: agents,
     log: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   }
-  saveSessionMeta(blank, runId, directory)
-  return blank
+  saveRunMeta(runMeta, runId, directory)
+  return runMeta
 }
 
-export function saveSessionMeta(meta: SessionMeta, runId: string, directory: string) {
+export function loadRunMeta(runId: string, directory: string): RunMeta {
+  const file = metaFile(runId, directory)
+  if (!fs.existsSync(file)) throw new Error(`Run meta file does not exist: ${file}`)
+  const raw = fs.readFileSync(file, 'utf-8')
+  const parsed = JSON.parse(raw)
+  parsed.log = Array.isArray(parsed.log) ? parsed.log : []
+  return parsed
+}
+
+export function saveRunMeta(meta: RunMeta, runId: string, directory: string) {
   const file = metaFile(runId, directory)
   meta.updatedAt = new Date().toISOString()
   fs.writeFileSync(file, JSON.stringify(meta, null, 2))
 }
 
 export type LogEntryInit = {
-  provider: string
   model?: string
   role?: string
   payload: any
@@ -74,21 +75,21 @@ export type LogEntryInit = {
   createdAt?: string
 }
 
-export function appendLogEntry(runId: string, meta: SessionMeta, entry: LogEntryInit, directory: string) {
+export function appendLogEntry(runId: string, entry: LogEntryInit, directory: string) {
   const normalized: LogEntry = {
-    entryId: entry.entryId || `${entry.provider}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    provider: entry.provider,
+    entryId: entry.entryId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     model: entry.model,
     role: entry.role,
     payload: entry.payload,
     createdAt: entry.createdAt || new Date().toISOString()
   }
+  const meta = loadRunMeta(runId, directory)
   meta.log = Array.isArray(meta.log) ? meta.log : []
   meta.log.push(normalized)
-  saveSessionMeta(meta, runId, directory)
+  saveRunMeta(meta, runId, directory)
 }
 
-export function findLatestLogEntry(meta: SessionMeta, predicate: (entry: LogEntry) => boolean): LogEntry | undefined {
+export function findLatestLogEntry(meta: RunMeta, predicate: (entry: LogEntry) => boolean): LogEntry | undefined {
   const log = Array.isArray(meta.log) ? meta.log : []
   for (let i = log.length - 1; i >= 0; i--) {
     const entry = log[i]

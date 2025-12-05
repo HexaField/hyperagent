@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   plugins: [solidPlugin()],
   test: {
+    fileParallelism: false,
     watch: false,
     passWithNoTests: true,
     exclude: ['node_modules/**', 'dist/**', 'external/**', '**/.{tmp,temp}/**', '**/.tmp/**', '**/.tests/**'],

@@ -2,7 +2,7 @@ import { spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { sanitizeSessionId } from '../provenance/provenance'
+import { RunMeta } from '../provenance/provenance'
 import { runVerifierWorkerLoop } from './multi-agent'
 import { opencodeTestHooks } from './opencodeTestHooks'
 
@@ -66,20 +66,24 @@ describe('Verifier/worker collaboration loop', () => {
 
     expect(metaFiles.length).toBeGreaterThan(0)
 
-    const logs = metaFiles.flatMap((file) => {
-      const meta = JSON.parse(fs.readFileSync(file, 'utf8'))
-      expect(typeof meta.id).toBe('string')
-      expect(Array.isArray(meta.log)).toBe(true)
-      const basename = path.basename(file, '.json')
-      expect(meta.id).toBe(sanitizeSessionId(basename))
-      return Array.isArray(meta.log) ? meta.log : []
+    const logs = metaFiles.map((file) => {
+      return JSON.parse(fs.readFileSync(file, 'utf8')) as RunMeta
     })
 
-    const opencodeEntries = logs.filter((entry: any) => entry.provider === 'opencode')
-    expect(opencodeEntries.length).toBeGreaterThanOrEqual(2)
-    for (const entry of opencodeEntries) {
-      expect(entry.model).toBe(model)
-      expect(typeof entry.payload).toBe('object')
+    for (const entry of logs) {
+      expect(typeof entry.id).toBe('string')
+
+      expect(entry.agents.length).toBe(2)
+      const workerAgent = entry.agents.find((a) => a.role === 'worker')
+      const verifierAgent = entry.agents.find((a) => a.role === 'verifier')
+      expect(workerAgent?.sessionId).toBeDefined()
+      expect(verifierAgent?.sessionId).toBeDefined()
+
+      expect(entry.log.length).toBeGreaterThan(1)
+      const workerMessages = entry.log.filter((e) => e.role === 'worker')
+      const verifierMessages = entry.log.filter((e) => e.role === 'verifier')
+      expect(workerMessages.length).toBeGreaterThan(0)
+      expect(verifierMessages.length).toBeGreaterThan(0)
     }
 
     const readmeDir = sessionDir
