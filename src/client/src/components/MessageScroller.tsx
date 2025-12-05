@@ -12,7 +12,9 @@ const STEP_TYPE_LABELS: Record<string, string> = {
   'step-start': 'Step started',
   step_start: 'Step started',
   'step-finish': 'Step finished',
-  step_finish: 'Step finished'
+  step_finish: 'Step finished',
+  'step-removed': 'Step removed',
+  step_removed: 'Step removed'
 }
 
 const safeParseJson = (raw: string): any | null => {
@@ -93,8 +95,8 @@ type SectionConfig = {
 }
 
 const SECTION_CONFIGS: Record<string, SectionConfig> = {
-  worker: { labels: ['plan', 'work', 'requests'], defaultOpen: 'requests' },
-  verifier: { labels: ['verdict', 'critique', 'instructions'], defaultOpen: 'verdict' }
+  worker: { labels: ['Plan', 'Work', 'Requests'], defaultOpen: 'Requests' },
+  verifier: { labels: ['Verdict', 'Critique', 'Instructions'], defaultOpen: 'Verdict' }
 }
 
 const SECTION_LABEL_LOOKUP = new Set(
@@ -255,19 +257,33 @@ const formatSectionValue = (value: unknown): string | null => {
   return null
 }
 
-function extractSectionsFromObject(obj: Record<string, unknown>, labels: string[]): SectionExtractionResult {
+type SectionExtractionOptions = {
+  omitKeys?: string[]
+}
+
+function extractSectionsFromObject(
+  obj: Record<string, unknown>,
+  labels: string[],
+  options?: SectionExtractionOptions
+): SectionExtractionResult {
   const normalized = new Map(labels.map((label) => [label.toLowerCase(), label]))
   const lowerToSourceKey = new Map(Object.keys(obj).map((key) => [key.toLowerCase(), key]))
+  const omit = new Set((options?.omitKeys ?? []).map((key) => key.toLowerCase()))
   const sections: Record<string, string | null> = {}
   for (const label of labels) {
     const sourceKey = lowerToSourceKey.get(label.toLowerCase())
+    if (sourceKey && omit.has(sourceKey.toLowerCase())) {
+      sections[label] = null
+      continue
+    }
     const rawValue = sourceKey ? obj[sourceKey] : undefined
     sections[label] = formatSectionValue(rawValue)
   }
 
   const prefixLines: string[] = []
   for (const [key, value] of Object.entries(obj)) {
-    if (normalized.has(key.toLowerCase())) continue
+    const lower = key.toLowerCase()
+    if (normalized.has(lower) || omit.has(lower)) continue
     const formatted = formatSectionValue(value)
     if (formatted) prefixLines.push(`${key}: ${formatted}`)
   }
@@ -303,39 +319,47 @@ const renderStructuredSections = (
     if (!candidateKeys.includes(key)) candidateKeys.push(key)
   }
 
+  const renderConfig = (extraction: SectionExtractionResult, config: SectionConfig) => (
+    <div class="space-y-2">
+      {extraction.prefix ? <p class="whitespace-pre-wrap text-sm text-[var(--text)]">{extraction.prefix}</p> : null}
+      <For each={config.labels}>
+        {(label) => {
+          const content = extraction.sections[label]
+          if (!content) return null
+          return (
+            <CollapsibleSection title={label} defaultOpen={label === config.defaultOpen}>
+              <p class="whitespace-pre-wrap text-sm text-[var(--text)]">{content}</p>
+            </CollapsibleSection>
+          )
+        }}
+      </For>
+    </div>
+  )
+
+  let fallbackView: JSX.Element | null = null
+
   for (const key of candidateKeys) {
     const config = SECTION_CONFIGS[key]
     if (!config) continue
     const extraction =
       typeof payload === 'string'
         ? extractLabeledSections(payload, config.labels)
-        : extractSectionsFromObject(payload, config.labels)
+        : extractSectionsFromObject(payload, config.labels, key === 'verifier' ? { omitKeys: ['priority'] } : undefined)
     const hasAnySection = config.labels.some((label) => Boolean(extraction.sections[label]))
     const hasPrefix = Boolean(extraction.prefix)
     if (!hasAnySection && !hasPrefix) continue
-    return (
-      <div class="space-y-2">
-        {extraction.prefix ? <p class="whitespace-pre-wrap text-sm text-[var(--text)]">{extraction.prefix}</p> : null}
-        <For each={config.labels}>
-          {(label) => {
-            const content = extraction.sections[label]
-            if (!content) return null
-            return (
-              <CollapsibleSection title={label} defaultOpen={label === config.defaultOpen}>
-                <p class="whitespace-pre-wrap text-sm text-[var(--text)]">{content}</p>
-              </CollapsibleSection>
-            )
-          }}
-        </For>
-      </div>
-    )
+    const view = renderConfig(extraction, config)
+    if (hasAnySection) return view
+    if (!fallbackView && hasPrefix) fallbackView = view
   }
-  return null
+
+  return fallbackView
 }
 
 const renderStepPart = (part: any, label: string, role?: string | null): JSX.Element => {
   const body = deriveStepDetails(part)
   const structured = renderStructuredSections(body, role)
+  if (!structured && (!body || !body.trim())) return null
   return (
     <div class="mb-2 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-2 text-sm">
       <div class="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
@@ -344,7 +368,7 @@ const renderStepPart = (part: any, label: string, role?: string | null): JSX.Ele
       {structured ? (
         <div class="mt-2">{structured}</div>
       ) : (
-        <Show when={body} fallback={<p class="mt-1 text-xs text-[var(--text-muted)]">No output captured.</p>} keyed>
+        <Show when={body} fallback={null} keyed>
           {(content) => <p class="mt-1 whitespace-pre-wrap text-[var(--text)]">{content}</p>}
         </Show>
       )}
@@ -401,7 +425,9 @@ const parseTodoListPayload = (candidate: string | null) => {
   try {
     const parsed: unknown = JSON.parse(candidate)
     if (!Array.isArray(parsed)) return null
-    const entries = parsed.filter((item): item is TodoPayload => isPlainObject(item) && ('content' in item || 'text' in item))
+    const entries = parsed.filter(
+      (item): item is TodoPayload => isPlainObject(item) && ('content' in item || 'text' in item)
+    )
     if (entries.length === 0) return null
     return entries.map((entry, index) => ({
       content: String(entry.content ?? entry.text ?? ''),
@@ -866,7 +892,8 @@ export default function MessageScroller(props: MessageScrollerProps) {
       const normalizedType = typeof part.type === 'string' ? part.type.toLowerCase() : ''
 
       if (normalizedType && STEP_TYPE_LABELS[normalizedType]) {
-        elements.push(renderStepPart(part, STEP_TYPE_LABELS[normalizedType], message.role))
+        const stepView = renderStepPart(part, STEP_TYPE_LABELS[normalizedType], message.role)
+        if (stepView) elements.push(stepView)
         continue
       }
 
