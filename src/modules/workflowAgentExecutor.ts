@@ -25,13 +25,14 @@ export function createAgentWorkflowExecutor(options: AgentWorkflowExecutorOption
     await ensureProviderConfig(sessionDir)
     const userInstructions = buildInstructions(args)
     try {
-      const loopResult = await runLoop({
+      const loopResponse = await runLoop({
         userInstructions,
         model,
         maxRounds,
         sessionDir,
         onStream
       })
+      const loopResult = await loopResponse.result
       const shouldCommit = loopResult.outcome === 'approved'
       const logsPath = await detectLogsPath(sessionDir)
       return {

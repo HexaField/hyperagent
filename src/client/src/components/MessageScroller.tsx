@@ -554,7 +554,9 @@ export default function MessageScroller(props: MessageScrollerProps) {
   function renderMessageParts(message: CodingAgentMessage) {
     const parts: any[] = (message as any).parts ?? []
     if (!parts || parts.length === 0) {
-      return message.text.split('\n').map((line) => <p class="mb-1 last:mb-0 break-words">{line}</p>)
+      const fallback = typeof message.text === 'string' ? message.text : ''
+      if (!fallback) return null
+      return fallback.split('\n').map((line) => <p class="mb-1 last:mb-0 break-words">{line}</p>)
     }
     const elements: JSX.Element[] = []
     for (let index = 0; index < parts.length; index++) {

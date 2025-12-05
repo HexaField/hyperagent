@@ -1,30 +1,29 @@
-import type {
-  CodingAgentRunListResponse,
-  CodingAgentSessionDetail,
-  CodingAgentSessionListResponse,
-  CodingAgentSessionSummary,
-  RunMeta
-} from '../../../interfaces/core/codingAgent'
+import type { RunMeta } from '../../../modules/provenance/provenance'
 import { fetchJson } from '../shared/api/httpClient'
 
-export type {
-  CodingAgentMessage,
-  CodingAgentSessionDetail,
-  CodingAgentSessionSummary,
-  RunMeta
-} from '../../../interfaces/core/codingAgent'
+export type CodingAgentMessagePart = {
+  id: string
+  type: string
+  text?: string
+  [key: string]: unknown
+}
+export type CodingAgentMessage = {
+  id: string
+  role: string
+  createdAt: string
+  completedAt: string | null
+  modelId: string | null
+  parts: CodingAgentMessagePart[]
+  text?: string
+}
 
 
 export async function fetchCodingAgentSessions(params?: {
   workspacePath?: string
-}): Promise<CodingAgentSessionSummary[]> {
+}): Promise<RunMeta[]> {
   const query = params?.workspacePath ? `?workspacePath=${encodeURIComponent(params.workspacePath)}` : ''
-  const payload = await fetchJson<CodingAgentSessionListResponse>(`/api/coding-agent/sessions${query}`)
-  return payload.sessions
-}
-
-export async function fetchCodingAgentSessionDetail(sessionId: string): Promise<CodingAgentSessionDetail> {
-  return await fetchJson<CodingAgentSessionDetail>(`/api/coding-agent/sessions/${encodeURIComponent(sessionId)}`)
+  const payload = await fetchJson<{ runs: RunMeta[] }>(`/api/coding-agent/sessions${query}`)
+  return payload.runs ?? []
 }
 
 export async function startCodingAgentRun(input: {
@@ -138,16 +137,11 @@ export async function killCodingAgentSession(sessionId: string): Promise<boolean
   return Boolean(payload.success)
 }
 
-export async function fetchCodingAgentRuns(): Promise<RunMeta[]> {
-  const payload = await fetchJson<CodingAgentRunListResponse>(`/api/coding-agent/runs`)
-  return payload.runs
-}
-
 export async function postCodingAgentMessage(
   sessionId: string,
   input: { role?: string; text: string; modelId?: string }
-): Promise<CodingAgentSessionDetail> {
-  const payload = await fetchJson<CodingAgentSessionDetail>(
+): Promise<RunMeta | null> {
+  const payload = await fetchJson<{ run: RunMeta | null }>(
     `/api/coding-agent/sessions/${encodeURIComponent(sessionId)}/messages`,
     {
       method: 'POST',
@@ -155,5 +149,5 @@ export async function postCodingAgentMessage(
       body: JSON.stringify({ role: input.role ?? 'user', text: input.text, modelId: input.modelId })
     }
   )
-  return payload
+  return payload.run ?? null
 }

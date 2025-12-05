@@ -1,13 +1,11 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
-import type { RunMeta } from '../../../interfaces/core/codingAgent'
+import type { RunMeta } from '../../../modules/provenance/provenance'
 import { WIDGET_TEMPLATES } from '../constants/widgetTemplates'
 import {
   createCodingAgentPersona,
   deleteCodingAgentPersona,
   fetchCodingAgentPersonas,
-  fetchCodingAgentRuns,
-  fetchCodingAgentSessionDetail,
   fetchCodingAgentSessions,
   getCodingAgentPersona,
   killCodingAgentSession,
@@ -15,8 +13,6 @@ import {
   startCodingAgentRun,
   updateCodingAgentPersona,
   type CodingAgentMessage,
-  type CodingAgentSessionDetail,
-  type CodingAgentSessionSummary,
   type PersonaDetail,
   type PersonaSummary
 } from '../lib/codingAgent'
@@ -46,8 +42,11 @@ type PersistedState = {
 }
 type SessionState = 'running' | 'waiting' | 'completed' | 'failed' | 'terminated'
 
-type SessionRow = CodingAgentSessionSummary & {
-  run: RunMeta | null
+type SessionRow = {
+  id: string
+  title: string | null
+  updatedAt: string
+  run: RunMeta
   state: SessionState
 }
 
@@ -171,10 +170,12 @@ function parseSessionOverrides(raw: string | null): Record<string, SessionOverri
     const next: Record<string, SessionOverride> = {}
     for (const [sessionId, value] of Object.entries(parsed)) {
       if (!sessionId || typeof value !== 'object' || value === null) continue
-      const entry = value as Partial<SessionOverride> & { modelId?: string }
-      const modelId = entry.modelId ? String(entry.modelId) : undefined
-      if (modelId) {
-        next[sessionId] = { modelId: normalizeModelId(null, modelId) }
+      const entry = value as Partial<SessionOverride> & { modelId?: string; personaId?: string }
+      const normalized: SessionOverride = {}
+      if (entry.modelId) normalized.modelId = normalizeModelId(null, String(entry.modelId))
+      if (entry.personaId) normalized.personaId = String(entry.personaId)
+      if (Object.keys(normalized).length > 0) {
+        next[sessionId] = normalized
       }
     }
     return next
@@ -238,30 +239,11 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     const trimmed = value?.trim()
     return await fetchCodingAgentSessions(trimmed ? { workspacePath: trimmed } : undefined)
   })
-  const [runs, { refetch: refetchRuns }] = createResource(fetchCodingAgentRuns)
   const [selectedSessionId, setSelectedSessionId] = createSignal<string | null>(null)
-  const [sessionDetail, { refetch: refetchSessionDetail, mutate: mutateSessionDetail }] = createResource(
-    selectedSessionId,
-    async (sessionId) => {
-      if (!sessionId) return null
-      return await fetchCodingAgentSessionDetail(sessionId)
-    }
-  )
-  const [messageCache, setMessageCache] = createSignal<Record<string, CodingAgentMessage[]>>({})
 
   createEffect(() => {
     const handle = setInterval(() => {
       void refetchSessions()
-      void refetchRuns()
-    }, REFRESH_INTERVAL_MS)
-    onCleanup(() => clearInterval(handle))
-  })
-
-  createEffect(() => {
-    const current = selectedSessionId()
-    if (!current) return
-    const handle = setInterval(() => {
-      void refetchSessionDetail()
     }, REFRESH_INTERVAL_MS)
     onCleanup(() => clearInterval(handle))
   })
@@ -417,7 +399,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         if (ta) ta.style.height = 'auto'
         setPendingSessionId(run.id)
         setSelectedSessionId(run.id)
-        await Promise.all([refetchSessions(), refetchRuns()])
+        await refetchSessions()
         scrollController.requestScrollIfAuto()
         props.onRunStarted?.(run.id)
         if (isMobile()) closeSessionDrawer()
@@ -431,7 +413,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       setReplyText('')
       const ta = replyEl()
       if (ta) ta.style.height = 'auto'
-      await Promise.all([refetchSessionDetail(), refetchSessions()])
+      await refetchSessions()
       scrollController.requestScrollIfAuto()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to post message'
@@ -448,7 +430,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     setError(null)
     try {
       await killCodingAgentSession(sessionId)
-      await Promise.all([refetchRuns(), refetchSessions()])
+      await refetchSessions()
       if (sessionSettingsId() === sessionId) closeSessionSettings()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to end session'
@@ -496,12 +478,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     if (!hasCurrent) {
       if (pending && current === pending) return
       setSelectedSessionId(entries[0].id)
-    }
-  })
-
-  createEffect(() => {
-    if (!selectedSessionId() || draftingSession()) {
-      mutateSessionDetail?.(null)
     }
   })
 
@@ -618,18 +594,23 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     persistSessionOverrides(key, sessionOverrides())
   })
 
-  const selectedDetail = createMemo<CodingAgentSessionDetail | null>(() => {
+  const sessionsById = createMemo(() => {
+    const runs = sessions() ?? []
+    return new Map(runs.map((run) => [run.id, run]))
+  })
+  const selectedRun = createMemo<RunMeta | null>(() => {
     if (draftingSession()) return null
-    return sessionDetail() ?? null
+    const currentId = selectedSessionId()
+    if (!currentId) return null
+    return sessionsById().get(currentId) ?? null
   })
-  const messages = createMemo<CodingAgentMessage[]>(() => {
-    const sessionId = selectedSessionId()
-    if (!sessionId) return []
-    const cached = messageCache()[sessionId]
-    if (cached) return cached
+  const messages = createMemo<CodingAgentMessage[]>((prev) => {
     if (draftingSession()) return []
-    return selectedDetail()?.messages ?? []
-  })
+    const run = selectedRun()
+    if (!run) return []
+    const resolved = buildMessagesFromRun(run)
+    return reconcileMessages(prev ?? [], resolved)
+  }, [])
 
   createEffect(() => {
     const sessionId = selectedSessionId()
@@ -651,45 +632,36 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   })
 
   createEffect(() => {
-    const detail = selectedDetail()
-    if (!detail) {
+    const sessionId = selectedSessionId()
+    if (!sessionId || draftingSession()) {
       setSelectedSessionPersonaDetail(null)
       return
     }
-    const sessionId = detail.session.id
-    const incoming = detail.messages ?? ([] as CodingAgentMessage[])
-    // load persona for this session from overrides if present
-    ;(async () => {
-      try {
-        const overrides = sessionOverrides()
-        const personaId = overrides?.[sessionId]?.personaId ?? null
-        if (personaId) {
-          const pd = await getCodingAgentPersona(personaId)
-          setSelectedSessionPersonaDetail(pd)
-          return
-        }
-      } catch {}
+    const overrides = sessionOverrides()
+    const personaId = overrides?.[sessionId]?.personaId ?? null
+    if (!personaId) {
       setSelectedSessionPersonaDetail(null)
+      return
+    }
+    void (async () => {
+      try {
+        const pd = await getCodingAgentPersona(personaId)
+        setSelectedSessionPersonaDetail(pd)
+      } catch {
+        setSelectedSessionPersonaDetail(null)
+      }
     })()
-    setMessageCache((prev) => {
-      const prevMessages = prev[sessionId] ?? []
-      const nextMessages = reconcileMessages(prevMessages, incoming)
-      if (prevMessages === nextMessages && prev[sessionId] === prevMessages) return prev
-      return { ...prev, [sessionId]: nextMessages }
-    })
   })
 
   const sessionRows = createMemo<SessionRow[]>(() => {
-    const currentSessions = sessions() ?? []
-    const runIndex = new Map((runs() ?? []).map((run) => [run.id, run]))
-    return currentSessions.map((session) => {
-      const run = runIndex.get(session.id) ?? null
-      return {
-        ...session,
-        run,
-        state: deriveSessionState(run)
-      }
-    })
+    const currentRuns = sessions() ?? []
+    return currentRuns.map((run) => ({
+      id: run.id,
+      title: null,
+      updatedAt: run.updatedAt ?? run.createdAt,
+      run,
+      state: deriveSessionState(run)
+    }))
   })
   const selectedSessionMeta = createMemo<SessionRow | null>(() => {
     const sessionId = selectedSessionId()
@@ -716,7 +688,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     const override = overrides?.[sessionId]
     if (override?.modelId) return normalizeModelId(null, override.modelId)
     const session = sessionRows().find((row) => row.id === sessionId)
-    return normalizeModelId(null, session?.modelId)
+    return normalizeModelId(null, latestModelId(session?.run))
   }
   const resolveSessionModelLabel = (sessionId: string | null | undefined): string => {
     return modelLabel(null, resolveSessionModel(sessionId))
@@ -731,7 +703,13 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     const targetId = sessionSettingsId()
     if (!targetId) return
     const modelId = normalizeModelId(null, sessionSettingsModel())
-    setSessionOverrides((prev) => ({ ...prev, [targetId]: { modelId } }))
+    setSessionOverrides((prev) => ({
+      ...prev,
+      [targetId]: {
+        ...prev[targetId],
+        modelId
+      }
+    }))
     closeSessionSettings()
   }
 
@@ -853,7 +831,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         <div class="flex-1 min-w-0">
           <p class="text-sm font-semibold text-[var(--text-muted)]">Session detail</p>
           <Show
-            when={selectedDetail()}
+            when={selectedRun()}
             keyed
             fallback={
               <div>
@@ -896,10 +874,10 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
               </div>
             }
           >
-            {(detail) => (
+            {(run) => (
               <div class="flex items-center gap-3">
                 <h3 class={`text-base font-semibold text-[var(--text)] ${isMobileVariant ? 'truncate' : ''}`}>
-                  {detail.session.title || detail.session.id}
+                  {run.id}
                 </h3>
                 <Show when={selectedSessionPersonaDetail()} keyed>
                   {(pd) => (
@@ -1020,7 +998,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
       <div class="flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-muted)] px-4 py-3">
         <div class="min-w-0 flex-1">
           <p class="text-sm font-semibold text-[var(--text)] truncate">
-            {selectedDetail() ? selectedDetail()!.session.title || selectedDetail()!.session.id : 'No session selected'}
+            {selectedRun() ? selectedRun()!.id : 'No session selected'}
           </p>
         </div>
         <div class="flex items-center gap-2">
@@ -1429,9 +1407,61 @@ function messageSignature(message: CodingAgentMessage): string {
   }
 }
 
+function buildMessagesFromRun(run: RunMeta): CodingAgentMessage[] {
+  const log = Array.isArray(run.log) ? run.log : []
+  return log.map((entry, index) => ({
+    id: entry.entryId || `${run.id}-${index}`,
+    role: entry.role ?? 'agent',
+    createdAt: entry.createdAt,
+    completedAt: entry.createdAt,
+    modelId: entry.model ?? null,
+    parts: payloadToMessageParts(entry.payload),
+    text: resolvePayloadText(entry.payload)
+  }))
+}
+
+function payloadToMessageParts(payload: any): CodingAgentMessage['parts'] {
+  if (Array.isArray(payload)) return payload as CodingAgentMessage['parts']
+  if (payload && typeof payload === 'object' && Array.isArray(payload.parts)) {
+    return payload.parts as CodingAgentMessage['parts']
+  }
+  let textValue: string
+  if (typeof payload === 'string') textValue = payload
+  else {
+    try {
+      textValue = JSON.stringify(payload, null, 2)
+    } catch {
+      textValue = String(payload ?? '')
+    }
+  }
+  return [
+    {
+      id: `payload-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'text',
+      text: textValue
+    }
+  ] as CodingAgentMessage['parts']
+}
+
+function resolvePayloadText(payload: any): string | undefined {
+  if (typeof payload === 'string') return payload
+  if (payload && typeof payload === 'object' && typeof payload.text === 'string') return payload.text
+  return undefined
+}
+
+function latestModelId(run: RunMeta | null | undefined): string | null {
+  if (!run) return null
+  const log = Array.isArray(run.log) ? run.log : []
+  for (let i = log.length - 1; i >= 0; i--) {
+    const entry = log[i]
+    if (entry?.model) return entry.model
+  }
+  return null
+}
+
 function deriveSessionState(run: RunMeta | null | undefined): SessionState {
   if (!run) return 'waiting'
-  return 'running'
+  return Array.isArray(run.log) && run.log.length > 0 ? 'running' : 'waiting'
 }
 
 function sessionStateLabel(state: SessionState): string {

@@ -37,12 +37,14 @@ describe('Verifier/worker collaboration loop', () => {
 
     const scenario = `Create a readme.md file that includes the text "Hello, world".`
 
-    const result = await runVerifierWorkerLoop({
+    const response = await runVerifierWorkerLoop({
       userInstructions: scenario,
       model: model,
       maxRounds: 5,
       sessionDir
     })
+
+    const result = await response.result
 
     console.log('\n\n\n', result)
 

@@ -20,9 +20,8 @@ import type { TerminalSessionRecord } from '../../src/modules/database'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import type { LiveTerminalSession, TerminalModule } from '../../src/modules/terminal'
 import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from '../../src/modules/workflowRunnerGateway'
-import type { CodingAgentSessionDetail, CodingAgentSessionSummary } from '../interfaces/core/codingAgent'
 import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../modules/agent/multi-agent'
-import { metaDirectory } from '../modules/provenance/provenance'
+import { metaDirectory, type RunMeta } from '../modules/provenance/provenance'
 import { createServerApp } from './app'
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
@@ -341,7 +340,7 @@ async function createIntegrationHarness(options?: {
   }
   const webSockets = options?.webSockets ?? resolveWebSockets()
 
-  const runLoop = vi.fn<[AgentLoopOptions], Promise<AgentLoopResult>>(async (options) => {
+  const runLoop = vi.fn<[AgentLoopOptions], Promise<{ runId: string; result: Promise<AgentLoopResult> }>>(async (options) => {
     const chunk: AgentStreamEvent = {
       role: 'worker',
       round: 1,
@@ -351,7 +350,7 @@ async function createIntegrationHarness(options?: {
     }
     options.onStream?.(chunk)
     await new Promise((resolve) => setTimeout(resolve, 10))
-    return mockResult
+    return { runId: 'test-run', result: Promise.resolve(mockResult) }
   })
 
   const controllerFactory = vi.fn<[CodeServerOptions], CodeServerController>((options) => {
@@ -1383,8 +1382,8 @@ describe('opencode session endpoints', () => {
       `${harnessA.baseUrl}/api/coding-agent/sessions?workspacePath=${encodeURIComponent(fixtureRoot)}`
     )
     expect(resA.status).toBe(200)
-    const payloadA = (await resA.json()) as { sessions: CodingAgentSessionSummary[] }
-    expect(payloadA.sessions.length).toBeGreaterThanOrEqual(2)
+    const payloadA = (await resA.json()) as { runs: RunMeta[] }
+    expect(payloadA.runs.length).toBeGreaterThanOrEqual(2)
     await harnessA.close()
 
     const harnessB = await createIntegrationHarness()
@@ -1392,8 +1391,8 @@ describe('opencode session endpoints', () => {
       `${harnessB.baseUrl}/api/coding-agent/sessions?workspacePath=${encodeURIComponent(fixtureRoot)}`
     )
     expect(resB.status).toBe(200)
-    const payloadB = (await resB.json()) as { sessions: CodingAgentSessionSummary[] }
-    expect(payloadB.sessions.length).toBe(payloadA.sessions.length)
+    const payloadB = (await resB.json()) as { runs: RunMeta[] }
+    expect(payloadB.runs.length).toBe(payloadA.runs.length)
     await harnessB.close()
   })
 
@@ -1404,42 +1403,39 @@ describe('opencode session endpoints', () => {
     const workspacePath = path.join(workspaceRoot, 'repo-alpha')
     await fs.mkdir(workspacePath, { recursive: true })
 
-    const summary: CodingAgentSessionSummary = {
-      id: 'ses_alpha',
-      title: 'Alpha Session',
-      workspacePath,
-      projectId: 'hash-alpha',
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-      summary: { additions: 1, deletions: 0, files: 1 }
-    }
+    const runId = 'ses_alpha'
+    const timestamps = { createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() }
 
     const harness = await createIntegrationHarness()
     // persist a minimal RunMeta file so the session detail lookup succeeds
     const metaDir = metaDirectory(workspacePath)
     await fs.mkdir(metaDir, { recursive: true })
-    const runMeta = { id: summary.id, agents: [], log: [], createdAt: summary.createdAt, updatedAt: summary.updatedAt }
-    await fs.writeFile(path.join(metaDir, `${summary.id}.json`), JSON.stringify(runMeta, null, 2), 'utf8')
+    const runMeta = { id: runId, agents: [], log: [], createdAt: timestamps.createdAt, updatedAt: timestamps.updatedAt }
+    await fs.writeFile(path.join(metaDir, `${runId}.json`), JSON.stringify(runMeta, null, 2), 'utf8')
 
     try {
       const startRes = await fetch(`${harness.baseUrl}/api/coding-agent/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspacePath: summary.workspacePath, prompt: 'Ship it' })
+        body: JSON.stringify({ workspacePath, prompt: 'Ship it' })
       })
       expect(startRes.status).toBe(202)
 
-      const detailRes = await fetch(`${harness.baseUrl}/api/coding-agent/sessions/${summary.id}`)
+      const detailRes = await fetch(
+        `${harness.baseUrl}/api/coding-agent/sessions/${runId}?workspacePath=${encodeURIComponent(workspacePath)}`
+      )
       expect(detailRes.status).toBe(200)
-      const detailPayload = (await detailRes.json()) as CodingAgentSessionDetail
-      expect(detailPayload.session.id).toBe(summary.id)
+      const detailPayload = (await detailRes.json()) as RunMeta
+      expect(detailPayload.id).toBe(runId)
 
-      const runsRes = await fetch(`${harness.baseUrl}/api/coding-agent/runs`)
+      const runsRes = await fetch(
+        `${harness.baseUrl}/api/coding-agent/runs?workspacePath=${encodeURIComponent(workspacePath)}`
+      )
       expect(runsRes.status).toBe(200)
       const runsPayload = (await runsRes.json()) as { runs: unknown[] }
       expect(Array.isArray(runsPayload.runs)).toBe(true)
 
-      const killRes = await fetch(`${harness.baseUrl}/api/coding-agent/sessions/${summary.id}/kill`, { method: 'POST' })
+      const killRes = await fetch(`${harness.baseUrl}/api/coding-agent/sessions/${runId}/kill`, { method: 'POST' })
       // Kill is not supported by the server build without a runner
       expect(killRes.status).toBe(501)
     } finally {
@@ -1453,32 +1449,28 @@ describe('opencode session endpoints', () => {
     const workspacePath = path.join(workspaceRoot, 'repo-beta')
     await fs.mkdir(workspacePath, { recursive: true })
 
-    const summary: CodingAgentSessionSummary = {
-      id: 'ses_beta',
-      title: 'Beta Session',
-      workspacePath,
-      projectId: 'hash-beta',
-      createdAt: new Date(0).toISOString(),
-      updatedAt: new Date(0).toISOString(),
-      summary: { additions: 4, deletions: 2, files: 1 }
-    }
+    const runId = 'ses_beta'
+    const timestamps = { createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() }
 
     const harness = await createIntegrationHarness()
     // create a minimal run meta so the session id is known to the server
     const metaDir = metaDirectory(workspacePath)
     await fs.mkdir(metaDir, { recursive: true })
-    const runMeta = { id: summary.id, agents: [], log: [], createdAt: summary.createdAt, updatedAt: summary.updatedAt }
-    await fs.writeFile(path.join(metaDir, `${summary.id}.json`), JSON.stringify(runMeta, null, 2), 'utf8')
+    const runMeta = { id: runId, agents: [], log: [], createdAt: timestamps.createdAt, updatedAt: timestamps.updatedAt }
+    await fs.writeFile(path.join(metaDir, `${runId}.json`), JSON.stringify(runMeta, null, 2), 'utf8')
 
     try {
-      const response = await fetch(`${harness.baseUrl}/api/coding-agent/sessions/${summary.id}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'user', text: 'Continue the plan' })
-      })
+      const response = await fetch(
+        `${harness.baseUrl}/api/coding-agent/sessions/${runId}/messages?workspacePath=${encodeURIComponent(workspacePath)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: 'user', text: 'Continue the plan' })
+        }
+      )
       expect(response.status).toBe(201)
-      const payload = (await response.json()) as CodingAgentSessionDetail
-      expect(payload.session.id).toBe(summary.id)
+      const payload = (await response.json()) as { run: RunMeta }
+      expect(payload.run.id).toBe(runId)
     } finally {
       await harness.close()
       await fs.rm(workspaceRoot, { recursive: true, force: true })

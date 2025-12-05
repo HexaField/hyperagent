@@ -1,13 +1,6 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { fetchJson } from '../shared/api/httpClient'
-import {
-  fetchCodingAgentRuns,
-  fetchCodingAgentSessionDetail,
-  fetchCodingAgentSessions,
-  killCodingAgentSession,
-  postCodingAgentMessage,
-  startCodingAgentRun
-} from './codingAgent'
+import { fetchCodingAgentSessions, killCodingAgentSession, postCodingAgentMessage, startCodingAgentRun } from './codingAgent'
 
 vi.mock('../shared/api/httpClient', () => ({
   fetchJson: vi.fn()
@@ -21,19 +14,9 @@ beforeEach(() => {
 
 describe('coding agent client helpers', () => {
   it('fetches sessions with optional workspace filter', async () => {
-    fetchJsonMock.mockResolvedValue({ sessions: [] })
+    fetchJsonMock.mockResolvedValue({ runs: [] })
     await fetchCodingAgentSessions({ workspacePath: '/repo' })
     expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions?workspacePath=%2Frepo')
-  })
-
-  it('fetches session details and runs', async () => {
-    fetchJsonMock.mockResolvedValue({ session: {}, messages: [] })
-    await fetchCodingAgentSessionDetail('ses_test')
-    expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions/ses_test')
-
-    fetchJsonMock.mockResolvedValue({ runs: [] })
-    await fetchCodingAgentRuns()
-    expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/runs')
   })
 
   it('starts and kills sessions', async () => {
@@ -94,7 +77,7 @@ describe('coding agent client helpers', () => {
   })
 
   it('posts messages to sessions', async () => {
-    const detail = { session: { id: 'ses_test' }, messages: [] }
+    const detail = { run: { id: 'ses_test', agents: [], log: [], createdAt: 'now', updatedAt: 'now' } }
     fetchJsonMock.mockResolvedValue(detail)
     await postCodingAgentMessage('ses_test', { text: 'Hello' })
     expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions/ses_test/messages', {
