@@ -3,7 +3,7 @@ import type {
   WorkflowLogEntry,
   WorkflowRunnerLogEntry
 } from '../../../interfaces/workflows/logs'
-import type { AgentStreamEvent } from '../../../modules/agent/multi-agent'
+import { AgentStreamEvent } from '../../../modules/agent/agent'
 
 const AGENT_STREAM_PREFIX = '[agent-stream]'
 const MAX_EVENTS_PER_WORKFLOW = 1000
