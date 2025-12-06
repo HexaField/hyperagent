@@ -102,6 +102,11 @@ describe('Verifier/worker collaboration loop', () => {
       const verifierMessages = entry.log.filter((e) => e.role === 'verifier')
       expect(workerMessages.length).toBeGreaterThan(0)
       expect(verifierMessages.length).toBeGreaterThan(0)
+      const userMessages = entry.log.filter((e) => e.role === 'user')
+      expect(userMessages.length).toBeGreaterThan(0)
+      expect(
+        userMessages.some((message) => typeof message.payload?.text === 'string' && message.payload.text.includes('Hello'))
+      ).toBe(true)
     }
 
     const readmeDir = sessionDir

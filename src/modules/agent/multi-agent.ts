@@ -11,6 +11,7 @@ import {
   findLatestRoleMessageId,
   hasRunMeta,
   loadRunMeta,
+  recordUserMessage,
   saveRunMeta
 } from '../provenance/provenance'
 import {
@@ -169,6 +170,7 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
 
   const runId = options.runID ?? `run-${Date.now()}`
   const { workerSession, verifierSession } = await ensureMultiAgentSessions(runId, directory, { createIfMissing: true })
+  recordUserMessage(runId, directory, options.userInstructions)
 
   const result: Promise<AgentLoopResult> = (async (): Promise<AgentLoopResult> => {
     const rounds: ConversationRound[] = []

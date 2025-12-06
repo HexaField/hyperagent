@@ -5,6 +5,7 @@ import {
   findLatestRoleMessageId,
   hasRunMeta,
   loadRunMeta,
+  recordUserMessage,
   saveRunMeta
 } from '../provenance/provenance'
 import { AgentRunResponse, AgentStreamCallback, invokeStructuredJsonCall } from './agent'
@@ -60,6 +61,7 @@ export async function runSingleAgentLoop(options: AgentLoopOptions): Promise<Age
 
   const runId = options.runID ?? `run-${Date.now()}`
   const agentSession = await resolveAgentSession(runId, directory, { createIfMissing: true })
+  recordUserMessage(runId, directory, options.userInstructions)
 
   const result = new Promise<string>(async (resolve) => {
     const { raw } = await invokeStructuredJsonCall<string>({

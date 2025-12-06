@@ -100,6 +100,23 @@ export function appendLogEntry(runId: string, entry: LogEntryInit, directory: st
   saveRunMeta(meta, runId, directory)
 }
 
+export function recordUserMessage(runId: string, directory: string, message: string, metadata?: Record<string, unknown>) {
+  const text = typeof message === 'string' ? message.trim() : ''
+  if (!text.length) return
+  const payload: Record<string, unknown> = { text }
+  if (metadata && Object.keys(metadata).length) {
+    Object.assign(payload, metadata)
+  }
+  appendLogEntry(
+    runId,
+    {
+      role: 'user',
+      payload
+    },
+    directory
+  )
+}
+
 export function findLatestLogEntry(meta: RunMeta, predicate: (entry: LogEntry) => boolean): LogEntry | undefined {
   const log = Array.isArray(meta.log) ? meta.log : []
   for (let i = log.length - 1; i >= 0; i--) {

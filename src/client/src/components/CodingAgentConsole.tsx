@@ -145,6 +145,19 @@ function displayRoleLabel(role: string | null | undefined): string {
   return role.trim()
 }
 
+function extractUserMessageText(payload: unknown): string | null {
+  if (payload === null || payload === undefined) return null
+  if (typeof payload === 'string') return payload
+  if (typeof payload === 'number' || typeof payload === 'boolean') return String(payload)
+  if (typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+  const candidates = [record.text, record.message, record.raw]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate
+  }
+  return null
+}
+
 function updateSearchParam(name: string, value: string | null | undefined) {
   if (typeof window === 'undefined') return
   try {
@@ -828,8 +841,13 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     const displayMessages = createMemo(() =>
       messages().map((message) => {
         const label = displayRoleLabel(message.role)
-        if (label === (message.role?.trim() ?? message.role)) return message
-        return { ...message, role: label }
+        const normalizedRole = message.role?.trim().toLowerCase()
+        const userText = normalizedRole === 'user' ? extractUserMessageText(message.payload) : null
+        if (label === (message.role?.trim() ?? message.role) && userText === null) return message
+        const next = { ...message }
+        if (label !== (message.role?.trim() ?? message.role)) next.role = label
+        if (userText !== null) next.payload = userText
+        return next
       })
     )
 

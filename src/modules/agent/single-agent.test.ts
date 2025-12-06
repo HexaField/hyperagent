@@ -86,6 +86,11 @@ describe('Single agent loop', () => {
       expect(entry.log.length).toBeGreaterThan(0)
       const agentMessages = entry.log.filter((e) => e.role === 'agent')
       expect(agentMessages.length).toBeGreaterThan(0)
+      const userMessages = entry.log.filter((e) => e.role === 'user')
+      expect(userMessages.length).toBeGreaterThan(0)
+      expect(
+        userMessages.some((message) => typeof message.payload?.text === 'string' && message.payload.text.includes('Hello'))
+      ).toBe(true)
     }
 
     const diffs = await getAgentRunDiff(agentRun.runId, sessionDir)
