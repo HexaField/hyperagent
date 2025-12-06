@@ -137,7 +137,9 @@ describe('Single agent loop', () => {
     }))
 
     vi.doMock('./agent', () => ({
-      invokeStructuredJsonCall: vi.fn().mockResolvedValue({ raw: '{}', parsed: {} })
+      invokeStructuredJsonCall: vi.fn().mockResolvedValue({ raw: '{}', parsed: {} }),
+      parseJsonPayload: () => () => ({}),
+      configureWorkflowParsers: (registry: Record<string, unknown>) => registry
     }))
 
     try {

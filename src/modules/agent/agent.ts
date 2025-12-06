@@ -1,8 +1,40 @@
 import { FileDiff, Part, Session } from '@opencode-ai/sdk'
+import { z } from 'zod'
 import { appendLogEntry } from '../provenance/provenance'
 import { extractResponseText, getSessionDiff, promptSession } from './opencode'
 
 const MAX_JSON_ATTEMPTS = 3
+
+export type WorkflowParserRegistry = Record<string, z.ZodTypeAny>
+
+export type WorkflowParserOutputs<TRegistry extends WorkflowParserRegistry> = {
+  [Name in keyof TRegistry]: z.infer<TRegistry[Name]>
+}
+
+export type WorkflowParserOutput<
+  TRegistry extends WorkflowParserRegistry,
+  TName extends keyof TRegistry & string
+> = WorkflowParserOutputs<TRegistry>[TName]
+
+let workflowParserRegistry: WorkflowParserRegistry | null = null
+
+export function configureWorkflowParsers<const TRegistry extends WorkflowParserRegistry>(
+  registry: TRegistry
+): TRegistry {
+  workflowParserRegistry = registry
+  return registry
+}
+
+const requireWorkflowParserSchema = (parserName: string): z.ZodTypeAny => {
+  if (!workflowParserRegistry) {
+    throw new Error('No workflow parsers configured. Call configureWorkflowParsers before running workflows.')
+  }
+  const schema = workflowParserRegistry[parserName]
+  if (!schema) {
+    throw new Error(`Workflow parser '${parserName}' is not registered.`)
+  }
+  return schema
+}
 
 export type AgentRunResponse<T = unknown> = {
   runId: string
@@ -138,12 +170,22 @@ export function buildRetryPrompt(basePrompt: string, errorMessage: string): stri
 IMPORTANT: Your previous response was invalid JSON (${errorMessage}). Respond again with STRICT JSON only, without code fences or commentary.`
 }
 
-export function parseJsonPayload(role: string, res: string): any {
-  const jsonText = extractJson(res)
-  try {
-    return JSON.parse(jsonText)
-  } catch (error) {
-    throw new Error(`${role} returned invalid JSON: ${error}`)
+export function parseJsonPayload(_role: string, parserName: string) {
+  const schema = requireWorkflowParserSchema(parserName)
+  return (role: string, res: string): unknown => {
+    const jsonText = extractJson(res)
+    let payload: unknown
+    try {
+      payload = JSON.parse(jsonText)
+    } catch (error) {
+      throw new Error(`${role} returned invalid JSON: ${error}`)
+    }
+    try {
+      return schema.parse(payload)
+    } catch (error) {
+      const details = error instanceof Error ? error.message : String(error)
+      throw new Error(`[${role}] parser '${parserName}' validation failed: ${details}`)
+    }
   }
 }
 

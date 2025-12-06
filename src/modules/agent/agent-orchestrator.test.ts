@@ -6,7 +6,13 @@ import { describe, expect, it } from 'vitest'
 import { RunMeta } from '../provenance/provenance'
 import { getWorkflowRunDiff, loadWorkflowDefinition, runAgentWorkflow } from './agent-orchestrator'
 import { opencodeTestHooks } from './opencodeTestHooks'
-import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from './workflows'
+import {
+  RegisteredWorkflowParserSchemas,
+  SingleAgentWorkflowDefinition,
+  VerifierWorkerWorkflowDefinition,
+  singleAgentWorkflowDefinition,
+  verifierWorkerWorkflowDefinition
+} from './workflows'
 
 const model = 'github-copilot/gpt-5-mini'
 
@@ -53,7 +59,10 @@ describe('Agent orchestrator workflows', () => {
 
     const scenario = 'Create a readme.md file that includes the text "Hello, world".'
 
-    const response = await runAgentWorkflow(workflow, {
+    const response = await runAgentWorkflow<
+      VerifierWorkerWorkflowDefinition,
+      RegisteredWorkflowParserSchemas
+    >(workflow, {
       userInstructions: scenario,
       model,
       sessionDir,
@@ -131,7 +140,10 @@ describe('Agent orchestrator workflows', () => {
 
     const scenario = 'Create a log.txt file that includes a single line "orchestrator".'
 
-    const response = await runAgentWorkflow(workflow, {
+    const response = await runAgentWorkflow<
+      SingleAgentWorkflowDefinition,
+      RegisteredWorkflowParserSchemas
+    >(workflow, {
       userInstructions: scenario,
       model,
       sessionDir,

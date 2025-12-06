@@ -6,7 +6,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { RunMeta } from '../provenance/provenance'
 import { getWorkflowRunDiff, runAgentWorkflow } from './agent-orchestrator'
 import { opencodeTestHooks } from './opencodeTestHooks'
-import { verifierWorkerWorkflowDefinition } from './workflows'
+import {
+  RegisteredWorkflowParserSchemas,
+  VerifierWorkerWorkflowDefinition,
+  verifierWorkerWorkflowDefinition
+} from './workflows'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
@@ -55,7 +59,10 @@ describe('Verifier/worker collaboration loop', () => {
 
     const scenario = `Create a readme.md file that includes the text "Hello, world".`
 
-    const response = await runAgentWorkflow(verifierWorkerWorkflowDefinition, {
+    const response = await runAgentWorkflow<
+      VerifierWorkerWorkflowDefinition,
+      RegisteredWorkflowParserSchemas
+    >(verifierWorkerWorkflowDefinition, {
       userInstructions: scenario,
       model: model,
       maxRounds: 5,
@@ -64,16 +71,14 @@ describe('Verifier/worker collaboration loop', () => {
 
     const result = await response.result
 
-    console.log('\n\n\n', result)
-
-    const bootstrap = result.bootstrap as any
+    const bootstrap = result.bootstrap!
     expect(bootstrap.round).toBe(0)
     expect(bootstrap.parsed.instructions.trim().length).toBeGreaterThan(0)
 
     expect(result.rounds.length).toBeGreaterThan(0)
     const firstRound = result.rounds[0]
-    const workerStep = firstRound.steps.worker as any
-    const verifierStep = firstRound.steps.verifier as any
+    const workerStep = firstRound.steps.worker
+    const verifierStep = firstRound.steps.verifier
     expect(workerStep?.parsed.plan.trim().length).toBeGreaterThan(0)
     expect(workerStep?.parsed.work.trim().length).toBeGreaterThan(0)
     expect(verifierStep?.parsed.instructions.trim().length).toBeGreaterThan(0)
@@ -191,7 +196,15 @@ describe('Verifier/worker collaboration loop', () => {
     vi.doMock('./agent', () => ({
       invokeStructuredJsonCall,
       coerceString: (value: unknown) => (typeof value === 'string' ? value : ''),
-      parseJsonPayload: (_role: string, res: string) => JSON.parse(res)
+      parseJsonPayload: (role: string, parser: string) => {
+        void role
+        void parser
+        return (targetRole: string, res: string) => {
+          void targetRole
+          return JSON.parse(res)
+        }
+      },
+      configureWorkflowParsers: (registry: Record<string, unknown>) => registry
     }))
 
     try {
