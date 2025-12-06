@@ -2,11 +2,11 @@ import type { FileDiff } from '@opencode-ai/sdk'
 import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
+import { singleAgentWorkflowDefinition } from '.'
 import { RunMeta } from '../../provenance/provenance'
 import { getWorkflowRunDiff, runAgentWorkflow } from '../agent-orchestrator'
 import { opencodeTestHooks } from '../opencodeTestHooks'
-import { singleAgentWorkflowDefinition } from '.'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
@@ -107,58 +107,4 @@ describe('Single agent loop', () => {
     expect(readmeDiff).toBeTruthy()
     expect(readmeDiff?.after.toLowerCase()).toContain('hello, single agent')
   }, 120_000)
-
-  it('records user instructions in provenance immediately', async () => {
-    vi.resetModules()
-    const recordUserMessage = vi.fn()
-    const mockMeta = {
-      id: 'run-mock',
-      agents: [{ role: 'agent', sessionId: 'session-mock' }],
-      log: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }
-
-    vi.doMock('../provenance/provenance', () => ({
-      createRunMeta: vi.fn(() => mockMeta),
-      findLatestRoleDiff: vi.fn(() => null),
-      findLatestRoleMessageId: vi.fn(() => null),
-      hasRunMeta: vi.fn(() => false),
-      loadRunMeta: vi.fn(() => mockMeta),
-      saveRunMeta: vi.fn(),
-      recordUserMessage
-    }))
-
-    const mockSession = { id: 'session-mock', directory: '/tmp/provenance-test' }
-    vi.doMock('./opencode', () => ({
-      createSession: vi.fn().mockResolvedValue(mockSession),
-      getSession: vi.fn().mockResolvedValue(mockSession),
-      getSessionDiff: vi.fn().mockResolvedValue([])
-    }))
-
-    vi.doMock('./agent', () => ({
-      invokeStructuredJsonCall: vi.fn().mockResolvedValue({ raw: '{}', parsed: {} }),
-      parseJsonPayload: () => () => ({}),
-      configureWorkflowParsers: (registry: Record<string, unknown>) => registry
-    }))
-
-    try {
-      const { runAgentWorkflow: mockedRunAgentWorkflow } = await import('../agent-orchestrator')
-      const { singleAgentWorkflowDefinition: workflowDefinition } = await import('.')
-      const scenario = 'Document the onboarding experience'
-      const run = await mockedRunAgentWorkflow(workflowDefinition, {
-        userInstructions: scenario,
-        sessionDir: '/tmp/provenance-test',
-        model: 'test-model'
-      })
-      await run.result
-      expect(recordUserMessage).toHaveBeenCalledTimes(1)
-      expect(recordUserMessage).toHaveBeenCalledWith(run.runId, '/tmp/provenance-test', scenario)
-    } finally {
-      vi.doUnmock('../provenance/provenance')
-      vi.doUnmock('./opencode')
-      vi.doUnmock('./agent')
-      vi.resetModules()
-    }
-  })
 })

@@ -8,6 +8,9 @@ export const singleAgentWorkflowDocument = {
   sessions: {
     roles: [{ role: 'agent' as const, nameTemplate: '{{runId}}-solo' }]
   },
+  parsers: {
+    passthrough: { type: 'unknown' as const }
+  },
   roles: {
     agent: {
       systemPrompt:

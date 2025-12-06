@@ -26,7 +26,9 @@ import {
   WorkflowOutcomeTemplate,
   WorkflowStepDefinition,
   WorkflowTransitionDefinition,
-  workflowDefinitionSchema
+  workflowDefinitionSchema,
+  type WorkflowParserJsonOutput,
+  type WorkflowParserJsonSchema
 } from './workflow-schema'
 
 export type AgentWorkflowRunOptions = {
@@ -44,6 +46,13 @@ type ParserLookup<TDefinition extends AgentWorkflowDefinition> = {
   [Role in WorkflowRoleName<TDefinition>]: TDefinition['roles'][Role]['parser']
 }
 
+type ParserSchemaForRole<
+  TDefinition extends AgentWorkflowDefinition,
+  Role extends WorkflowRoleName<TDefinition>
+> = NonNullable<TDefinition['parsers']>[ParserLookup<TDefinition>[Role] &
+  keyof NonNullable<TDefinition['parsers']> &
+  string]
+
 type RoundStepDefinition<TDefinition extends AgentWorkflowDefinition> = TDefinition['flow']['round']['steps'][number]
 type RoundStepKey<TDefinition extends AgentWorkflowDefinition> = RoundStepDefinition<TDefinition>['key']
 type BootstrapStepDefinition<TDefinition extends AgentWorkflowDefinition> =
@@ -51,24 +60,27 @@ type BootstrapStepDefinition<TDefinition extends AgentWorkflowDefinition> =
     ? NonNullable<TDefinition['flow']['bootstrap']>
     : never
 
-type StepDefinitionByKey<
-  TDefinition extends AgentWorkflowDefinition,
-  TKey extends RoundStepKey<TDefinition>
-> = Extract<RoundStepDefinition<TDefinition>, { key: TKey }>
+type StepDefinitionByKey<TDefinition extends AgentWorkflowDefinition, TKey extends RoundStepKey<TDefinition>> = Extract<
+  RoundStepDefinition<TDefinition>,
+  { key: TKey }
+>
 
 type ParserForRole<
   TDefinition extends AgentWorkflowDefinition,
-  Role extends WorkflowRoleName<TDefinition>
-> = ParserLookup<TDefinition>[Role]
+  Role extends WorkflowRoleName<TDefinition>,
+  TParsers extends WorkflowParserRegistry
+> = ParserLookup<TDefinition>[Role] & (keyof NonNullable<TDefinition['parsers']> & keyof TParsers & string)
 
 type ParserOutputForRole<
   TDefinition extends AgentWorkflowDefinition,
   Role extends WorkflowRoleName<TDefinition>,
   TParsers extends WorkflowParserRegistry
 > =
-  ParserForRole<TDefinition, Role> extends keyof TParsers & string
-    ? WorkflowParserOutput<TParsers, ParserForRole<TDefinition, Role>>
-    : unknown
+  ParserSchemaForRole<TDefinition, Role> extends WorkflowParserJsonSchema
+    ? WorkflowParserJsonOutput<ParserSchemaForRole<TDefinition, Role>>
+    : ParserForRole<TDefinition, Role, TParsers> extends never
+      ? never
+      : WorkflowParserOutput<TParsers, ParserForRole<TDefinition, Role, TParsers>>
 
 type WorkflowTurnForStep<
   TDefinition extends AgentWorkflowDefinition,
@@ -197,11 +209,7 @@ type StepDictionary<
   TDefinition extends AgentWorkflowDefinition,
   TParsers extends WorkflowParserRegistry = WorkflowParserRegistry
 > = Partial<{
-  [Key in RoundStepKey<TDefinition>]: WorkflowTurnForStep<
-    TDefinition,
-    StepDefinitionByKey<TDefinition, Key>,
-    TParsers
-  >
+  [Key in RoundStepKey<TDefinition>]: WorkflowTurnForStep<TDefinition, StepDefinitionByKey<TDefinition, Key>, TParsers>
 }>
 
 type TemplateScope<
@@ -658,11 +666,10 @@ export async function runAgentWorkflow<
     if (definition.flow.bootstrap) {
       const bootstrapScope = cloneScope(baseScope, { round: 0, steps: {} as StepDictionary<TDefinition, TParsers> })
       const bootstrapDefinition = definition.flow.bootstrap as BootstrapStepDefinition<TDefinition>
-      const executedBootstrap = (await executeStep(
-        bootstrapDefinition,
-        bootstrapScope,
-        execCtx
-      )) as BootstrapTurn<TDefinition, TParsers>
+      const executedBootstrap = (await executeStep(bootstrapDefinition, bootstrapScope, execCtx)) as BootstrapTurn<
+        TDefinition,
+        TParsers
+      >
       bootstrapTurn = executedBootstrap
       baseScope.bootstrap = executedBootstrap
       const bootstrapStepScope = scopeWithStep(bootstrapScope, executedBootstrap)
@@ -694,11 +701,10 @@ export async function runAgentWorkflow<
           throw new Error(`Workflow step ${currentStepKey} not found in definition ${definition.id}`)
         }
 
-        const stepResult = (await executeStep(
-          stepDefinition,
-          roundScope,
-          execCtx
-        )) as RoundStepTurn<TDefinition, TParsers>
+        const stepResult = (await executeStep(stepDefinition, roundScope, execCtx)) as RoundStepTurn<
+          TDefinition,
+          TParsers
+        >
         const stepKey = stepDefinition.key as RoundStepKey<TDefinition>
         roundSteps[stepKey] = stepResult
         const currentScope = scopeWithStep(roundScope, stepResult)
@@ -729,8 +735,8 @@ export async function runAgentWorkflow<
 
         currentStepKey = navigator.fallbackNext.get(stepDefinition.key)
       }
-  const finalizedSteps: StepDictionary<TDefinition, TParsers> = { ...roundSteps }
-  rounds.push({ round: roundNumber, steps: finalizedSteps })
+      const finalizedSteps: StepDictionary<TDefinition, TParsers> = { ...roundSteps }
+      rounds.push({ round: roundNumber, steps: finalizedSteps })
     }
 
     if (!finalOutcome) {

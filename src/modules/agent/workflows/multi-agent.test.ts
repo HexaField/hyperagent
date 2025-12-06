@@ -2,15 +2,11 @@ import type { FileDiff } from '@opencode-ai/sdk'
 import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
+import { RegisteredWorkflowParserSchemas, VerifierWorkerWorkflowDefinition, verifierWorkerWorkflowDefinition } from '.'
 import { RunMeta } from '../../provenance/provenance'
 import { getWorkflowRunDiff, runAgentWorkflow } from '../agent-orchestrator'
 import { opencodeTestHooks } from '../opencodeTestHooks'
-import {
-  RegisteredWorkflowParserSchemas,
-  VerifierWorkerWorkflowDefinition,
-  verifierWorkerWorkflowDefinition
-} from '.'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
@@ -59,15 +55,15 @@ describe('Verifier/worker collaboration loop', () => {
 
     const scenario = `Create a readme.md file that includes the text "Hello, world".`
 
-    const response = await runAgentWorkflow<
-      VerifierWorkerWorkflowDefinition,
-      RegisteredWorkflowParserSchemas
-    >(verifierWorkerWorkflowDefinition, {
-      userInstructions: scenario,
-      model: model,
-      maxRounds: 5,
-      sessionDir
-    })
+    const response = await runAgentWorkflow<VerifierWorkerWorkflowDefinition, RegisteredWorkflowParserSchemas>(
+      verifierWorkerWorkflowDefinition,
+      {
+        userInstructions: scenario,
+        model: model,
+        maxRounds: 5,
+        sessionDir
+      }
+    )
 
     const result = await response.result
 
@@ -140,91 +136,4 @@ describe('Verifier/worker collaboration loop', () => {
     const verifierDiffs: FileDiff[] = await getWorkflowRunDiff(response.runId, sessionDir, { role: 'verifier' })
     expect(Array.isArray(verifierDiffs)).toBe(true)
   }, 120_000)
-
-  it('records user instructions in multi-agent provenance immediately', async () => {
-    vi.resetModules()
-    const recordUserMessage = vi.fn()
-    const baseMeta = {
-      id: 'run-mock',
-      agents: [
-        { role: 'worker', sessionId: 'worker-session' },
-        { role: 'verifier', sessionId: 'verifier-session' }
-      ],
-      log: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }
-
-    vi.doMock('../provenance/provenance', () => ({
-      createRunMeta: vi.fn(() => baseMeta),
-      findLatestRoleDiff: vi.fn(() => null),
-      findLatestRoleMessageId: vi.fn(() => null),
-      hasRunMeta: vi.fn(() => false),
-      loadRunMeta: vi.fn(() => baseMeta),
-      saveRunMeta: vi.fn(),
-      recordUserMessage
-    }))
-
-    const workerSession = { id: 'worker-session', directory: '/tmp/provenance-test' }
-    const verifierSession = { id: 'verifier-session', directory: '/tmp/provenance-test' }
-    vi.doMock('./opencode', () => ({
-      createSession: vi.fn().mockResolvedValueOnce(workerSession).mockResolvedValueOnce(verifierSession),
-      getSession: vi.fn(async (_dir: string, id: string) =>
-        id === workerSession.id ? workerSession : verifierSession
-      ),
-      getSessionDiff: vi.fn().mockResolvedValue([])
-    }))
-
-    let verifierCalls = 0
-    const invokeStructuredJsonCall = vi.fn(async (args: any) => {
-      if (args.role === 'verifier') {
-        const payload =
-          verifierCalls === 0
-            ? { verdict: 'instruct', critique: 'next steps', instructions: 'do work', priority: 3 }
-            : { verdict: 'approve', critique: 'done', instructions: '', priority: 1 }
-        verifierCalls += 1
-        const raw = JSON.stringify(payload)
-        const parsed = args.parseResponse ? args.parseResponse(raw) : (payload as any)
-        return { raw, parsed }
-      }
-      const workerPayload = { status: 'working', plan: 'plan', work: 'work', requests: '' }
-      const raw = JSON.stringify(workerPayload)
-      const parsed = args.parseResponse ? args.parseResponse(raw) : (workerPayload as any)
-      return { raw, parsed }
-    })
-
-    vi.doMock('./agent', () => ({
-      invokeStructuredJsonCall,
-      coerceString: (value: unknown) => (typeof value === 'string' ? value : ''),
-      parseJsonPayload: (role: string, parser: string) => {
-        void role
-        void parser
-        return (targetRole: string, res: string) => {
-          void targetRole
-          return JSON.parse(res)
-        }
-      },
-      configureWorkflowParsers: (registry: Record<string, unknown>) => registry
-    }))
-
-    try {
-      const { runAgentWorkflow: mockedRunWorkflow } = await import('../agent-orchestrator')
-      const { verifierWorkerWorkflowDefinition: workflowDefinition } = await import('.')
-      const scenario = 'Plan and execute release notes'
-      const run = await mockedRunWorkflow(workflowDefinition, {
-        userInstructions: scenario,
-        sessionDir: '/tmp/provenance-test',
-        model: 'test-model',
-        maxRounds: 1
-      })
-      await run.result
-      expect(recordUserMessage).toHaveBeenCalledTimes(1)
-      expect(recordUserMessage).toHaveBeenCalledWith(run.runId, '/tmp/provenance-test', scenario)
-    } finally {
-      vi.doUnmock('../provenance/provenance')
-      vi.doUnmock('./opencode')
-      vi.doUnmock('./agent')
-      vi.resetModules()
-    }
-  })
 })

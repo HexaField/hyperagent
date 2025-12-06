@@ -1,29 +1,47 @@
-import type { AgentWorkflowResult } from '../agent-orchestrator'
 import { configureWorkflowParsers } from '../agent'
+import type { AgentWorkflowResult } from '../agent-orchestrator'
 import {
   workflowDefinitionSchema,
+  workflowParserSchemaToZod,
   type AgentWorkflowDefinition,
-  type AgentWorkflowDefinitionDraft
+  type AgentWorkflowDefinitionDraft,
+  type WorkflowParserJsonSchema
 } from '../workflow-schema'
 import { singleAgentWorkflowDocument } from './single-agent.workflow'
 import { verifierWorkerWorkflowDocument } from './verifier-worker.workflow'
-import { z } from 'zod'
 
-export const registeredWorkflowParserSchemas = configureWorkflowParsers({
-  passthrough: z.unknown(),
-  worker: z.object({
-    status: z.enum(['working', 'done', 'blocked']),
-    plan: z.string(),
-    work: z.string(),
-    requests: z.string().optional().default('')
-  }),
-  verifier: z.object({
-    verdict: z.enum(['instruct', 'approve', 'fail']),
-    critique: z.string(),
-    instructions: z.string(),
-    priority: z.number().int().min(1).max(5)
+type UnionToIntersection<U> = (U extends any ? (arg: U) => void : never) extends (arg: infer I) => void ? I : never
+
+type ParserSchemasOf<T extends AgentWorkflowDefinition> =
+  NonNullable<T['parsers']> extends Record<
+    string,
+    WorkflowParserJsonSchema
+  >
+    ? {
+        [K in keyof NonNullable<T['parsers']>]: ReturnType<typeof workflowParserSchemaToZod<NonNullable<T['parsers']>[K]>>
+      }
+    : {}
+
+type MergedParserSchemas<TDefs extends readonly AgentWorkflowDefinition[]> = {
+  [K in keyof UnionToIntersection<ParserSchemasOf<TDefs[number]>>]: UnionToIntersection<
+    ParserSchemasOf<TDefs[number]>
+  >[K]
+}
+
+const collectParserSchemas = <const TDefs extends readonly AgentWorkflowDefinition[]>(...definitions: TDefs) => {
+  const registry = {} as MergedParserSchemas<TDefs>
+  definitions.forEach((definition) => {
+    const parsers = definition.parsers ?? {}
+    Object.entries(parsers).forEach(([name, schema]) => {
+      ;(registry as Record<string, unknown>)[name] = workflowParserSchemaToZod(schema as WorkflowParserJsonSchema)
+    })
   })
-})
+  return registry
+}
+
+export const registeredWorkflowParserSchemas = configureWorkflowParsers(
+  collectParserSchemas(singleAgentWorkflowDocument, verifierWorkerWorkflowDocument)
+)
 
 export type RegisteredWorkflowParserSchemas = typeof registeredWorkflowParserSchemas
 

@@ -15,7 +15,8 @@ Every workflow document must satisfy `workflowDefinitionSchema` in `workflow-sch
 | `description` | optional | Human-readable summary of the workflow's intent. |
 | `model` | optional | Default LLM model; callers can override per run. |
 | `sessions.roles` | required | Array of role entries describing how to create per-role Opencode sessions. |
-| `roles` | required | Map of role name → role definition (system prompt + parser). Must include all role names referenced elsewhere. |
+| `parsers` | optional | Map of parser name → JSON-schema-like shape describing expected responses. Definitions are converted to Zod at runtime. |
+| `roles` | required | Map of role name → role definition (system prompt + parser). Must include all role names referenced elsewhere. Parsers must reference keys defined in `parsers`. |
 | `state` | optional | Initial key/value store with template-aware values. |
 | `flow.bootstrap` | optional | A single verifier step that runs before round 1. |
 | `flow.round` | required | Definition of the repeating round (steps array + transitions + default outcome). |
@@ -36,20 +37,28 @@ Every workflow document must satisfy `workflowDefinitionSchema` in `workflow-sch
 
 ### Roles & Parsers
 
-Each entry in `roles` looks like:
+Define parser shapes in `parsers` using a compact JSON schema that supports `string`, `number`, `boolean`, `unknown`, `array`, and `object` types (with `enum`, `required`, and `default` support). Roles then reference these parser names:
 
 ```jsonc
-{
-  "systemPrompt": "You are a meticulous engineer...",
-  "parser": "worker" | "verifier" | "passthrough"
+"parsers": {
+  "worker": {
+    "type": "object",
+    "properties": {
+      "status": { "type": "string", "enum": ["working", "done", "blocked"] },
+      "plan": { "type": "string" },
+      "work": { "type": "string" },
+      "requests": { "type": "string", "default": "" }
+    },
+    "required": ["status", "plan", "work"]
+  }
+},
+"roles": {
+  "worker": { "systemPrompt": "...", "parser": "worker" }
 }
 ```
 
 - `systemPrompt` is fed directly to the LLM whenever the role executes a step.
-- `parser` selects how responses are coerced:
-  - `worker`: expects `{ status, plan, work, requests }` and normalizes missing fields.
-  - `verifier`: expects `{ verdict, critique, instructions, priority }`.
-  - `passthrough`: leaves the raw JSON payload intact.
+- `parser` references one of the parser definitions declared under `parsers`. New workflows can introduce bespoke parsers without changing the runtime.
 
 ### Shared State
 

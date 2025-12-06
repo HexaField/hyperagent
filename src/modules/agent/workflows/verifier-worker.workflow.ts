@@ -11,6 +11,28 @@ export const verifierWorkerWorkflowDocument = {
       { role: 'verifier' as const, nameTemplate: '{{runId}}-verifier' }
     ]
   },
+  parsers: {
+    worker: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['working', 'done', 'blocked'] },
+        plan: { type: 'string' },
+        work: { type: 'string' },
+        requests: { type: 'string', default: '' }
+      },
+      required: ['status', 'plan', 'work']
+    },
+    verifier: {
+      type: 'object',
+      properties: {
+        verdict: { type: 'string', enum: ['instruct', 'approve', 'fail'] },
+        critique: { type: 'string' },
+        instructions: { type: 'string' },
+        priority: { type: 'number', integer: true, minimum: 1, maximum: 5 }
+      },
+      required: ['verdict', 'critique', 'instructions', 'priority']
+    }
+  },
   roles: {
     worker: {
       systemPrompt:
