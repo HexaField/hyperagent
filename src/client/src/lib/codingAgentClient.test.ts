@@ -79,11 +79,11 @@ describe('coding agent client helpers', () => {
   it('posts messages to sessions', async () => {
     const detail = { run: { id: 'ses_test', agents: [], log: [], createdAt: 'now', updatedAt: 'now' } }
     fetchJsonMock.mockResolvedValue(detail)
-    await postCodingAgentMessage('ses_test', { text: 'Hello' })
+    await postCodingAgentMessage('/repo', 'ses_test', { text: 'Hello' })
     expect(fetchJsonMock).toHaveBeenCalledWith('/api/coding-agent/sessions/ses_test/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'user', text: 'Hello' })
+      body: JSON.stringify({ workspacePath: '/repo', role: 'user', text: 'Hello' })
     })
   })
 })

@@ -3,7 +3,12 @@ import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRunResponse } from './agent/agent'
-import type { AgentWorkflowRunOptions, AgentWorkflowTurn } from './agent/agent-orchestrator'
+import type {
+  AgentWorkflowRunOptions,
+  AgentWorkflowTurn,
+  VerifierStructuredResponse,
+  WorkerStructuredResponse
+} from './agent/agent-orchestrator'
 import { type VerifierWorkerWorkflowDefinition, type VerifierWorkerWorkflowResult } from './agent/workflows'
 import { createAgentWorkflowExecutor } from './workflowAgentExecutor'
 import type { AgentExecutorArgs } from './workflows'
@@ -116,13 +121,13 @@ function buildExecutorArgs(sessionDir: string): AgentExecutorArgs {
 }
 
 function buildWorkflowResult(outcome: VerifierWorkerWorkflowResult['outcome']): VerifierWorkerWorkflowResult {
-  const verifierParsed = {
+  const verifierParsed: VerifierStructuredResponse = {
     verdict: outcome === 'approved' ? 'approve' : 'fail',
     critique: 'Looks good',
     instructions: outcome === 'approved' ? 'Ship it.' : 'Fix the failing tests.',
     priority: 1
   }
-  const workerParsed = {
+  const workerParsed: WorkerStructuredResponse = {
     status: 'done',
     plan: 'Plan the refactor',
     work: 'Implemented the parser updates.',

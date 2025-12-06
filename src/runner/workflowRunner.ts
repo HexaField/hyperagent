@@ -431,11 +431,10 @@ const createFallbackAgentExecutor = (behavior: string): AgentExecutor => {
     behavior === 'invalid-json'
       ? 'verifier returned invalid JSON: SyntaxError: Unterminated string in JSON at position 1803'
       : 'workflow agent provider unavailable during test fallback'
-  const failingRunLoop = async () => {
-    throw new Error(message)
-  }
   return createAgentWorkflowExecutor({
-    runLoop: failingRunLoop,
+    runWorkflow: async () => {
+      throw new Error(message)
+    },
     maxRounds: 1
   })
 }

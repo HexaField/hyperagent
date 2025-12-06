@@ -137,7 +137,7 @@ const workflowSessionRoleSchema = z.object({
 
 const workflowRoleDefinitionSchema = z.object({
   systemPrompt: z.string().min(1),
-  parser: z.enum(['worker', 'verifier', 'passthrough'])
+  parser: z.string()
 })
 
 const workflowRolesSchema = z
