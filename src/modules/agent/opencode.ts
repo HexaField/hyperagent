@@ -16,7 +16,6 @@ type SessionMessageEntry = {
   parts: Part[]
 }
 
-
 type SessionDiffRecord = {
   files: FileDiff[]
   receivedAt: number

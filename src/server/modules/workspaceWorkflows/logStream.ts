@@ -85,7 +85,10 @@ export const createWorkflowLogStream = (): WorkflowLogStream => {
     }
     const extractTextFromParts = (parts: any[] | undefined): string => {
       if (!Array.isArray(parts)) return ''
-      return parts.map((p) => (p && typeof p === 'object' ? String(p.text ?? '') : String(p ?? ''))).join('').trim()
+      return parts
+        .map((p) => (p && typeof p === 'object' ? String(p.text ?? '') : String(p ?? '')))
+        .join('')
+        .trim()
     }
     const entry: WorkflowAgentLogEntry = {
       id: nextId(),

@@ -340,18 +340,20 @@ async function createIntegrationHarness(options?: {
   }
   const webSockets = options?.webSockets ?? resolveWebSockets()
 
-  const runLoop = vi.fn<[AgentLoopOptions], Promise<{ runId: string; result: Promise<AgentLoopResult> }>>(async (options) => {
-    const chunk: AgentStreamEvent = {
-      role: 'worker',
-      round: 1,
-      parts: [{ id: 'p1', type: 'text', text: 'stream-chunk' } as any],
-      model: 'mock-model',
-      attempt: 1
+  const runLoop = vi.fn<[AgentLoopOptions], Promise<{ runId: string; result: Promise<AgentLoopResult> }>>(
+    async (options) => {
+      const chunk: AgentStreamEvent = {
+        role: 'worker',
+        round: 1,
+        parts: [{ id: 'p1', type: 'text', text: 'stream-chunk' } as any],
+        model: 'mock-model',
+        attempt: 1
+      }
+      options.onStream?.(chunk)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      return { runId: 'test-run', result: Promise.resolve(mockResult) }
     }
-    options.onStream?.(chunk)
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    return { runId: 'test-run', result: Promise.resolve(mockResult) }
-  })
+  )
 
   const controllerFactory = vi.fn<[CodeServerOptions], CodeServerController>((options) => {
     expect(options.port).toBe(fakeCodeServer.port)
@@ -1440,7 +1442,6 @@ describe('opencode session endpoints', () => {
       expect(runsRes.status).toBe(200)
       const runsPayload = (await runsRes.json()) as { runs: unknown[] }
       expect(Array.isArray(runsPayload.runs)).toBe(true)
-
     } finally {
       await harness.close()
       await fs.rm(workspaceRoot, { recursive: true, force: true })

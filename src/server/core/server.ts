@@ -1083,7 +1083,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   })
 
   const workspaceSessionsRouter = createWorkspaceSessionsRouter({
-    wrapAsync,
+    wrapAsync
   })
 
   const workspaceNarratorRouter = createWorkspaceNarratorRouter({

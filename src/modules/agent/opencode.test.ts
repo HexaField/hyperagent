@@ -1,7 +1,7 @@
+import { TextPart } from '@opencode-ai/sdk'
 import { execSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
-import { TextPart } from '@opencode-ai/sdk'
 import { describe, expect, it } from 'vitest'
 import { createSession, getSessionDiff, promptSession } from './opencode'
 import { opencodeTestHooks } from './opencodeTestHooks'
@@ -32,11 +32,7 @@ const initGitRepo = (directory: string) => {
 }
 
 const createSessionDir = () => {
-  const sessionDir = path.join(
-    process.cwd(),
-    '.tests',
-    `opencode-${Date.now()}-${Math.random().toString(16).slice(2)}`
-  )
+  const sessionDir = path.join(process.cwd(), '.tests', `opencode-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   fs.mkdirSync(sessionDir, { recursive: true })
   fs.writeFileSync(path.join(sessionDir, 'opencode.json'), JSON.stringify(OPENCODE_CONFIG, null, 2))
   initGitRepo(sessionDir)
@@ -66,21 +62,17 @@ describe('Opencode Module', () => {
     expect(answer.includes('paris')).toBe(true)
   })
 
-  it(
-    'should retrieve session diffs after file edits',
-    async () => {
-      const sessionDir = createSessionDir()
-      const session = await createSession(sessionDir)
-      const promptText = `Create (or overwrite) a file named "opencode-test.md" in the workspace root with the exact contents: "Hello from the Opencode tests" followed by a newline. After writing, confirm the file contents.`
-      await promptSession(session, [promptText], MODEL)
+  it('should retrieve session diffs after file edits', async () => {
+    const sessionDir = createSessionDir()
+    const session = await createSession(sessionDir)
+    const promptText = `Create (or overwrite) a file named "opencode-test.md" in the workspace root with the exact contents: "Hello from the Opencode tests" followed by a newline. After writing, confirm the file contents.`
+    await promptSession(session, [promptText], MODEL)
 
-      const diffs = await getSessionDiff(session)
-      expect(Array.isArray(diffs)).toBe(true)
-      expect(diffs.length).toBeGreaterThan(0)
-      const readmeDiff = diffs.find((diff) => diff.file.toLowerCase().includes('opencode-test.md'))
-      expect(readmeDiff).toBeTruthy()
-      expect(readmeDiff?.after.toLowerCase()).toContain('hello from the opencode tests')
-    },
-    120_000
-  )
+    const diffs = await getSessionDiff(session)
+    expect(Array.isArray(diffs)).toBe(true)
+    expect(diffs.length).toBeGreaterThan(0)
+    const readmeDiff = diffs.find((diff) => diff.file.toLowerCase().includes('opencode-test.md'))
+    expect(readmeDiff).toBeTruthy()
+    expect(readmeDiff?.after.toLowerCase()).toContain('hello from the opencode tests')
+  }, 120_000)
 })

@@ -138,22 +138,22 @@ const AGENT_STREAM_PREFIX = '[agent-stream]'
 const createAgentStreamLogger = (workflowId: string, stepId: string, runnerInstanceId: string): AgentStreamCallback => {
   return (event) => {
     try {
-          const payload = {
-            event: 'agent.stream',
-            workflowId,
-            stepId,
-            runnerInstanceId,
-            timestamp: new Date().toISOString(),
-            data: {
-              role: event.role,
-              round: event.round,
-              parts: Array.isArray((event as any).parts) ? (event as any).parts.map((p: any) => p.text ?? '') : [],
-              provider: null,
-              model: event.model,
-              attempt: event.attempt,
-              sessionId: event.runId ?? null
-            }
-          }
+      const payload = {
+        event: 'agent.stream',
+        workflowId,
+        stepId,
+        runnerInstanceId,
+        timestamp: new Date().toISOString(),
+        data: {
+          role: event.role,
+          round: event.round,
+          parts: Array.isArray((event as any).parts) ? (event as any).parts.map((p: any) => p.text ?? '') : [],
+          provider: null,
+          model: event.model,
+          attempt: event.attempt,
+          sessionId: event.runId ?? null
+        }
+      }
       console.log(`${AGENT_STREAM_PREFIX} ${JSON.stringify(payload)}`)
     } catch (error) {
       runnerErrorLogger('agent_stream_log_failed', error, { workflowId, stepId })
@@ -208,7 +208,7 @@ const resolveCommitAuthor = () => {
   }
 }
 
-  const resolveAgentOptions = () => {
+const resolveAgentOptions = () => {
   const provider = (process.env.WORKFLOW_AGENT_PROVIDER?.trim() || 'opencode') as string
   const model = process.env.WORKFLOW_AGENT_MODEL?.trim() || 'github-copilot/gpt-5-mini'
   const maxRoundsEnv = process.env.WORKFLOW_AGENT_MAX_ROUNDS

@@ -1,5 +1,5 @@
-import { createPatch } from 'diff'
 import type { FileDiff } from '@opencode-ai/sdk'
+import { createPatch } from 'diff'
 
 const resolveFilePath = (value: unknown): string => {
   if (typeof value === 'string' && value.trim().length) {
