@@ -22,17 +22,15 @@ import { createReviewEngineModule } from '../../../src/modules/review/engine'
 import { createPullRequestModule } from '../../../src/modules/review/pullRequest'
 import { createDockerReviewRunnerGateway } from '../../../src/modules/review/runnerGateway'
 import { createReviewSchedulerModule } from '../../../src/modules/review/scheduler'
-import type { ReviewRunTrigger } from '../../../src/modules/review/types'
 import { createTerminalModule, type TerminalModule } from '../../../src/modules/terminal'
 import { createWorkflowPolicyFromEnv } from '../../../src/modules/workflowPolicy'
 import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
-import { runAgentWorkflow, type AgentWorkflowRunOptions } from '../../modules/agent/agent-orchestrator'
 import type { AgentRunResponse } from '../../modules/agent/agent'
+import { runAgentWorkflow, type AgentWorkflowRunOptions } from '../../modules/agent/agent-orchestrator'
 import { verifierWorkerWorkflowDefinition, type VerifierWorkerWorkflowResult } from '../../modules/agent/workflows'
 import { runGitCommand } from '../../modules/git'
-import { createSseStream } from '../lib/sse'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
 import { createWorkspaceNarratorRouter, type NarratorRelay } from '../modules/workspaceNarrator/routes'
 import { seedDefaultPersonas } from '../modules/workspaceSessions/personas'
@@ -41,6 +39,8 @@ import { createWorkspaceSummaryRouter } from '../modules/workspaceSummary/routes
 import { createWorkspaceTerminalModule } from '../modules/workspaceTerminal/module'
 import { createWorkflowLogStream } from '../modules/workspaceWorkflows/logStream'
 import { createWorkspaceWorkflowsRouter } from '../modules/workspaceWorkflows/routes'
+import { createCodeServerProxyHandler, extractCodeServerSessionIdFromUrl } from './codeServerProxy'
+import type { CodeServerSession, ProxyWithUpgrade } from './codeServerTypes'
 import {
   CODE_SERVER_HOST,
   DEFAULT_PORT,
@@ -66,27 +66,13 @@ import {
   type ManagedService
 } from './services'
 import { resolveTlsMaterials, type TlsConfig } from './tls'
+import { createVersionControlRouter } from './versionControlRoutes'
 import { ensureWorkspaceDirectory, initializeWorkspaceRepository, readGitMetadata } from './workspaceGit'
 import { loadWebSocketModule, type WebSocketBindings } from './ws'
 
-export type ProxyWithUpgrade = RequestHandler & {
-  upgrade?: (req: IncomingMessage, socket: Socket, head: Buffer) => void
-}
+export type { CodeServerSession, ProxyWithUpgrade } from './codeServerTypes'
 
-export type CodeServerSession = {
-  id: string
-  dir: string
-  basePath: string
-  projectId: string
-  branch: string
-  controller: CodeServerController
-  proxy: ProxyWithUpgrade
-  publicUrl: string
-}
-
-type WorkflowRunner = (
-  options: AgentWorkflowRunOptions
-) => Promise<AgentRunResponse<VerifierWorkerWorkflowResult>>
+type WorkflowRunner = (options: AgentWorkflowRunOptions) => Promise<AgentRunResponse<VerifierWorkerWorkflowResult>>
 
 type ControllerFactory = (options: CodeServerOptions) => CodeServerController
 
@@ -145,7 +131,6 @@ export type ServerInstance = {
   getActiveSessionIds: () => string[]
   handleUpgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void
   handlers: {
-    agentRun: RequestHandler
     codeServerProxy: RequestHandler
   }
 }
@@ -350,6 +335,9 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   app.use(attachJsonStackMiddleware())
 
   const activeCodeServers = new Map<string, CodeServerSession>()
+  const codeServerProxyHandler = createCodeServerProxyHandler({
+    getSession: (sessionId) => activeCodeServers.get(sessionId) ?? null
+  })
   const applyProxyResponseHeaders = (proxyRes: IncomingMessage, _req: IncomingMessage, res: Response) => {
     if (corsOrigin) {
       proxyRes.headers['access-control-allow-origin'] = corsOrigin
@@ -448,13 +436,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       defaultBranch: 'main',
       createdAt: new Date().toISOString()
     }
-  }
-
-  function normalizeReviewTrigger(value: unknown): ReviewRunTrigger {
-    if (value === 'auto_on_open' || value === 'auto_on_update') {
-      return value
-    }
-    return 'manual'
   }
 
   function rewriteCodeServerPath(pathName: string, sessionId: string): string {
@@ -567,512 +548,9 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     persistence.codeServerSessions.markStopped(sessionId)
   }
 
-  function extractSessionIdFromUrl(rawUrl: string | undefined): string | null {
-    if (!rawUrl) return null
-    const match = rawUrl.match(/^\/code-server\/([^/?#]+)/)
-    return match?.[1] ?? null
-  }
-
   async function shutdownAllCodeServers(): Promise<void> {
     const entries = [...activeCodeServers.keys()]
     await Promise.all(entries.map((id) => shutdownCodeServerSession(id)))
-  }
-
-  const agentRunHandler: RequestHandler = async (req: Request, res: Response) => {
-    const { prompt, model, maxRounds, projectId } = req.body ?? {}
-    if (!prompt || typeof prompt !== 'string') {
-      res.status(400).json({ error: 'prompt is required' })
-      return
-    }
-
-    let project: ProjectRecord | null = null
-    if (typeof projectId === 'string' && projectId.trim().length) {
-      project = persistence.projects.getById(projectId.trim())
-      if (!project) {
-        res.status(404).json({ error: 'Unknown project' })
-        return
-      }
-      try {
-        await ensureWorkspaceDirectory(project.repositoryPath)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Project repository path is unavailable'
-        res.status(400).json({ error: message })
-        return
-      }
-    }
-
-    const sse = createSseStream(res, req)
-    let closed = false
-    let sessionId: string | null = null
-    let sessionDir: string | null = null
-    let shouldShutdownCodeServer = !project
-    sse.onClose(() => {
-      closed = true
-      if (sessionId && shouldShutdownCodeServer) {
-        void shutdownCodeServerSession(sessionId)
-      }
-    })
-
-    const emit = (packet: Record<string, unknown>) => {
-      if (closed) return
-      sse.emit(packet)
-    }
-
-    if (project) {
-      sessionDir = project.repositoryPath
-      sessionId = `project-run-${project.id}-${Date.now().toString(36)}`
-    } else {
-      sessionDir = await fs.mkdtemp(path.join(tmpDir, 'hyperagent-session-'))
-      sessionId = path.basename(sessionDir)
-    }
-
-    if (!sessionId || !sessionDir) {
-      throw new Error('Unable to initialize agent workspace')
-    }
-
-    const codeServerSession = project
-      ? await ensureProjectCodeServer(project)
-      : await startCodeServerForSession(sessionId, sessionDir)
-
-    agentLogger.info('Session ready', {
-      sessionId,
-      projectId: project?.id ?? null,
-      workspaceDir: sessionDir,
-      codeServerSessionId: codeServerSession?.id ?? null
-    })
-    emit({
-      type: 'session',
-      payload: {
-        sessionDir,
-        sessionId,
-        codeServerUrl: codeServerSession?.publicUrl ?? null,
-        projectId: project?.id ?? codeServerSession?.projectId ?? null,
-        branch: project?.defaultBranch ?? codeServerSession?.branch ?? null
-      }
-    })
-
-    const streamHandler = (event: any) => {
-      if (closed) return
-      emit({ type: 'chunk', payload: event })
-    }
-
-    try {
-      const modelToUse = typeof model === 'string' && model.length ? model : undefined
-      const normalizedMaxRounds = typeof maxRounds === 'number' ? maxRounds : undefined
-
-      agentLogger.info('Agent loop started', {
-        sessionId,
-        projectId: project?.id ?? null,
-        model: modelToUse ?? null
-      })
-      const result = await runWorkflow({
-        userInstructions: prompt,
-        model: modelToUse,
-        maxRounds: normalizedMaxRounds,
-        sessionDir: sessionDir ?? undefined,
-        onStream: streamHandler
-      })
-      agentLogger.info('Agent loop completed', {
-        sessionId,
-        projectId: project?.id ?? null
-      })
-      emit({ type: 'result', payload: result })
-    } catch (error: unknown) {
-      logFullError(error, { method: req.method, url: req.originalUrl, label: 'agentRunHandler' })
-      const message = error instanceof Error ? error.message : 'Agent loop failed'
-      const stack = error instanceof Error ? (error.stack ?? null) : String(error)
-      if (!closed) {
-        emit({
-          type: 'error',
-          payload: {
-            message,
-            stack
-          }
-        })
-      }
-    } finally {
-      if (!closed) {
-        agentLogger.debug('Emitting end frame', { sessionId })
-        emit({ type: 'end' })
-        agentLogger.debug('Ending response', { sessionId })
-        res.end()
-      }
-      if (sessionId && shouldShutdownCodeServer) {
-        await shutdownCodeServerSession(sessionId)
-      }
-    }
-  }
-
-  const codeServerProxyHandler: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
-    const { sessionId } = req.params
-    const session = sessionId ? activeCodeServers.get(sessionId) : null
-    if (!session) {
-      res.status(404).json({ error: 'Unknown code-server session' })
-      return
-    }
-    session.proxy(req, res, next)
-  }
-
-  const listProjectPullRequestsHandler: RequestHandler = (req, res) => {
-    const projectId = req.params.projectId
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId is required' })
-      return
-    }
-    const project = persistence.projects.getById(projectId)
-    if (!project) {
-      res.status(404).json({ error: 'Unknown project' })
-      return
-    }
-    const pullRequests = pullRequestModule.listPullRequests(projectId).map((pullRequest) => {
-      const runs = persistence.reviewRuns.listByPullRequest(pullRequest.id)
-      return {
-        ...pullRequest,
-        latestReviewRun: runs.length ? runs[0] : null
-      }
-    })
-    res.json({ project, pullRequests })
-  }
-
-  const listActiveReviewsHandler: RequestHandler = (_req, res) => {
-    const projects = persistence.projects.list()
-    const groups: Array<{ project: ProjectRecord; pullRequests: Array<Record<string, unknown>> }> = []
-    projects.forEach((project) => {
-      const pullRequests = pullRequestModule
-        .listPullRequests(project.id)
-        .filter((pullRequest) => pullRequest.status === 'open')
-        .map((pullRequest) => {
-          const runs = persistence.reviewRuns.listByPullRequest(pullRequest.id)
-          return {
-            ...pullRequest,
-            latestReviewRun: runs.length ? runs[0] : null
-          }
-        })
-      if (pullRequests.length) {
-        groups.push({ project, pullRequests })
-      }
-    })
-    res.json({ groups })
-  }
-
-  const createProjectPullRequestHandler: RequestHandler = async (req, res) => {
-    const projectId = req.params.projectId
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId is required' })
-      return
-    }
-    const project = persistence.projects.getById(projectId)
-    if (!project) {
-      res.status(404).json({ error: 'Unknown project' })
-      return
-    }
-    const { title, description, sourceBranch, targetBranch, radiclePatchId } = req.body ?? {}
-    if (typeof title !== 'string' || !title.trim().length) {
-      res.status(400).json({ error: 'title is required' })
-      return
-    }
-    if (typeof sourceBranch !== 'string' || !sourceBranch.trim().length) {
-      res.status(400).json({ error: 'sourceBranch is required' })
-      return
-    }
-    const authorUserId = resolveUserIdFromRequest(req)
-    try {
-      const record = await pullRequestModule.createPullRequest({
-        projectId: project.id,
-        title: title.trim(),
-        description: typeof description === 'string' ? description : undefined,
-        sourceBranch: sourceBranch.trim(),
-        targetBranch: typeof targetBranch === 'string' && targetBranch.trim().length ? targetBranch.trim() : undefined,
-        radiclePatchId:
-          typeof radiclePatchId === 'string' && radiclePatchId.trim().length ? radiclePatchId.trim() : undefined,
-        authorUserId
-      })
-      res.status(201).json({ pullRequest: record })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to create pull request'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const pullRequestDetailHandler: RequestHandler = async (req, res) => {
-    const prId = req.params.prId
-    if (!prId) {
-      res.status(400).json({ error: 'pull request id is required' })
-      return
-    }
-    const detail = await pullRequestModule.getPullRequestWithCommits(prId)
-    if (!detail) {
-      res.status(404).json({ error: 'Unknown pull request' })
-      return
-    }
-    const reviewRuns = persistence.reviewRuns.listByPullRequest(prId)
-    res.json({
-      project: detail.project,
-      pullRequest: detail.pullRequest,
-      commits: detail.commits,
-      events: detail.events,
-      reviewRuns
-    })
-  }
-
-  const pullRequestDiffHandler: RequestHandler = async (req, res) => {
-    const prId = req.params.prId
-    if (!prId) {
-      res.status(400).json({ error: 'pull request id is required' })
-      return
-    }
-    const detail = await pullRequestModule.getPullRequestWithCommits(prId)
-    if (!detail) {
-      res.status(404).json({ error: 'Unknown pull request' })
-      return
-    }
-    try {
-      const diff = await diffModule.getPullRequestDiff(detail.pullRequest, detail.project)
-      res.json({ pullRequestId: prId, diff })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to compute diff'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const pullRequestThreadsHandler: RequestHandler = (req, res) => {
-    const prId = req.params.prId
-    if (!prId) {
-      res.status(400).json({ error: 'pull request id is required' })
-      return
-    }
-    const pullRequest = persistence.pullRequests.getById(prId)
-    if (!pullRequest) {
-      res.status(404).json({ error: 'Unknown pull request' })
-      return
-    }
-    const threads = persistence.reviewThreads.listByPullRequest(prId)
-    const comments = persistence.reviewComments.listByThreadIds(threads.map((thread) => thread.id))
-    const commentMap = new Map<string, typeof comments>()
-    comments.forEach((comment) => {
-      const existing = commentMap.get(comment.threadId) ?? []
-      existing.push(comment)
-      commentMap.set(comment.threadId, existing)
-    })
-    res.json({
-      pullRequest,
-      threads: threads.map((thread) => ({
-        ...thread,
-        comments: commentMap.get(thread.id) ?? []
-      }))
-    })
-  }
-
-  const addThreadCommentHandler: RequestHandler = (req, res) => {
-    const threadId = req.params.threadId
-    if (!threadId) {
-      res.status(400).json({ error: 'threadId is required' })
-      return
-    }
-    const thread = persistence.reviewThreads.getById(threadId)
-    if (!thread) {
-      res.status(404).json({ error: 'Unknown review thread' })
-      return
-    }
-    const bodyText = typeof req.body?.body === 'string' ? req.body.body.trim() : ''
-    if (!bodyText.length) {
-      res.status(400).json({ error: 'body is required' })
-      return
-    }
-    const authorKind = req.body?.authorKind === 'agent' ? 'agent' : 'user'
-    const authorUserId = authorKind === 'agent' ? null : resolveUserIdFromRequest(req)
-    const suggestedPatch =
-      typeof req.body?.suggestedPatch === 'string' && req.body.suggestedPatch.trim().length
-        ? req.body.suggestedPatch
-        : null
-    const comment = persistence.reviewComments.create({
-      threadId,
-      authorKind,
-      authorUserId,
-      body: bodyText,
-      suggestedPatch
-    })
-    persistence.pullRequestEvents.insert({
-      pullRequestId: thread.pullRequestId,
-      kind: 'comment_added',
-      actorUserId: authorUserId,
-      data: { threadId, commentId: comment.id }
-    })
-    res.status(201).json({ comment })
-  }
-
-  const resolveThreadHandler: RequestHandler = (req, res) => {
-    const threadId = req.params.threadId
-    if (!threadId) {
-      res.status(400).json({ error: 'threadId is required' })
-      return
-    }
-    const thread = persistence.reviewThreads.getById(threadId)
-    if (!thread) {
-      res.status(404).json({ error: 'Unknown review thread' })
-      return
-    }
-    const resolvedState = typeof req.body?.resolved === 'boolean' ? req.body.resolved : true
-    persistence.reviewThreads.markResolved(threadId, resolvedState)
-    const actorUserId = resolveUserIdFromRequest(req)
-    persistence.pullRequestEvents.insert({
-      pullRequestId: thread.pullRequestId,
-      kind: 'comment_resolved',
-      actorUserId,
-      data: { threadId, resolved: resolvedState }
-    })
-    res.json({ threadId, resolved: resolvedState })
-  }
-
-  const triggerPullRequestReviewHandler: RequestHandler = async (req, res) => {
-    const prId = req.params.prId
-    if (!prId) {
-      res.status(400).json({ error: 'pull request id is required' })
-      return
-    }
-    const pullRequest = persistence.pullRequests.getById(prId)
-    if (!pullRequest) {
-      res.status(404).json({ error: 'Unknown pull request' })
-      return
-    }
-    const trigger = normalizeReviewTrigger(req.body?.trigger)
-    try {
-      const run = await reviewScheduler.requestReview(prId, trigger)
-      res.status(202).json({ run })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to request review'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const mergePullRequestHandler: RequestHandler = async (req, res) => {
-    const prId = req.params.prId
-    if (!prId) {
-      res.status(400).json({ error: 'pull request id is required' })
-      return
-    }
-    const pullRequest = persistence.pullRequests.getById(prId)
-    if (!pullRequest) {
-      res.status(404).json({ error: 'Unknown pull request' })
-      return
-    }
-    const actorUserId = resolveUserIdFromRequest(req)
-    try {
-      await pullRequestModule.mergePullRequest(prId, actorUserId)
-      res.json({ pullRequestId: prId, status: 'merged' })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to merge pull request'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const closePullRequestHandler: RequestHandler = async (req, res) => {
-    const prId = req.params.prId
-    if (!prId) {
-      res.status(400).json({ error: 'pull request id is required' })
-      return
-    }
-    const pullRequest = persistence.pullRequests.getById(prId)
-    if (!pullRequest) {
-      res.status(404).json({ error: 'Unknown pull request' })
-      return
-    }
-    const actorUserId = resolveUserIdFromRequest(req)
-    try {
-      await pullRequestModule.closePullRequest(prId, actorUserId)
-      res.json({ pullRequestId: prId, status: 'closed' })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to close pull request'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const applySuggestionHandler: RequestHandler = async (req, res) => {
-    const prId = req.params.prId
-    if (!prId) {
-      res.status(400).json({ error: 'pull request id is required' })
-      return
-    }
-    const commentId = typeof req.body?.commentId === 'string' ? req.body.commentId.trim() : ''
-    if (!commentId.length) {
-      res.status(400).json({ error: 'commentId is required' })
-      return
-    }
-    const detail = await pullRequestModule.getPullRequestWithCommits(prId)
-    if (!detail) {
-      res.status(404).json({ error: 'Unknown pull request' })
-      return
-    }
-    const comment = persistence.reviewComments.getById(commentId)
-    if (!comment || !comment.suggestedPatch) {
-      res.status(404).json({ error: 'Review comment does not contain a suggestion' })
-      return
-    }
-    const thread = persistence.reviewThreads.getById(comment.threadId)
-    if (!thread || thread.pullRequestId !== prId) {
-      res.status(400).json({ error: 'Comment does not belong to this pull request' })
-      return
-    }
-    const commitMessage =
-      typeof req.body?.commitMessage === 'string' && req.body.commitMessage.trim().length
-        ? req.body.commitMessage.trim()
-        : `Apply suggestion from review comment ${comment.id}`
-    try {
-      const commitHash = await applyPatchToBranch(
-        detail.project.repositoryPath,
-        detail.pullRequest.sourceBranch,
-        comment.suggestedPatch,
-        commitMessage
-      )
-      await pullRequestModule.updatePullRequestCommits(prId)
-      res.json({ pullRequestId: prId, commitHash })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to apply suggestion'
-      res.status(500).json({ error: message })
-    }
-  }
-
-  const reviewRunCallbackHandler: RequestHandler = async (req, res) => {
-    const runId = req.params.runId
-    if (!runId) {
-      res.status(400).json({ error: 'runId is required' })
-      return
-    }
-    if (!validateReviewRunnerToken(req)) {
-      res.status(401).json({ error: 'Invalid runner token' })
-      return
-    }
-    const run = persistence.reviewRuns.getById(runId)
-    if (!run) {
-      res.status(404).json({ error: 'Unknown review run' })
-      return
-    }
-    const status = typeof req.body?.status === 'string' ? req.body.status : 'completed'
-    if (status === 'failed') {
-      const summary =
-        typeof req.body?.error === 'string' && req.body.error.trim().length
-          ? req.body.error.trim()
-          : 'Review runner reported failure'
-      persistence.reviewRuns.update(runId, {
-        status: 'failed',
-        completedAt: new Date().toISOString(),
-        summary,
-        logsPath: typeof req.body?.logsPath === 'string' ? req.body.logsPath : undefined
-      })
-      persistence.pullRequestEvents.insert({
-        pullRequestId: run.pullRequestId,
-        kind: 'review_run_completed',
-        actorUserId: null,
-        data: { runId, status: 'failed' }
-      })
-      res.json({ ok: true })
-      return
-    }
-    await reviewScheduler.runRunById(runId)
-    if (typeof req.body?.logsPath === 'string' && req.body.logsPath.trim().length) {
-      persistence.reviewRuns.update(runId, { logsPath: req.body.logsPath.trim() })
-    }
-    res.json({ ok: true })
   }
 
   const workspaceSummaryRouter = createWorkspaceSummaryRouter({
@@ -1128,6 +606,17 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     WebSocketServerCtor,
     resolveUserIdFromRequest,
     resolveUserIdFromHeaders
+  })
+
+  const versionControlRouter = createVersionControlRouter({
+    wrapAsync,
+    persistence,
+    pullRequestModule,
+    reviewScheduler,
+    diffModule,
+    applyPatchToBranch,
+    resolveUserIdFromRequest,
+    validateReviewRunnerToken
   })
 
   const managedServices: ManagedService[] = [
@@ -1221,7 +710,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     })
   )
 
-  app.post('/api/agent/run', wrapAsync(agentRunHandler))
   app.use(workspaceSummaryRouter)
   app.use(workspaceSessionsRouter)
   app.use(workspaceNarratorRouter)
@@ -1229,19 +717,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   app.use(workspaceCodeServerRouter)
   app.use(workspaceTerminalModule.router)
 
-  app.get('/api/projects/:projectId/pull-requests', wrapAsync(listProjectPullRequestsHandler))
-  app.get('/api/reviews/active', wrapAsync(listActiveReviewsHandler))
-  app.post('/api/projects/:projectId/pull-requests', wrapAsync(createProjectPullRequestHandler))
-  app.get('/api/pull-requests/:prId', wrapAsync(pullRequestDetailHandler))
-  app.get('/api/pull-requests/:prId/diff', wrapAsync(pullRequestDiffHandler))
-  app.get('/api/pull-requests/:prId/threads', wrapAsync(pullRequestThreadsHandler))
-  app.post('/api/pull-requests/:prId/reviews', wrapAsync(triggerPullRequestReviewHandler))
-  app.post('/api/pull-requests/:prId/merge', wrapAsync(mergePullRequestHandler))
-  app.post('/api/pull-requests/:prId/close', wrapAsync(closePullRequestHandler))
-  app.post('/api/pull-requests/:prId/apply-suggestion', wrapAsync(applySuggestionHandler))
-  app.post('/api/threads/:threadId/comments', wrapAsync(addThreadCommentHandler))
-  app.post('/api/threads/:threadId/resolve', wrapAsync(resolveThreadHandler))
-  app.post('/api/review-runs/:runId/callback', wrapAsync(reviewRunCallbackHandler))
+  app.use(versionControlRouter)
 
   app.use('/code-server/:sessionId', codeServerProxyHandler)
 
@@ -1267,7 +743,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       workspaceTerminalModule.handleUpgrade(req, socket, head)
       return
     }
-    const sessionIdFromUrl = extractSessionIdFromUrl(req.url)
+    const sessionIdFromUrl = extractCodeServerSessionIdFromUrl(req.url)
     if (!sessionIdFromUrl) {
       socket.destroy()
       return
@@ -1309,7 +785,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     getActiveSessionIds: () => [...activeCodeServers.keys()],
     handleUpgrade,
     handlers: {
-      agentRun: agentRunHandler,
       codeServerProxy: codeServerProxyHandler
     }
   }
