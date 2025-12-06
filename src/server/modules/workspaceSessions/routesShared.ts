@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
-import { hasRunMeta, loadRunMeta, metaDirectory, type RunMeta } from '../../../modules/provenance/provenance'
+import { hasRunMeta, loadRunMeta, metaDirectory, type LogEntry, type RunMeta } from '../../../modules/provenance/provenance'
+import { fileDiffsToUnifiedPatch } from '../../../shared/diffPatch'
 
 const knownWorkspaces = new Set<string>()
 
@@ -57,3 +58,36 @@ export const safeLoadRun = (runId: string, workspacePath: string): RunMeta | nul
     return null
   }
 }
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+const extractDiffPatch = (payload: unknown): string | null => {
+  if (!isPlainObject(payload)) return null
+  const diff = payload.diff
+  if (!isPlainObject(diff)) return null
+  const existing = typeof diff.patch === 'string' ? diff.patch.trim() : ''
+  if (existing) return existing
+  const files = Array.isArray(diff.files) ? (diff.files as any[]) : []
+  if (!files.length) return null
+  return fileDiffsToUnifiedPatch(files as any)
+}
+
+const withDiffPatch = (entry: LogEntry): LogEntry => {
+  const patch = extractDiffPatch(entry.payload)
+  if (!patch) return entry
+  if (!isPlainObject(entry.payload)) return entry
+  const nextPayload: Record<string, unknown> = { ...entry.payload }
+  const diff = isPlainObject(nextPayload.diff) ? { ...nextPayload.diff } : {}
+  diff.patch = patch
+  nextPayload.diff = diff
+  return { ...entry, payload: nextPayload }
+}
+
+export const serializeRunWithDiffs = (run: RunMeta): RunMeta => {
+  const log = Array.isArray(run.log) ? run.log.map((entry) => withDiffPatch(entry)) : []
+  return { ...run, log }
+}
+
+export const serializeRunsWithDiffs = (runs: RunMeta[]): RunMeta[] => runs.map((run) => serializeRunWithDiffs(run))

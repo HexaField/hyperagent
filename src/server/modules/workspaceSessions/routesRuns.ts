@@ -7,7 +7,14 @@ import { loadRunMeta, metaDirectory, type RunMeta } from '../../../modules/prove
 import { ensureProviderConfig } from '../../../modules/workflowAgentExecutor'
 import { DEFAULT_CODING_AGENT_MODEL } from '../../core/config'
 import { readPersona } from './personas'
-import { normalizeWorkspacePath, readWorkspaceRuns, rememberWorkspacePath, safeLoadRun } from './routesShared'
+import {
+  normalizeWorkspacePath,
+  readWorkspaceRuns,
+  rememberWorkspacePath,
+  safeLoadRun,
+  serializeRunWithDiffs,
+  serializeRunsWithDiffs
+} from './routesShared'
 import type { WorkspaceSessionsDeps } from './routesTypes'
 
 const MULTI_AGENT_PERSONA_ID = 'multi-agent'
@@ -45,7 +52,7 @@ const createListSessionsHandler = (): RequestHandler => async (req, res) => {
       return
     }
     rememberWorkspacePath(workspacePath)
-    const runs = readWorkspaceRuns(workspacePath)
+    const runs = serializeRunsWithDiffs(readWorkspaceRuns(workspacePath))
     res.json({ runs })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to list coding agent sessions'
@@ -61,7 +68,7 @@ const createListRunsHandler = (): RequestHandler => async (req, res) => {
       return
     }
     rememberWorkspacePath(workspacePath)
-    const runs = readWorkspaceRuns(workspacePath)
+    const runs = serializeRunsWithDiffs(readWorkspaceRuns(workspacePath))
     res.json({ runs })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to list coding agent runs'
@@ -117,7 +124,7 @@ const createStartSessionHandler = ({ logSessions, logSessionsError }: ReturnType
           sessionDir: normalizedWorkspace
         })
         const run = loadRunMeta(runId, normalizedWorkspace)
-        res.status(202).json({ run })
+        res.status(202).json({ run: serializeRunWithDiffs(run) })
         return
       }
 
@@ -127,7 +134,7 @@ const createStartSessionHandler = ({ logSessions, logSessionsError }: ReturnType
         sessionDir: normalizedWorkspace
       })
       const run = loadRunMeta(runId, normalizedWorkspace)
-      res.status(202).json({ run })
+      res.status(202).json({ run: serializeRunWithDiffs(run) })
     } catch (error) {
       logSessionsError('Failed to start coding agent session', error, { workspacePath: normalizedWorkspace })
       const message = error instanceof Error ? error.message : 'Failed to start coding agent session'
@@ -222,7 +229,7 @@ const createPostMessageHandler = ({ logSessions, logSessionsError }: ReturnType<
         updatedAt: new Date().toISOString()
       }
       const run = safeLoadRun(runId, workspacePath) ?? fallbackRun
-      res.status(201).json({ run })
+      res.status(201).json({ run: serializeRunWithDiffs(run) })
     } catch (error) {
       logSessionsError('Failed to post coding agent message', error, { sessionId: runId })
       const message = error instanceof Error ? error.message : 'Failed to post coding agent message'

@@ -140,6 +140,14 @@ const extractPartsFromPayload = (payload: unknown, depth = 0): Part[] | null => 
   return null
 }
 
+const extractDiffPatchFromPayload = (payload: unknown): string | null => {
+  if (!payload || typeof payload !== 'object') return null
+  const diff = (payload as any).diff
+  if (!diff || typeof diff !== 'object') return null
+  const patch = typeof diff.patch === 'string' ? diff.patch.trim() : ''
+  return patch.length ? patch : null
+}
+
 const resolveMessageText = (payload: unknown): string | null => {
   if (payload === null || payload === undefined) return null
   if (typeof payload === 'string') {
@@ -885,6 +893,7 @@ export default function MessageScroller(props: MessageScrollerProps) {
 
     const elements: JSX.Element[] = []
     const toolCalls = extractToolCalls(parts)
+    let diffRenderedFromParts = false
 
     for (let index = 0; index < parts.length; index++) {
       const part = parts[index]
@@ -952,6 +961,9 @@ export default function MessageScroller(props: MessageScrollerProps) {
           continue
         }
 
+        if (diffText) {
+          diffRenderedFromParts = true
+        }
         elements.push(
           <DetailsWithToggle
             summaryText={summaryText}
@@ -990,9 +1002,13 @@ export default function MessageScroller(props: MessageScrollerProps) {
 
       if (normalizedType === 'file-diff' || normalizedType === 'diff') {
         const diffText = extractDiffText(part)
+        if (!diffText) {
+          continue
+        }
+        diffRenderedFromParts = true
         elements.push(
           <div class="mt-2 mb-2">
-            <DiffViewer diffText={diffText ?? undefined} />
+            <DiffViewer diffText={diffText} />
           </div>
         )
         continue
@@ -1001,6 +1017,18 @@ export default function MessageScroller(props: MessageScrollerProps) {
 
     if (toolCalls.length > 1) {
       elements.push(<ToolCallList calls={toolCalls} />)
+    }
+
+    if (!diffRenderedFromParts) {
+      const payloadDiffPatch = extractDiffPatchFromPayload(message.payload)
+      if (payloadDiffPatch) {
+        elements.push(
+          <div class="mt-2 mb-2">
+            <DiffViewer diffText={payloadDiffPatch} />
+          </div>
+        )
+        diffRenderedFromParts = true
+      }
     }
 
     if (!elements.length) {

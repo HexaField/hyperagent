@@ -1,6 +1,6 @@
 import { Router, type RequestHandler } from 'express'
 import { hasRunMeta, loadRunMeta, type RunMeta } from '../../../modules/provenance/provenance'
-import { findWorkspaceForRun, normalizeWorkspacePath } from './routesShared'
+import { findWorkspaceForRun, normalizeWorkspacePath, serializeRunWithDiffs } from './routesShared'
 import type { WorkspaceSessionsDeps } from './routesTypes'
 
 type RunMessage = {
@@ -55,7 +55,7 @@ const createGetSessionHandler = (): RequestHandler => async (req, res) => {
   }
 
   try {
-    const run = loadRunMeta(runId, workspacePath)
+    const run = serializeRunWithDiffs(loadRunMeta(runId, workspacePath))
     const messages = buildMessagesFromRun(run)
     res.json({ ...run, messages })
   } catch (error) {

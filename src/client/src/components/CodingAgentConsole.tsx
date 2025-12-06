@@ -15,7 +15,9 @@ import {
   type PersonaDetail,
   type PersonaSummary
 } from '../lib/codingAgent'
+import { fileDiffsToUnifiedPatch } from '../../../shared/diffPatch'
 import ConversationPane from './ConversationPane'
+import DiffViewer from './DiffViewer'
 import { createConversationScrollController } from './conversationScrollController'
 
 const REFRESH_INTERVAL_MS = 4000
@@ -268,9 +270,15 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [draftPersonaId, setDraftPersonaId] = createSignal<string | null>(null)
   const [draftPersonaDetail, setDraftPersonaDetail] = createSignal<PersonaDetail | null>(null)
   const [newSessionPersonaId, setNewSessionPersonaId] = createSignal<string | null>(null)
+  const [runDiffModalOpen, setRunDiffModalOpen] = createSignal(false)
   let drawerHideTimeout: number | null = null
   const scrollController = createConversationScrollController()
   const [selectedSessionPersonaDetail, setSelectedSessionPersonaDetail] = createSignal<PersonaDetail | null>(null)
+  const openRunDiffModal = () => {
+    if (!runDiffPatch()) return
+    setRunDiffModalOpen(true)
+  }
+  const closeRunDiffModal = () => setRunDiffModalOpen(false)
 
   const closeSessionSettings = () => setSessionSettingsId(null)
 
@@ -586,6 +594,24 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     return sessionsById().get(currentId) ?? null
   })
   const selectedRunSessionIds = createMemo(() => collectRunSessionIds(selectedRun()))
+  const runDiffPatch = createMemo(() => {
+    const run = selectedRun()
+    if (!run) return null
+    const log = Array.isArray(run.log) ? run.log : []
+    const files: Array<Record<string, unknown>> = []
+    for (const entry of log) {
+      const diff = (entry as any)?.payload?.diff
+      if (diff && Array.isArray(diff.files)) {
+        for (const file of diff.files) {
+          if (file && typeof file === 'object') {
+            files.push(file as Record<string, unknown>)
+          }
+        }
+      }
+    }
+    if (!files.length) return null
+    return fileDiffsToUnifiedPatch(files as any)
+  })
   const messages = createMemo<LogEntry[]>((prev) => {
     if (draftingSession()) return []
     const run = selectedRun()
@@ -899,6 +925,40 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                     </For>
                   </div>
                 </Show>
+                <div class="flex flex-wrap items-center gap-3 text-xs">
+                  <button
+                    type="button"
+                    class="rounded-full border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-1 font-semibold text-[var(--text)] transition hover:border-blue-400 hover:text-blue-500"
+                    onClick={() => openSingleWidgetByTemplate('workspace-summary')}
+                  >
+                    Workspace overview
+                  </button>
+                  <button
+                    type="button"
+                    class={`rounded-full border px-3 py-1 font-semibold transition ${
+                      runDiffPatch()
+                        ? 'border-[var(--border)] bg-[var(--bg-muted)] text-[var(--text)] hover:border-blue-400 hover:text-blue-500'
+                        : 'border-[var(--border)] bg-transparent text-[var(--text-muted)] opacity-60 cursor-not-allowed'
+                    }`}
+                    disabled={!runDiffPatch()}
+                    onClick={openRunDiffModal}
+                  >
+                    View diff
+                  </button>
+                </div>
+                <Show when={runDiffPatch()} keyed>
+                  {(patch) => (
+                    <details class="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-muted)] p-3" open>
+                      <summary class="flex cursor-pointer items-center justify-between text-sm font-semibold text-[var(--text)]">
+                        <span>Run diff</span>
+                        <span class="text-xs text-[var(--text-muted)]">Full session changes</span>
+                      </summary>
+                      <div class="mt-3">
+                        <DiffViewer diffText={patch} />
+                      </div>
+                    </details>
+                  )}
+                </Show>
               </div>
             )}
           </Show>
@@ -1006,6 +1066,25 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
             onClick={() => openSessionDrawer()}
           >
             Sessions
+          </button>
+          <button
+            type="button"
+            class="ml-1 rounded-full border border-[var(--border)] px-3 py-1 text-xs"
+            onClick={() => openSingleWidgetByTemplate('workspace-summary')}
+          >
+            Overview
+          </button>
+          <button
+            type="button"
+            class={`ml-1 rounded-full border px-3 py-1 text-xs transition ${
+              runDiffPatch()
+                ? 'border-[var(--border)] text-[var(--text)] hover:border-blue-400 hover:text-blue-500'
+                : 'border-[var(--border)] text-[var(--text-muted)] opacity-60 cursor-not-allowed'
+            }`}
+            disabled={!runDiffPatch()}
+            onClick={openRunDiffModal}
+          >
+            Diff
           </button>
         </div>
       </div>
@@ -1155,6 +1234,42 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           </div>
         </div>
       )}
+    </Show>
+  )
+
+  const RunDiffModal = () => (
+    <Show when={runDiffModalOpen()}>
+      <div class="fixed inset-0 z-[60] flex items-center justify-center bg-[var(--bg)]/90 px-4 py-8 backdrop-blur-sm">
+        <button
+          type="button"
+          class="absolute inset-0"
+          aria-label="Close run diff"
+          tabIndex={-1}
+          onClick={closeRunDiffModal}
+        />
+        <div class="relative w-full max-w-4xl rounded-2xl border border-[var(--border)] bg-[var(--bg-muted)] p-5 shadow-2xl">
+          <div class="mb-4 flex items-center justify-between">
+            <div>
+              <p class="text-xs uppercase tracking-[0.25em] text-[var(--text-muted)]">Run diff</p>
+              <h3 class="text-lg font-semibold text-[var(--text)]">Full session changes</h3>
+            </div>
+            <button
+              type="button"
+              class="rounded border border-[var(--border)] px-3 py-1 text-sm"
+              onClick={closeRunDiffModal}
+            >
+              Close
+            </button>
+          </div>
+          <Show when={runDiffPatch()} keyed fallback={<p class="text-sm text-[var(--text-muted)]">No diff available.</p>}>
+            {(patch) => (
+              <div class="max-h-[70vh] overflow-auto rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
+                <DiffViewer diffText={patch} />
+              </div>
+            )}
+          </Show>
+        </div>
+      </div>
     </Show>
   )
 
@@ -1358,6 +1473,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         </header>
       </Show>
       <div class="flex-1 min-h-0">{isMobile() ? MobileLayout : DesktopLayout}</div>
+      {RunDiffModal()}
       {SessionSettingsModal()}
       {PersonasModal()}
     </div>
@@ -1426,12 +1542,30 @@ function messageSignature(message: LogEntry): string {
   }
 }
 
+const ensureDiffPatchOnEntry = (entry: LogEntry): LogEntry => {
+  const payload = entry?.payload as Record<string, unknown> | undefined
+  if (!payload || typeof payload !== 'object') return entry
+  const diff = payload.diff as Record<string, unknown> | undefined
+  if (!diff || typeof diff !== 'object') return entry
+  const existingPatch = typeof diff.patch === 'string' ? diff.patch.trim() : ''
+  if (existingPatch) return entry
+  const files = Array.isArray(diff.files) ? (diff.files as any[]) : []
+  if (!files.length) return entry
+  const patch = fileDiffsToUnifiedPatch(files as any)
+  if (!patch) return entry
+  const nextPayload = { ...payload, diff: { ...diff, patch } }
+  return { ...entry, payload: nextPayload }
+}
+
 function buildMessagesFromRun(run: RunMeta): LogEntry[] {
   const log = Array.isArray(run.log) ? run.log : []
-  return log.map((entry, index) => ({
-    ...entry,
-    entryId: entry.entryId || `${run.id}-${index}`
-  }))
+  return log.map((entry, index) => {
+    const normalized = ensureDiffPatchOnEntry(entry)
+    return {
+      ...normalized,
+      entryId: normalized.entryId || `${run.id}-${index}`
+    }
+  })
 }
 
 function latestModelId(run: RunMeta | null | undefined): string | null {

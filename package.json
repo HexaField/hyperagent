@@ -40,6 +40,7 @@
     "axios": "^1.13.2",
     "better-sqlite3": "^12.4.6",
     "cors": "^2.8.5",
+    "diff": "^8.0.2",
     "express": "^5.1.0",
     "http-proxy-middleware": "^3.0.5",
     "multer": "^2.0.2",
