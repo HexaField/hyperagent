@@ -160,7 +160,12 @@ const createPostMessageHandler = ({ logSessions, logSessionsError }: ReturnType<
       return
     }
     try {
-      const workspacePath = normalizeWorkspacePath(req.query.workspacePath) ?? process.cwd()
+      const workspacePath =
+        normalizeWorkspacePath(req.query.workspacePath) ?? normalizeWorkspacePath((req.body as any)?.workspacePath)
+      if (!workspacePath) {
+        res.status(400).json({ error: 'workspacePath is required' })
+        return
+      }
 
       const resolvedModelId = requestedModelId ?? DEFAULT_CODING_AGENT_MODEL
       rememberWorkspacePath(workspacePath)

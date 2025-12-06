@@ -92,4 +92,15 @@ describe('workspace sessions routes — RunMeta payloads', () => {
     expect(singleAgentModule.runSingleAgentLoop).toHaveBeenCalled()
     expect(response.body.run).toMatchObject({ id: 'run-123' })
   })
+
+  it('rejects message posts without an explicit workspacePath', async () => {
+    const response = await request(app)
+      .post('/api/coding-agent/sessions/run-123/messages')
+      .send({ text: 'missing workspace' })
+
+    expect(response.status).toBe(400)
+    expect(response.body.error).toMatch(/workspacePath/i)
+    expect(singleAgentModule.runSingleAgentLoop).not.toHaveBeenCalled()
+    expect(agentModule.runVerifierWorkerLoop).not.toHaveBeenCalled()
+  })
 })
