@@ -3,7 +3,7 @@ import { execSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { createSession, getSessionDiff, promptSession } from './opencode'
+import { createSession, getMessageDiff, promptSession } from './opencode'
 import { opencodeTestHooks } from './opencodeTestHooks'
 
 const MODEL = 'opencode/big-pickle'
@@ -62,13 +62,18 @@ describe('Opencode Module', () => {
     expect(answer.includes('paris')).toBe(true)
   })
 
-  it('should retrieve session diffs after file edits', async () => {
+  it('should retrieve message diffs after file edits', async () => {
     const sessionDir = createSessionDir()
     const session = await createSession(sessionDir)
     const promptText = `Create (or overwrite) a file named "opencode-test.md" in the workspace root with the exact contents: "Hello from the Opencode tests" followed by a newline. After writing, confirm the file contents.`
-    await promptSession(session, [promptText], MODEL)
+    const response = await promptSession(session, [promptText], MODEL)
+    const messageId = response.parts.find((part: any) => typeof part?.messageID === 'string')?.messageID as
+      | string
+      | undefined
 
-    const diffs = await getSessionDiff(session)
+    expect(messageId).toBeDefined()
+
+    const diffs = await getMessageDiff(session, messageId!)
     expect(Array.isArray(diffs)).toBe(true)
     expect(diffs.length).toBeGreaterThan(0)
     const readmeDiff = diffs.find((diff) => diff.file.toLowerCase().includes('opencode-test.md'))

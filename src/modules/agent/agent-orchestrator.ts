@@ -18,7 +18,7 @@ import {
   type WorkflowParserOutput,
   type WorkflowParserRegistry
 } from './agent'
-import { createSession, getSession, getSessionDiff } from './opencode'
+import { createSession, getMessageDiff, getSession } from './opencode'
 import {
   AgentWorkflowDefinition,
   WorkflowCondition,
@@ -780,8 +780,9 @@ export async function getWorkflowRunDiff(
   if (!session) {
     throw new Error(`Session not found for role ${targetRole}`)
   }
-  const messageId = options.messageId ?? findLatestRoleMessageId(meta, targetRole) ?? undefined
-  const opencodeDiffs = await getSessionDiff(session, messageId)
+  const messageId = options.messageId ?? findLatestRoleMessageId(meta, targetRole)
+  if (!messageId) return []
+  const opencodeDiffs = await getMessageDiff(session, messageId)
   if (opencodeDiffs.length > 0) {
     return opencodeDiffs
   }

@@ -1,7 +1,7 @@
 import { FileDiff, Part, Session } from '@opencode-ai/sdk'
 import { z } from 'zod'
 import { appendLogEntry } from '../provenance/provenance'
-import { extractResponseText, getSessionDiff, promptSession } from './opencode'
+import { extractResponseText, getMessageDiff, promptSession } from './opencode'
 
 const MAX_JSON_ATTEMPTS = 3
 
@@ -71,12 +71,14 @@ const captureDiffSnapshot = async (args: {
   parts: Part[]
 }): Promise<RunDiffSnapshot | null> => {
   const messageId = extractMessageIdFromParts(args.parts)
+  if (!messageId) return null
+
   let files: FileDiff[] = []
 
   try {
-    files = await getSessionDiff(args.session, messageId ?? undefined)
+    files = await getMessageDiff(args.session, messageId)
   } catch (error) {
-    console.warn('[agent] session diff retrieval failed', {
+    console.warn('[agent] message diff retrieval failed', {
       runId: args.runId,
       error: error instanceof Error ? error.message : String(error)
     })
