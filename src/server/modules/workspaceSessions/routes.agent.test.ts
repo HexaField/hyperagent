@@ -3,9 +3,12 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import request from 'supertest'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import * as agentModule from '../../../modules/agent/multi-agent'
-import * as singleAgentModule from '../../../modules/agent/single-agent'
+import { afterEach, beforeEach, describe, expect, it, vi, type SpyInstance } from 'vitest'
+import * as orchestratorModule from '../../../modules/agent/agent-orchestrator'
+import {
+  singleAgentWorkflowDefinition,
+  verifierWorkerWorkflowDefinition
+} from '../../../modules/agent/workflows'
 import * as provenanceModule from '../../../modules/provenance/provenance'
 import { createWorkspaceSessionsRouter } from './routes'
 
@@ -17,6 +20,7 @@ const TEST_PROMPT = 'Please handle this task.'
 describe('workspace sessions routes — RunMeta payloads', () => {
   let tmpHome = ''
   let app: express.Express
+  let runAgentWorkflowSpy: SpyInstance
 
   beforeEach(async () => {
     tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), 'ha-router-test-'))
@@ -34,8 +38,17 @@ describe('workspace sessions routes — RunMeta payloads', () => {
     )
     process.env.OPENCODE_AGENT_DIR = personaDir
 
-    vi.spyOn(agentModule, 'runVerifierWorkerLoop').mockResolvedValue({ runId: 'ses_multi' } as any)
-    vi.spyOn(singleAgentModule, 'runSingleAgentLoop').mockResolvedValue({ runId: 'ses_single' } as any)
+    const singleAgentResult = { runId: 'ses_single', result: Promise.resolve({} as any) }
+    const multiAgentResult = { runId: 'ses_multi', result: Promise.resolve({} as any) }
+    runAgentWorkflowSpy = vi.spyOn(orchestratorModule, 'runAgentWorkflow').mockImplementation(async (definition) => {
+      if (definition.id === verifierWorkerWorkflowDefinition.id) {
+        return multiAgentResult
+      }
+      if (definition.id === singleAgentWorkflowDefinition.id) {
+        return singleAgentResult
+      }
+      throw new Error(`Unexpected workflow definition: ${definition.id}`)
+    })
     vi.spyOn(provenanceModule, 'loadRunMeta').mockImplementation((runId: string) => ({
       id: runId,
       agents: [],
@@ -64,8 +77,9 @@ describe('workspace sessions routes — RunMeta payloads', () => {
       .send({ workspacePath, prompt: TEST_PROMPT, personaId: MULTI_AGENT_PERSONA_ID })
 
     expect(response.status).toBe(202)
-    expect(agentModule.runVerifierWorkerLoop).toHaveBeenCalledTimes(1)
-    expect(singleAgentModule.runSingleAgentLoop).not.toHaveBeenCalled()
+    expect(runAgentWorkflowSpy).toHaveBeenCalledTimes(1)
+    const [definition] = runAgentWorkflowSpy.mock.calls[0]
+    expect(definition.id).toBe(verifierWorkerWorkflowDefinition.id)
     expect(response.body.run.id).toBe('ses_multi')
   })
 
@@ -76,8 +90,9 @@ describe('workspace sessions routes — RunMeta payloads', () => {
       .send({ workspacePath, prompt: TEST_PROMPT, personaId: NON_MULTI_PERSONA_ID })
 
     expect(response.status).toBe(202)
-    expect(singleAgentModule.runSingleAgentLoop).toHaveBeenCalledTimes(1)
-    expect(agentModule.runVerifierWorkerLoop).not.toHaveBeenCalled()
+    expect(runAgentWorkflowSpy).toHaveBeenCalledTimes(1)
+    const [definition] = runAgentWorkflowSpy.mock.calls[0]
+    expect(definition.id).toBe(singleAgentWorkflowDefinition.id)
     expect(response.body.run.id).toBe('ses_single')
   })
 
@@ -89,7 +104,7 @@ describe('workspace sessions routes — RunMeta payloads', () => {
       .send({ text: 'hello world' })
 
     expect(response.status).toBe(201)
-    expect(singleAgentModule.runSingleAgentLoop).toHaveBeenCalled()
+    expect(runAgentWorkflowSpy).toHaveBeenCalled()
     expect(response.body.run).toMatchObject({ id: 'run-123' })
   })
 
@@ -100,7 +115,6 @@ describe('workspace sessions routes — RunMeta payloads', () => {
 
     expect(response.status).toBe(400)
     expect(response.body.error).toMatch(/workspacePath/i)
-    expect(singleAgentModule.runSingleAgentLoop).not.toHaveBeenCalled()
-    expect(agentModule.runVerifierWorkerLoop).not.toHaveBeenCalled()
+    expect(runAgentWorkflowSpy).not.toHaveBeenCalled()
   })
 })

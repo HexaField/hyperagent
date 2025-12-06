@@ -2,7 +2,9 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentLoopResult } from './agent/multi-agent'
+import type { AgentRunResponse } from './agent/agent'
+import type { AgentWorkflowRunOptions, AgentWorkflowTurn } from './agent/agent-orchestrator'
+import { type VerifierWorkerWorkflowDefinition, type VerifierWorkerWorkflowResult } from './agent/workflows'
 import { createAgentWorkflowExecutor } from './workflowAgentExecutor'
 import type { AgentExecutorArgs } from './workflows'
 
@@ -21,20 +23,20 @@ describe('createAgentWorkflowExecutor', () => {
   it('invokes the agent loop and propagates metadata when approved', async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), 'workflow-agent-'))
     tempDirs.push(sessionDir)
-    const runLoop = vi.fn().mockResolvedValue(buildAgentLoopResult('approved'))
-    const executor = createAgentWorkflowExecutor({ runLoop, model: 'gpt-oss', maxRounds: 4 })
+    const runWorkflow = vi.fn<[AgentWorkflowRunOptions], Promise<AgentRunResponse<VerifierWorkerWorkflowResult>>>(
+      async (options) => {
+        expect(options.model).toBe('gpt-oss')
+        expect(options.maxRounds).toBe(4)
+        expect(options.sessionDir).toBe(sessionDir)
+        return { runId: 'test-run', result: Promise.resolve(buildWorkflowResult('approved')) }
+      }
+    )
+    const executor = createAgentWorkflowExecutor({ runWorkflow, model: 'gpt-oss', maxRounds: 4 })
 
     const args = buildExecutorArgs(sessionDir)
     const result = await executor(args)
 
-    expect(runLoop).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: 'gpt-oss',
-        maxRounds: 4,
-        sessionDir,
-        userInstructions: expect.stringContaining('Task 1')
-      })
-    )
+    expect(runWorkflow).toHaveBeenCalled()
     expect(result.skipCommit).toBe(false)
     expect(result.commitMessage).toContain('Feature work')
     const agentPayload = result.stepResult?.agent as { outcome?: string } | undefined
@@ -50,8 +52,10 @@ describe('createAgentWorkflowExecutor', () => {
   it('skips commits when the agent does not approve', async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), 'workflow-agent-failed-'))
     tempDirs.push(sessionDir)
-    const runLoop = vi.fn().mockResolvedValue(buildAgentLoopResult('failed'))
-    const executor = createAgentWorkflowExecutor({ runLoop })
+    const runWorkflow = vi
+      .fn<[AgentWorkflowRunOptions], Promise<AgentRunResponse<VerifierWorkerWorkflowResult>>>()
+      .mockResolvedValue({ runId: 'failed-run', result: Promise.resolve(buildWorkflowResult('failed')) })
+    const executor = createAgentWorkflowExecutor({ runWorkflow })
 
     const args = buildExecutorArgs(sessionDir)
     const result = await executor(args)
@@ -111,41 +115,55 @@ function buildExecutorArgs(sessionDir: string): AgentExecutorArgs {
   }
 }
 
-function buildAgentLoopResult(outcome: AgentLoopResult['outcome']): AgentLoopResult {
+function buildWorkflowResult(outcome: VerifierWorkerWorkflowResult['outcome']): VerifierWorkerWorkflowResult {
+  const verifierParsed = {
+    verdict: outcome === 'approved' ? 'approve' : 'fail',
+    critique: 'Looks good',
+    instructions: outcome === 'approved' ? 'Ship it.' : 'Fix the failing tests.',
+    priority: 1
+  }
+  const workerParsed = {
+    status: 'done',
+    plan: 'Plan the refactor',
+    work: 'Implemented the parser updates.',
+    requests: ''
+  }
+  const workerTurn: AgentWorkflowTurn<VerifierWorkerWorkflowDefinition> = {
+    key: 'worker',
+    role: 'worker',
+    round: 1,
+    raw: JSON.stringify(workerParsed),
+    parsed: workerParsed
+  }
+  const verifierTurn: AgentWorkflowTurn<VerifierWorkerWorkflowDefinition> = {
+    key: 'verifier',
+    role: 'verifier',
+    round: 1,
+    raw: JSON.stringify(verifierParsed),
+    parsed: verifierParsed
+  }
+  const bootstrapTurn: AgentWorkflowTurn<VerifierWorkerWorkflowDefinition> = {
+    key: 'bootstrap',
+    role: 'verifier',
+    round: 0,
+    raw: JSON.stringify({ critique: 'Focus on parser edge cases.', instructions: 'Outline adjustments.', verdict: 'instruct', priority: 2 }),
+    parsed: {
+      verdict: 'instruct',
+      critique: 'Focus on parser edge cases.',
+      instructions: 'Outline adjustments.',
+      priority: 2
+    }
+  }
   return {
     outcome,
     reason: outcome === 'approved' ? 'Verifier approved the changes' : 'Verifier rejected the work',
-    bootstrap: {
-      round: 0,
-      raw: '{}',
-      parsed: {
-        verdict: 'instruct',
-        critique: 'Focus on the parser edge cases.',
-        instructions: 'Start by outlining the parser adjustments.',
-        priority: 2
-      }
-    },
+    bootstrap: bootstrapTurn,
     rounds: [
       {
-        worker: {
-          round: 1,
-          raw: '{}',
-          parsed: {
-            status: 'done',
-            plan: 'Plan the refactor',
-            work: 'Implemented the parser updates.',
-            requests: ''
-          }
-        },
-        verifier: {
-          round: 1,
-          raw: '{}',
-          parsed: {
-            verdict: outcome === 'approved' ? 'approve' : 'fail',
-            critique: 'Looks good',
-            instructions: outcome === 'approved' ? 'Ship it.' : 'Fix the failing tests.',
-            priority: 1
-          }
+        round: 1,
+        steps: {
+          worker: workerTurn,
+          verifier: verifierTurn
         }
       }
     ]

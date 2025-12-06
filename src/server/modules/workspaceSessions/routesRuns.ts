@@ -1,8 +1,11 @@
 import { Router, type RequestHandler } from 'express'
 import fs from 'fs'
 import path from 'path'
-import { runVerifierWorkerLoop } from '../../../modules/agent/multi-agent'
-import { runSingleAgentLoop } from '../../../modules/agent/single-agent'
+import { runAgentWorkflow } from '../../../modules/agent/agent-orchestrator'
+import {
+  singleAgentWorkflowDefinition,
+  verifierWorkerWorkflowDefinition
+} from '../../../modules/agent/workflows'
 import { loadRunMeta, metaDirectory, type RunMeta } from '../../../modules/provenance/provenance'
 import { ensureProviderConfig } from '../../../modules/workflowAgentExecutor'
 import { DEFAULT_CODING_AGENT_MODEL } from '../../core/config'
@@ -115,7 +118,7 @@ const createStartSessionHandler =
       }
 
       if (!multiAgentMode) {
-        const { runId } = await runSingleAgentLoop({
+        const { runId } = await runAgentWorkflow(singleAgentWorkflowDefinition, {
           userInstructions: trimmedPrompt,
           model: resolvedModel,
           sessionDir: normalizedWorkspace
@@ -125,7 +128,7 @@ const createStartSessionHandler =
         return
       }
 
-      const { runId } = await runVerifierWorkerLoop({
+      const { runId } = await runAgentWorkflow(verifierWorkerWorkflowDefinition, {
         userInstructions: trimmedPrompt,
         model: resolvedModel,
         sessionDir: normalizedWorkspace
@@ -188,33 +191,20 @@ const createPostMessageHandler =
           isMultiAgent = false
         }
 
-        if (isMultiAgent) {
-          ;(async () => {
-            try {
-              await runVerifierWorkerLoop({
-                runID: runId,
-                userInstructions: text,
-                model: resolvedModelId,
-                sessionDir: workspacePath
-              })
-            } catch (err) {
-              logSessionsError('Multi-agent prompt failed', err, { sessionId: runId, modelId: resolvedModelId })
-            }
-          })()
-        } else {
-          ;(async () => {
-            try {
-              await runSingleAgentLoop({
-                runID: runId,
-                userInstructions: text,
-                model: resolvedModelId,
-                sessionDir: workspacePath
-              })
-            } catch (err) {
-              logSessionsError('Single-agent prompt failed', err, { sessionId: runId, modelId: resolvedModelId })
-            }
-          })()
-        }
+        const workflowDefinition = isMultiAgent ? verifierWorkerWorkflowDefinition : singleAgentWorkflowDefinition
+        ;(async () => {
+          try {
+            await runAgentWorkflow(workflowDefinition, {
+              runID: runId,
+              userInstructions: text,
+              model: resolvedModelId,
+              sessionDir: workspacePath
+            })
+          } catch (err) {
+            const label = isMultiAgent ? 'Multi-agent prompt failed' : 'Single-agent prompt failed'
+            logSessionsError(label, err, { sessionId: runId, modelId: resolvedModelId })
+          }
+        })()
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Provider invocation failed'
         logSessionsError('Opencode prompt failed', err, { sessionId: runId, modelId: resolvedModelId })

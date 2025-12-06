@@ -28,7 +28,9 @@ import { createWorkflowPolicyFromEnv } from '../../../src/modules/workflowPolicy
 import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
 import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
-import { runVerifierWorkerLoop } from '../../modules/agent/multi-agent'
+import { runAgentWorkflow, type AgentWorkflowRunOptions } from '../../modules/agent/agent-orchestrator'
+import type { AgentRunResponse } from '../../modules/agent/agent'
+import { verifierWorkerWorkflowDefinition, type VerifierWorkerWorkflowResult } from '../../modules/agent/workflows'
 import { runGitCommand } from '../../modules/git'
 import { createSseStream } from '../lib/sse'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
@@ -82,7 +84,9 @@ export type CodeServerSession = {
   publicUrl: string
 }
 
-type RunLoop = typeof runVerifierWorkerLoop
+type WorkflowRunner = (
+  options: AgentWorkflowRunOptions
+) => Promise<AgentRunResponse<VerifierWorkerWorkflowResult>>
 
 type ControllerFactory = (options: CodeServerOptions) => CodeServerController
 
@@ -111,7 +115,7 @@ function resolveWorkflowAgentBinary(provider: string): string | null {
 }
 
 export type CreateServerOptions = {
-  runLoop?: RunLoop
+  runWorkflow?: WorkflowRunner
   controllerFactory?: ControllerFactory
   tmpDir?: string
   port?: number
@@ -156,7 +160,8 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   const wsModule = options.webSockets ?? (await loadWebSocketModule())
   const WebSocketCtor = wsModule.WebSocket
   const WebSocketServerCtor = wsModule.WebSocketServer
-  const runLoop = options.runLoop ?? runVerifierWorkerLoop
+  const runWorkflow =
+    options.runWorkflow ?? ((runnerOptions) => runAgentWorkflow(verifierWorkerWorkflowDefinition, runnerOptions))
   const controllerFactory = options.controllerFactory ?? createCodeServerController
   const tmpDir = options.tmpDir ?? os.tmpdir()
   const defaultPort = options.port ?? DEFAULT_PORT
@@ -258,7 +263,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   ensureWorkflowAgentProviderReady(WORKFLOW_AGENT_PROVIDER)
 
   const workflowAgentExecutorOptions = {
-    runLoop,
+    runWorkflow,
     provider: WORKFLOW_AGENT_PROVIDER,
     model: WORKFLOW_AGENT_MODEL,
     maxRounds: WORKFLOW_AGENT_MAX_ROUNDS
@@ -660,7 +665,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
         projectId: project?.id ?? null,
         model: modelToUse ?? null
       })
-      const result = await runLoop({
+      const result = await runWorkflow({
         userInstructions: prompt,
         model: modelToUse,
         maxRounds: normalizedMaxRounds,

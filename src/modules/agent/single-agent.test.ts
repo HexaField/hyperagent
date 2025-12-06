@@ -1,10 +1,12 @@
 import { execSync, spawnSync } from 'child_process'
+import type { FileDiff } from '@opencode-ai/sdk'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
 import { RunMeta } from '../provenance/provenance'
+import { getWorkflowRunDiff, runAgentWorkflow } from './agent-orchestrator'
+import { singleAgentWorkflowDefinition } from './workflows'
 import { opencodeTestHooks } from './opencodeTestHooks'
-import runSingleAgentLoop, { getAgentRunDiff } from './single-agent'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
@@ -53,7 +55,7 @@ describe('Single agent loop', () => {
 
     const scenario = `Create a readme.md file that includes the text "Hello, single agent".`
 
-    const agentRun = await runSingleAgentLoop({
+    const agentRun = await runAgentWorkflow(singleAgentWorkflowDefinition, {
       userInstructions: scenario,
       model: model,
       sessionDir
@@ -62,7 +64,11 @@ describe('Single agent loop', () => {
     const parsed = await agentRun.result
     expect(typeof agentRun.runId).toBe('string')
 
-    expect(typeof parsed).toBe('string')
+    expect(parsed.rounds.length).toBeGreaterThan(0)
+    const firstRound = parsed.rounds[0]
+    const agentStep = firstRound?.steps.agent
+    expect(agentStep).toBeDefined()
+    expect(typeof agentStep?.raw).toBe('string')
     const hyperagentDir = path.join(sessionDir, '.hyperagent')
 
     const metaFiles = fs
@@ -93,7 +99,7 @@ describe('Single agent loop', () => {
       ).toBe(true)
     }
 
-    const diffs = await getAgentRunDiff(agentRun.runId, sessionDir)
+    const diffs: FileDiff[] = await getWorkflowRunDiff(agentRun.runId, sessionDir, { role: 'agent' })
     expect(diffs.length).toBeGreaterThan(0)
     const readmeDiff = diffs.find((diff) => diff.file.toLowerCase().includes('readme.md'))
     expect(readmeDiff).toBeTruthy()
@@ -133,9 +139,10 @@ describe('Single agent loop', () => {
     }))
 
     try {
-      const { default: mockedRunSingleAgentLoop } = await import('./single-agent')
+      const { runAgentWorkflow: mockedRunAgentWorkflow } = await import('./agent-orchestrator')
+      const { singleAgentWorkflowDefinition: workflowDefinition } = await import('./workflows')
       const scenario = 'Document the onboarding experience'
-      const run = await mockedRunSingleAgentLoop({
+      const run = await mockedRunAgentWorkflow(workflowDefinition, {
         userInstructions: scenario,
         sessionDir: '/tmp/provenance-test',
         model: 'test-model'

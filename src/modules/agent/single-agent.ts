@@ -1,15 +1,7 @@
-import type { FileDiff, Session } from '@opencode-ai/sdk'
-import {
-  createRunMeta,
-  findLatestRoleDiff,
-  findLatestRoleMessageId,
-  hasRunMeta,
-  loadRunMeta,
-  recordUserMessage,
-  saveRunMeta
-} from '../provenance/provenance'
-import { AgentRunResponse, AgentStreamCallback, invokeStructuredJsonCall } from './agent'
-import { createSession, getSession, getSessionDiff } from './opencode'
+import type { FileDiff } from '@opencode-ai/sdk'
+import { AgentRunResponse, AgentStreamCallback } from './agent'
+import { getWorkflowRunDiff, runAgentWorkflow, type AgentWorkflowResult } from './agent-orchestrator'
+import { singleAgentWorkflowDefinition } from './workflows'
 
 export type AgentLoopOptions = {
   runID?: string
@@ -20,67 +12,25 @@ export type AgentLoopOptions = {
 }
 
 const AGENT_ROLE = 'agent'
-
-const resolveAgentSession = async (
-  runId: string,
-  directory: string,
-  options: { createIfMissing?: boolean } = {}
-): Promise<Session> => {
-  const { createIfMissing = false } = options
-  const metaExists = hasRunMeta(runId, directory)
-
-  if (!metaExists) {
-    if (!createIfMissing) {
-      throw new Error(`Run meta not found for run: ${runId}`)
-    }
-
-    const agentSession = await createSession(directory)
-    const agents = [{ role: AGENT_ROLE, sessionId: agentSession.id }]
-    const runMeta = createRunMeta(directory, runId, agents)
-    saveRunMeta(runMeta, runId, directory)
-  }
-
-  const metaData = loadRunMeta(runId, directory)
-  const agentSessionID = metaData.agents.find((a) => a.role === AGENT_ROLE)?.sessionId
-  if (!agentSessionID) {
-    throw new Error('Missing agent session ID in run meta')
-  }
-
-  const agentSession = await getSession(directory, agentSessionID)
-  if (!agentSession) {
-    throw new Error(`Agent session not found: ${agentSessionID}`)
-  }
-
-  return agentSession
-}
+const getSingleAgentWorkflow = () => singleAgentWorkflowDefinition
 
 export async function runSingleAgentLoop(options: AgentLoopOptions): Promise<AgentRunResponse<string>> {
   const model = options.model ?? 'llama3.2'
   const directory = options.sessionDir
   if (!directory) throw new Error('sessionDir is required for runSingleAgentLoop')
 
-  const runId = options.runID ?? `run-${Date.now()}`
-  const agentSession = await resolveAgentSession(runId, directory, { createIfMissing: true })
-  recordUserMessage(runId, directory, options.userInstructions)
-
-  const result = new Promise<string>(async (resolve) => {
-    const { raw } = await invokeStructuredJsonCall<string>({
-      role: 'agent',
-      systemPrompt: '',
-      basePrompt: options.userInstructions,
-      model,
-      session: agentSession as Session,
-      runId,
-      directory,
-      onStream: options.onStream
-    })
-
-    resolve(raw)
+  const workflow = getSingleAgentWorkflow()
+  const runResponse = await runAgentWorkflow(workflow, {
+    runID: options.runID,
+    userInstructions: options.userInstructions,
+    model,
+    sessionDir: directory,
+    onStream: options.onStream
   })
 
   return {
-    runId,
-    result
+    runId: runResponse.runId,
+    result: runResponse.result.then((result) => extractSingleAgentOutput(result))
   }
 }
 
@@ -90,18 +40,15 @@ export async function getAgentRunDiff(
   options: { messageId?: string } = {}
 ): Promise<FileDiff[]> {
   if (!directory) throw new Error('sessionDir is required for getAgentRunDiff')
-  const meta = loadRunMeta(runId, directory)
-  const logDiff = findLatestRoleDiff(meta, AGENT_ROLE)
-  if (logDiff?.length) {
-    return logDiff
-  }
-  const agentSession = await resolveAgentSession(runId, directory)
-  const messageId = options.messageId ?? findLatestRoleMessageId(meta, AGENT_ROLE) ?? undefined
-  const opencodeDiffs = await getSessionDiff(agentSession, messageId)
-  if (opencodeDiffs.length > 0) {
-    return opencodeDiffs
-  }
-  return []
+  return getWorkflowRunDiff(runId, directory, { role: AGENT_ROLE, messageId: options.messageId })
 }
 
 export default runSingleAgentLoop
+
+function extractSingleAgentOutput(result: AgentWorkflowResult): string {
+  const firstRound = result.rounds[0]
+  if (!firstRound) return ''
+  const agentStep = firstRound.steps.agent
+  if (!agentStep) return ''
+  return typeof agentStep.raw === 'string' ? agentStep.raw : ''
+}

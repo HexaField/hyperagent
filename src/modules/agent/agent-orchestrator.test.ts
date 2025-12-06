@@ -5,6 +5,7 @@ import { FileDiff } from '@opencode-ai/sdk'
 import { describe, expect, it } from 'vitest'
 import { RunMeta } from '../provenance/provenance'
 import { getWorkflowRunDiff, loadWorkflowDefinition, runAgentWorkflow } from './agent-orchestrator'
+import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from './workflows'
 import { opencodeTestHooks } from './opencodeTestHooks'
 
 const model = 'github-copilot/gpt-5-mini'
@@ -46,8 +47,9 @@ describe('Agent orchestrator workflows', () => {
 
     initGitRepo(sessionDir)
 
-    const workflowPath = path.join(__dirname, 'workflows', 'verifier-worker.workflow.json')
-    const workflow = loadWorkflowDefinition(workflowPath)
+    const workflowPath = path.join(sessionDir, 'verifier-worker.workflow.json')
+    fs.writeFileSync(workflowPath, JSON.stringify(verifierWorkerWorkflowDefinition, null, 2), 'utf8')
+    const workflow = loadWorkflowDefinition(workflowPath) as typeof verifierWorkerWorkflowDefinition
 
     const scenario = 'Create a readme.md file that includes the text "Hello, world".'
 
@@ -63,10 +65,16 @@ describe('Agent orchestrator workflows', () => {
     expect(result.bootstrap?.key).toBe('bootstrap')
     expect(result.rounds.length).toBeGreaterThan(0)
     const firstRound = result.rounds[0]
-    expect(firstRound.steps.worker).toBeDefined()
-    expect(firstRound.steps.worker.parsed.plan?.length ?? 0).toBeGreaterThan(0)
-    expect(firstRound.steps.verifier).toBeDefined()
-    expect(firstRound.steps.verifier.parsed.instructions?.length ?? 0).toBeGreaterThan(0)
+    const workerStep = firstRound.steps.worker
+    if (!workerStep || workerStep.role !== 'worker') {
+      throw new Error('Expected worker step in first round')
+    }
+    const verifierStep = firstRound.steps.verifier
+    if (!verifierStep || verifierStep.role !== 'verifier') {
+      throw new Error('Expected verifier step in first round')
+    }
+    expect(workerStep.parsed.plan?.length ?? 0).toBeGreaterThan(0)
+    expect(verifierStep.parsed.instructions?.length ?? 0).toBeGreaterThan(0)
     expect(['approved', 'failed', 'max-rounds']).toContain(result.outcome)
 
     const hyperagentDir = path.join(sessionDir, '.hyperagent')
@@ -117,8 +125,9 @@ describe('Agent orchestrator workflows', () => {
 
     initGitRepo(sessionDir)
 
-    const workflowPath = path.join(__dirname, 'workflows', 'single-agent.workflow.json')
-    const workflow = loadWorkflowDefinition(workflowPath)
+    const workflowPath = path.join(sessionDir, 'single-agent.workflow.json')
+    fs.writeFileSync(workflowPath, JSON.stringify(singleAgentWorkflowDefinition, null, 2), 'utf8')
+    const workflow = loadWorkflowDefinition(workflowPath) as typeof singleAgentWorkflowDefinition
 
     const scenario = 'Create a log.txt file that includes a single line "orchestrator".'
 

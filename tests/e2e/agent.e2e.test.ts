@@ -2,7 +2,8 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { runVerifierWorkerLoop } from '../../src/modules/agent/multi-agent'
+import { runAgentWorkflow } from '../../src/modules/agent/agent-orchestrator'
+import { verifierWorkerWorkflowDefinition } from '../../src/modules/agent/workflows'
 
 describe('runVerifierWorkerLoop (real opencode)', () => {
   let tmp: string
@@ -20,9 +21,8 @@ describe('runVerifierWorkerLoop (real opencode)', () => {
   })
 
   it('executes using the real opencode CLI (if available) and completes or fails gracefully', async () => {
-    const response = await runVerifierWorkerLoop({
+    const response = await runAgentWorkflow(verifierWorkerWorkflowDefinition, {
       userInstructions: 'Please produce a concise JSON object describing a trivial task outcome.',
-      provider: 'opencode',
       model: 'opencode/big-pickle',
       sessionDir
     })

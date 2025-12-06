@@ -1,5 +1,13 @@
 import { z } from 'zod'
 
+type DeepReadonly<T> = T extends (...args: any[]) => any
+  ? T
+  : T extends Date
+    ? T
+    : T extends object
+      ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+      : T
+
 const conditionValueSchema = z.union([z.string(), z.number(), z.boolean()])
 
 const atomicConditionSchema = z
@@ -155,11 +163,18 @@ export const workflowDefinitionSchema = z.object({
   })
 })
 
-export type WorkflowCondition = z.infer<typeof workflowConditionSchema>
-export type WorkflowOutcomeTemplate = z.infer<typeof workflowOutcomeSchema>
-export type WorkflowTransitionDefinition = z.infer<typeof workflowTransitionSchema>
-export type WorkflowStepDefinition = z.infer<typeof workflowStepSchema>
-export type AgentWorkflowDefinition = z.infer<typeof workflowDefinitionSchema>
-export type WorkflowRoleDefinition = z.infer<typeof workflowRoleDefinitionSchema>
+type WorkflowConditionDraft = z.infer<typeof workflowConditionSchema>
+type WorkflowOutcomeTemplateDraft = z.infer<typeof workflowOutcomeSchema>
+type WorkflowTransitionDraft = z.infer<typeof workflowTransitionSchema>
+type WorkflowStepDraft = z.infer<typeof workflowStepSchema>
+type WorkflowDefinitionDraft = z.infer<typeof workflowDefinitionSchema>
+
+export type WorkflowCondition = DeepReadonly<WorkflowConditionDraft>
+export type WorkflowOutcomeTemplate = DeepReadonly<WorkflowOutcomeTemplateDraft>
+export type WorkflowTransitionDefinition = DeepReadonly<WorkflowTransitionDraft>
+export type WorkflowStepDefinition = DeepReadonly<WorkflowStepDraft>
+export type AgentWorkflowDefinition = DeepReadonly<WorkflowDefinitionDraft>
+export type WorkflowRoleDefinition = DeepReadonly<z.infer<typeof workflowRoleDefinitionSchema>>
 export type WorkflowRoleParser = WorkflowRoleDefinition['parser']
-export type WorkflowFieldCondition = z.infer<typeof atomicConditionSchema>
+export type WorkflowFieldCondition = DeepReadonly<z.infer<typeof atomicConditionSchema>>
+export type AgentWorkflowDefinitionDraft = WorkflowDefinitionDraft

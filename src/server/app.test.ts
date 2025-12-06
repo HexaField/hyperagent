@@ -20,7 +20,9 @@ import type { TerminalSessionRecord } from '../../src/modules/database'
 import { createRadicleModule, type RadicleModule } from '../../src/modules/radicle'
 import type { LiveTerminalSession, TerminalModule } from '../../src/modules/terminal'
 import type { WorkflowRunnerGateway, WorkflowRunnerPayload } from '../../src/modules/workflowRunnerGateway'
-import type { AgentLoopOptions, AgentLoopResult, AgentStreamEvent } from '../modules/agent/multi-agent'
+import type { AgentRunResponse, AgentStreamEvent } from '../modules/agent/agent'
+import type { AgentWorkflowRunOptions, AgentWorkflowTurn } from '../modules/agent/agent-orchestrator'
+import { type VerifierWorkerWorkflowDefinition, type VerifierWorkerWorkflowResult } from '../modules/agent/workflows'
 import { metaDirectory, type RunMeta } from '../modules/provenance/provenance'
 import { createServerApp } from './app'
 
@@ -73,20 +75,58 @@ const loadWsServerBindings = async (): Promise<{
   return { WebSocket, WebSocketServer }
 }
 
-const mockResult: AgentLoopResult = {
+const mockVerifierTurn: AgentWorkflowTurn<VerifierWorkerWorkflowDefinition> = {
+  key: 'verifier',
+  role: 'verifier',
+  round: 1,
+  raw: JSON.stringify({ verdict: 'approve', critique: '', instructions: '', priority: 1 }),
+  parsed: {
+    verdict: 'approve',
+    critique: '',
+    instructions: '',
+    priority: 1
+  }
+}
+
+const mockWorkerTurn: AgentWorkflowTurn<VerifierWorkerWorkflowDefinition> = {
+  key: 'worker',
+  role: 'worker',
+  round: 1,
+  raw: JSON.stringify({ status: 'done', plan: '', work: '', requests: '' }),
+  parsed: {
+    status: 'done',
+    plan: '',
+    work: '',
+    requests: ''
+  }
+}
+
+const mockBootstrapTurn: AgentWorkflowTurn<VerifierWorkerWorkflowDefinition> = {
+  key: 'bootstrap',
+  role: 'verifier',
+  round: 0,
+  raw: 'init',
+  parsed: {
+    verdict: 'approve',
+    critique: '',
+    instructions: '',
+    priority: 1
+  }
+}
+
+const mockResult: VerifierWorkerWorkflowResult = {
   outcome: 'approved',
   reason: 'completed',
-  bootstrap: {
-    round: 0,
-    raw: 'init',
-    parsed: {
-      verdict: 'approve',
-      critique: '',
-      instructions: '',
-      priority: 1
+  bootstrap: mockBootstrapTurn,
+  rounds: [
+    {
+      round: 1,
+      steps: {
+        worker: mockWorkerTurn,
+        verifier: mockVerifierTurn
+      }
     }
-  },
-  rounds: []
+  ]
 }
 
 type StreamPacket = { type: string; payload?: any }
@@ -340,20 +380,21 @@ async function createIntegrationHarness(options?: {
   }
   const webSockets = options?.webSockets ?? resolveWebSockets()
 
-  const runLoop = vi.fn<[AgentLoopOptions], Promise<{ runId: string; result: Promise<AgentLoopResult> }>>(
-    async (options) => {
-      const chunk: AgentStreamEvent = {
-        role: 'worker',
-        round: 1,
-        parts: [{ id: 'p1', type: 'text', text: 'stream-chunk' } as any],
-        model: 'mock-model',
-        attempt: 1
-      }
-      options.onStream?.(chunk)
-      await new Promise((resolve) => setTimeout(resolve, 10))
-      return { runId: 'test-run', result: Promise.resolve(mockResult) }
+  const runWorkflow = vi.fn<
+    [AgentWorkflowRunOptions],
+    Promise<AgentRunResponse<VerifierWorkerWorkflowResult>>
+  >(async (options) => {
+    const chunk: AgentStreamEvent = {
+      role: 'worker',
+      round: 1,
+      parts: [{ id: 'p1', type: 'text', text: 'stream-chunk' } as any],
+      model: 'mock-model',
+      attempt: 1
     }
-  )
+    options.onStream?.(chunk)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    return { runId: 'test-run', result: Promise.resolve(mockResult) }
+  })
 
   const controllerFactory = vi.fn<[CodeServerOptions], CodeServerController>((options) => {
     expect(options.port).toBe(fakeCodeServer.port)
@@ -374,7 +415,7 @@ async function createIntegrationHarness(options?: {
 
   const tlsMaterials = createTestTlsMaterials()
   const appServer = await createServerApp({
-    runLoop,
+    runWorkflow,
     controllerFactory,
     tmpDir: tmpBase,
     allocatePort: async () => fakeCodeServer.port,
@@ -396,7 +437,7 @@ async function createIntegrationHarness(options?: {
 
   return {
     baseUrl,
-    runLoop,
+    runWorkflow,
     controllerFactory,
     fakeCodeServer,
     close: async () => {
@@ -732,7 +773,7 @@ describe('createServerApp', () => {
 
       expect(codeServerVerified).toBe(true)
       expect(frames.map((frame) => frame.type)).toEqual(['session', 'chunk', 'result', 'end'])
-      expect(harness.runLoop).toHaveBeenCalledTimes(1)
+      expect(harness.runWorkflow).toHaveBeenCalledTimes(1)
       expect(harness.controllerFactory).toHaveBeenCalledTimes(1)
     } finally {
       await harness.close()
@@ -843,7 +884,7 @@ describe('createServerApp', () => {
 
       expect(response.status).toBe(400)
       expect(await response.json()).toEqual({ error: 'prompt is required' })
-      expect(harness.runLoop).not.toHaveBeenCalled()
+      expect(harness.runWorkflow).not.toHaveBeenCalled()
     } finally {
       await harness.close()
     }
@@ -929,8 +970,8 @@ describe('createServerApp', () => {
       const sessionFrame = frames.find((frame) => frame.type === 'session')
       expect(sessionFrame?.payload?.projectId).toBe(project.id)
       expect(sessionFrame?.payload?.codeServerUrl).toContain(`/code-server/project-${project.id}`)
-      expect(harness.runLoop).toHaveBeenCalledTimes(1)
-      expect(harness.runLoop.mock.calls[0][0].sessionDir).toBe(canonicalRepoDir)
+      expect(harness.runWorkflow).toHaveBeenCalledTimes(1)
+      expect(harness.runWorkflow.mock.calls[0][0].sessionDir).toBe(canonicalRepoDir)
       expect(harness.controllerFactory).not.toHaveBeenCalled()
     } finally {
       await harness.close()

@@ -2,7 +2,9 @@
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
-import { runVerifierWorkerLoop, type AgentStreamCallback } from '../modules/agent/multi-agent'
+import type { AgentStreamCallback } from '../modules/agent/agent'
+import { runAgentWorkflow, type AgentWorkflowRunOptions } from '../modules/agent/agent-orchestrator'
+import { verifierWorkerWorkflowDefinition } from '../modules/agent/workflows'
 import { createPersistence } from '../modules/database'
 import { runGitCommandSync } from '../modules/git'
 import { detectGitAuthorFromCli } from '../modules/gitAuthor'
@@ -329,7 +331,7 @@ async function main() {
         ? { agentExecutor: createDeterministicAgentExecutor(testAgentBehavior) }
         : {
             agentExecutorOptions: {
-              runLoop: runVerifierWorkerLoop,
+              runWorkflow: (options) => runAgentWorkflow(verifierWorkerWorkflowDefinition, options as AgentWorkflowRunOptions),
               model: agentOptions!.model,
               maxRounds: agentOptions!.maxRounds,
               onStream: createAgentStreamLogger(workflowId, stepId, runnerInstanceId)

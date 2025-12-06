@@ -1,19 +1,53 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { parseFrontmatter } from '../server/modules/workspaceSessions/personas'
-import type { AgentRunResponse } from './agent/agent'
-import { runVerifierWorkerLoop, type AgentLoopResult, type AgentStreamCallback } from './agent/multi-agent'
+import type { AgentRunResponse, AgentStreamCallback } from './agent/agent'
+import {
+  runAgentWorkflow,
+  type AgentWorkflowResult,
+  type AgentWorkflowRunOptions,
+  type AgentWorkflowTurn,
+  type WorkerStructuredResponse,
+  type VerifierStructuredResponse
+} from './agent/agent-orchestrator'
+import {
+  verifierWorkerWorkflowDefinition,
+  type VerifierWorkerWorkflowDefinition,
+  type VerifierWorkerWorkflowResult
+} from './agent/workflows'
 import type { AgentExecutor, AgentExecutorArgs, AgentExecutorResult } from './workflows'
 
+type VerifierWorkflowRunner = (
+  opts: AgentWorkflowRunOptions
+) => Promise<AgentRunResponse<VerifierWorkerWorkflowResult>>
+
 export type AgentWorkflowExecutorOptions = {
-  runLoop?: typeof runVerifierWorkerLoop
+  runWorkflow?: VerifierWorkflowRunner
   model?: string
   maxRounds?: number
   onStream?: AgentStreamCallback
 }
 
+type WorkerTurn = {
+  round: number
+  raw: string
+  parsed: WorkerStructuredResponse
+}
+
+type VerifierTurn = {
+  round: number
+  raw: string
+  parsed: VerifierStructuredResponse
+}
+
+type ConversationRound = {
+  worker: WorkerTurn
+  verifier: VerifierTurn
+}
+
 export function createAgentWorkflowExecutor(options: AgentWorkflowExecutorOptions = {}): AgentExecutor {
-  const runLoop = options.runLoop ?? runVerifierWorkerLoop
+  const runWorkflow =
+    options.runWorkflow ?? ((runnerOptions) => runAgentWorkflow(verifierWorkerWorkflowDefinition, runnerOptions))
   const model = options.model
   const maxRounds = options.maxRounds
   const onStream = options.onStream
@@ -26,7 +60,7 @@ export function createAgentWorkflowExecutor(options: AgentWorkflowExecutorOption
     await ensureProviderConfig(sessionDir)
     const userInstructions = buildInstructions(args)
     try {
-      const loopResponse = await runLoop({
+      const loopResponse = await runWorkflow({
         userInstructions,
         model,
         maxRounds,
@@ -49,32 +83,33 @@ export function createAgentWorkflowExecutor(options: AgentWorkflowExecutorOption
 }
 
 async function resolveLoopResult(
-  loopResponse: AgentRunResponse<AgentLoopResult> | AgentLoopResult
-): Promise<AgentLoopResult> {
+  loopResponse: AgentRunResponse<VerifierWorkerWorkflowResult> | VerifierWorkerWorkflowResult
+): Promise<VerifierWorkerWorkflowResult> {
   if (isAgentRunResponse(loopResponse)) {
     return await loopResponse.result
   }
   return loopResponse
 }
 
-function isAgentRunResponse(value: unknown): value is AgentRunResponse<AgentLoopResult> {
+function isAgentRunResponse(value: unknown): value is AgentRunResponse<VerifierWorkerWorkflowResult> {
   return typeof value === 'object' && value !== null && 'result' in value
 }
 
 function buildStepResultFromLoop(
-  loopResult: AgentLoopResult,
+  loopResult: VerifierWorkerWorkflowResult,
   userInstructions: string,
   metadata?: { model: string | null }
 ) {
+  const conversation = convertVerifierWorkflowResult(loopResult)
   return {
     instructions: userInstructions,
-    summary: loopResult.reason,
+    summary: conversation.reason,
     agent: {
       userInstructions,
-      outcome: loopResult.outcome,
-      reason: loopResult.reason,
-      bootstrap: loopResult.bootstrap,
-      rounds: loopResult.rounds,
+      outcome: conversation.outcome,
+      reason: conversation.reason,
+      bootstrap: conversation.bootstrap,
+      rounds: conversation.rounds,
       provider: null,
       model: metadata?.model ?? null
     }
@@ -107,10 +142,92 @@ function buildInstructions({ project, workflow, step }: AgentExecutorArgs): stri
   return briefing
 }
 
-function buildCommitMessage({ workflow, step }: AgentExecutorArgs, result: AgentLoopResult): string {
+function buildCommitMessage({ workflow, step }: AgentExecutorArgs, result: VerifierWorkerWorkflowResult): string {
   const title = extractString((step.data ?? {})['title']) || `Step ${step.sequence}`
   const suffix = result.reason ? ` — ${result.reason}` : ''
   return `${workflow.kind}: ${title}${suffix}`.trim()
+}
+
+const WORKER_ROLE = 'worker'
+const VERIFIER_ROLE = 'verifier'
+
+type VerifierWorkflowTurn = AgentWorkflowTurn<VerifierWorkerWorkflowDefinition>
+
+function convertVerifierWorkflowResult(result: VerifierWorkerWorkflowResult) {
+  const bootstrap = toVerifierTurn(result.bootstrap, 0)
+  const rounds: ConversationRound[] = []
+  for (const round of result.rounds) {
+    const worker = toWorkerTurn(round.steps[WORKER_ROLE], round.round)
+    const verifierStep = round.steps[VERIFIER_ROLE]
+    const verifier = verifierStep
+      ? toVerifierTurn(verifierStep, round.round)
+      : worker
+        ? minimalVerifierEcho(worker, round.round)
+        : null
+    if (worker && verifier) {
+      rounds.push({ worker, verifier })
+    }
+  }
+  return {
+    outcome: normalizeOutcome(result.outcome),
+    reason: result.reason,
+    bootstrap,
+    rounds
+  }
+}
+
+function toWorkerTurn(turn: VerifierWorkflowTurn | undefined, round: number): WorkerTurn | null {
+  if (!turn || turn.role !== WORKER_ROLE) return null
+  return {
+    round,
+    raw: turn.raw,
+    parsed: turn.parsed
+  }
+}
+
+function toVerifierTurn(turn: VerifierWorkflowTurn | undefined, round: number): VerifierTurn {
+  if (!turn || turn.role !== VERIFIER_ROLE) {
+    return {
+      round,
+      raw: '',
+      parsed: {
+        verdict: 'instruct',
+        critique: '',
+        instructions: '',
+        priority: 3
+      }
+    }
+  }
+  return {
+    round,
+    raw: turn.raw,
+    parsed: turn.parsed
+  }
+}
+
+function minimalVerifierEcho(workerTurn: WorkerTurn, round: number): VerifierTurn {
+  return {
+    round,
+    raw: JSON.stringify({
+      verdict: 'fail',
+      critique: workerTurn.parsed.requests,
+      instructions: '',
+      priority: 1
+    }),
+    parsed: {
+      verdict: 'fail',
+      critique: workerTurn.parsed.requests,
+      instructions: '',
+      priority: 1
+    }
+  }
+}
+
+function normalizeOutcome(outcome: string): 'approved' | 'failed' | 'max-rounds' {
+  if (outcome === 'approved' || outcome === 'failed' || outcome === 'max-rounds') {
+    return outcome
+  }
+  return 'failed'
 }
 
 function extractString(value: unknown): string | null {

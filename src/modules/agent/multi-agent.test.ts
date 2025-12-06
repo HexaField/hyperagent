@@ -1,9 +1,11 @@
 import { execSync, spawnSync } from 'child_process'
+import type { FileDiff } from '@opencode-ai/sdk'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
 import { RunMeta } from '../provenance/provenance'
-import { getMultiAgentRunDiff, runVerifierWorkerLoop } from './multi-agent'
+import { getWorkflowRunDiff, runAgentWorkflow } from './agent-orchestrator'
+import { verifierWorkerWorkflowDefinition } from './workflows'
 import { opencodeTestHooks } from './opencodeTestHooks'
 
 function commandExists(cmd: string): boolean {
@@ -53,7 +55,7 @@ describe('Verifier/worker collaboration loop', () => {
 
     const scenario = `Create a readme.md file that includes the text "Hello, world".`
 
-    const response = await runVerifierWorkerLoop({
+    const response = await runAgentWorkflow(verifierWorkerWorkflowDefinition, {
       userInstructions: scenario,
       model: model,
       maxRounds: 5,
@@ -64,14 +66,17 @@ describe('Verifier/worker collaboration loop', () => {
 
     console.log('\n\n\n', result)
 
-    expect(result.bootstrap.round).toBe(0)
-    expect(result.bootstrap.parsed.instructions.trim().length).toBeGreaterThan(0)
+    const bootstrap = result.bootstrap as any
+    expect(bootstrap.round).toBe(0)
+    expect(bootstrap.parsed.instructions.trim().length).toBeGreaterThan(0)
 
     expect(result.rounds.length).toBeGreaterThan(0)
     const firstRound = result.rounds[0]
-    expect(firstRound.worker.parsed.plan.trim().length).toBeGreaterThan(0)
-    expect(firstRound.worker.parsed.work.trim().length).toBeGreaterThan(0)
-    expect(firstRound.verifier.parsed.instructions.trim().length).toBeGreaterThan(0)
+    const workerStep = firstRound.steps.worker as any
+    const verifierStep = firstRound.steps.verifier as any
+    expect(workerStep?.parsed.plan.trim().length).toBeGreaterThan(0)
+    expect(workerStep?.parsed.work.trim().length).toBeGreaterThan(0)
+    expect(verifierStep?.parsed.instructions.trim().length).toBeGreaterThan(0)
 
     expect(['approved', 'failed', 'max-rounds']).toContain(result.outcome)
 
@@ -119,13 +124,13 @@ describe('Verifier/worker collaboration loop', () => {
     const readmeContent = fs.readFileSync(foundReadmes[0], 'utf8')
     expect(readmeContent.includes('Hello, world')).toBe(true)
 
-    const workerDiffs = await getMultiAgentRunDiff(response.runId, sessionDir, { role: 'worker' })
+    const workerDiffs: FileDiff[] = await getWorkflowRunDiff(response.runId, sessionDir, { role: 'worker' })
     expect(workerDiffs.length).toBeGreaterThan(0)
     const readmeDiff = workerDiffs.find((diff) => diff.file.toLowerCase().includes('readme.md'))
     expect(readmeDiff).toBeTruthy()
     expect(readmeDiff?.after.toLowerCase()).toContain('hello, world')
 
-    const verifierDiffs = await getMultiAgentRunDiff(response.runId, sessionDir, { role: 'verifier' })
+    const verifierDiffs: FileDiff[] = await getWorkflowRunDiff(response.runId, sessionDir, { role: 'verifier' })
     expect(Array.isArray(verifierDiffs)).toBe(true)
   }, 120_000)
 
@@ -189,9 +194,10 @@ describe('Verifier/worker collaboration loop', () => {
     }))
 
     try {
-      const { runVerifierWorkerLoop } = await import('./multi-agent')
+      const { runAgentWorkflow: mockedRunWorkflow } = await import('./agent-orchestrator')
+      const { verifierWorkerWorkflowDefinition: workflowDefinition } = await import('./workflows')
       const scenario = 'Plan and execute release notes'
-      const run = await runVerifierWorkerLoop({
+      const run = await mockedRunWorkflow(workflowDefinition, {
         userInstructions: scenario,
         sessionDir: '/tmp/provenance-test',
         model: 'test-model',
