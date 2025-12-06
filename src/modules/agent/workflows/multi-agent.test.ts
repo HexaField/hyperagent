@@ -3,14 +3,14 @@ import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
-import { RunMeta } from '../provenance/provenance'
-import { getWorkflowRunDiff, runAgentWorkflow } from './agent-orchestrator'
-import { opencodeTestHooks } from './opencodeTestHooks'
+import { RunMeta } from '../../provenance/provenance'
+import { getWorkflowRunDiff, runAgentWorkflow } from '../agent-orchestrator'
+import { opencodeTestHooks } from '../opencodeTestHooks'
 import {
   RegisteredWorkflowParserSchemas,
   VerifierWorkerWorkflowDefinition,
   verifierWorkerWorkflowDefinition
-} from './workflows'
+} from '.'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
@@ -208,8 +208,8 @@ describe('Verifier/worker collaboration loop', () => {
     }))
 
     try {
-      const { runAgentWorkflow: mockedRunWorkflow } = await import('./agent-orchestrator')
-      const { verifierWorkerWorkflowDefinition: workflowDefinition } = await import('./workflows')
+      const { runAgentWorkflow: mockedRunWorkflow } = await import('../agent-orchestrator')
+      const { verifierWorkerWorkflowDefinition: workflowDefinition } = await import('.')
       const scenario = 'Plan and execute release notes'
       const run = await mockedRunWorkflow(workflowDefinition, {
         userInstructions: scenario,

@@ -3,10 +3,10 @@ import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
-import { RunMeta } from '../provenance/provenance'
-import { getWorkflowRunDiff, runAgentWorkflow } from './agent-orchestrator'
-import { opencodeTestHooks } from './opencodeTestHooks'
-import { singleAgentWorkflowDefinition } from './workflows'
+import { RunMeta } from '../../provenance/provenance'
+import { getWorkflowRunDiff, runAgentWorkflow } from '../agent-orchestrator'
+import { opencodeTestHooks } from '../opencodeTestHooks'
+import { singleAgentWorkflowDefinition } from '.'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
@@ -143,8 +143,8 @@ describe('Single agent loop', () => {
     }))
 
     try {
-      const { runAgentWorkflow: mockedRunAgentWorkflow } = await import('./agent-orchestrator')
-      const { singleAgentWorkflowDefinition: workflowDefinition } = await import('./workflows')
+      const { runAgentWorkflow: mockedRunAgentWorkflow } = await import('../agent-orchestrator')
+      const { singleAgentWorkflowDefinition: workflowDefinition } = await import('.')
       const scenario = 'Document the onboarding experience'
       const run = await mockedRunAgentWorkflow(workflowDefinition, {
         userInstructions: scenario,
