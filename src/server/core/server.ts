@@ -2,19 +2,14 @@ import cors from 'cors'
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import express from 'express'
 import fs from 'fs/promises'
-import { createProxyMiddleware } from 'http-proxy-middleware'
 import { spawnSync } from 'node:child_process'
-import type { ClientRequest, IncomingMessage } from 'node:http'
+import type { IncomingMessage } from 'node:http'
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
 import { createServer as createNetServer, type AddressInfo, type Socket } from 'node:net'
 import os from 'os'
 import path from 'path'
-import {
-  createCodeServerController,
-  type CodeServerController,
-  type CodeServerOptions
-} from '../../../src/modules/codeServer'
-import { createPersistence, type Persistence, type ProjectRecord } from '../../../src/modules/database'
+import { createCodeServerController } from '../../../src/modules/codeServer'
+import { createPersistence, type Persistence } from '../../../src/modules/database'
 import { detectGitAuthorFromCli } from '../../../src/modules/gitAuthor'
 import { createRadicleModule, type RadicleModule } from '../../../src/modules/radicle'
 import { createDiffModule } from '../../../src/modules/review/diff'
@@ -41,6 +36,10 @@ import { createWorkflowLogStream } from '../modules/workspaceWorkflows/logStream
 import { createWorkspaceWorkflowsRouter } from '../modules/workspaceWorkflows/routes'
 import { createCodeServerProxyHandler, extractCodeServerSessionIdFromUrl } from './codeServerProxy'
 import type { CodeServerSession, ProxyWithUpgrade } from './codeServerTypes'
+import {
+  createCodeServerSessionManager,
+  type ControllerFactory as CodeServerControllerFactory
+} from './codeServerSessionManager'
 import {
   CODE_SERVER_HOST,
   DEFAULT_PORT,
@@ -73,8 +72,7 @@ import { loadWebSocketModule, type WebSocketBindings } from './ws'
 export type { CodeServerSession, ProxyWithUpgrade } from './codeServerTypes'
 
 type WorkflowRunner = (options: AgentWorkflowRunOptions) => Promise<AgentRunResponse<VerifierWorkerWorkflowResult>>
-
-type ControllerFactory = (options: CodeServerOptions) => CodeServerController
+type ControllerFactory = CodeServerControllerFactory
 
 function ensureWorkflowAgentProviderReady(provider: string | undefined) {
   if (!provider) return
@@ -324,7 +322,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     runnerGateway: reviewRunnerGateway,
     pollIntervalMs: options.reviewPollIntervalMs
   })
-  persistence.codeServerSessions.resetAllRunning()
 
   const app = express()
   const corsMiddleware = corsOrigin ? cors({ origin: corsOrigin, credentials: true }) : cors()
@@ -334,36 +331,18 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   // Attach stack traces to JSON error responses when handlers only set `{ error }`.
   app.use(attachJsonStackMiddleware())
 
-  const activeCodeServers = new Map<string, CodeServerSession>()
-  const codeServerProxyHandler = createCodeServerProxyHandler({
-    getSession: (sessionId) => activeCodeServers.get(sessionId) ?? null
+  const codeServerSessionManager = createCodeServerSessionManager({
+    controllerFactory,
+    allocatePort,
+    persistence,
+    publicOrigin,
+    corsOrigin,
+    frameAncestorOrigin,
+    logger: codeServerLogger
   })
-  const applyProxyResponseHeaders = (proxyRes: IncomingMessage, _req: IncomingMessage, res: Response) => {
-    if (corsOrigin) {
-      proxyRes.headers['access-control-allow-origin'] = corsOrigin
-      proxyRes.headers['access-control-allow-credentials'] = 'true'
-      res.setHeader('Access-Control-Allow-Origin', corsOrigin)
-      res.setHeader('Access-Control-Allow-Credentials', 'true')
-    }
-    if (frameAncestorOrigin) {
-      const merged = mergeFrameAncestorsDirective(proxyRes.headers['content-security-policy'], frameAncestorOrigin)
-      proxyRes.headers['content-security-policy'] = merged
-      res.setHeader('Content-Security-Policy', merged)
-    } else if (proxyRes.headers['content-security-policy']) {
-      res.setHeader('Content-Security-Policy', proxyRes.headers['content-security-policy'] as string)
-    }
-    delete proxyRes.headers['x-frame-options']
-    res.removeHeader('X-Frame-Options')
-  }
-
-  const deriveProjectSessionId = (projectId: string) => `project-${projectId}`
-
-  const normalizeBranchName = (value?: string | null) => {
-    if (typeof value === 'string' && value.trim().length) {
-      return value.trim()
-    }
-    return 'main'
-  }
+  const codeServerProxyHandler = createCodeServerProxyHandler({
+    getSession: (sessionId) => codeServerSessionManager.getSession(sessionId)
+  })
 
   const DEFAULT_TERMINAL_USER_ID = process.env.TERMINAL_DEFAULT_USER_ID ?? 'anonymous'
   const USER_ID_HEADER_KEYS = ['x-user-id', 'x-user', 'x-hyperagent-user'] as const
@@ -426,133 +405,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     return valid
   }
 
-  function ensureEphemeralProject(sessionId: string, sessionDir: string): ProjectRecord {
-    return {
-      id: `session-${sessionId}`,
-      name: `Session ${sessionId}`,
-      description: null,
-      repositoryPath: sessionDir,
-      repositoryProvider: 'ephemeral',
-      defaultBranch: 'main',
-      createdAt: new Date().toISOString()
-    }
-  }
-
-  function rewriteCodeServerPath(pathName: string, sessionId: string): string {
-    const prefix = `/code-server/${sessionId}`
-    if (!pathName.startsWith(prefix)) return pathName
-    const trimmed = pathName.slice(prefix.length)
-    return trimmed.length ? trimmed : '/'
-  }
-
-  type CodeServerWorkspaceOptions = {
-    sessionId: string
-    sessionDir: string
-    project: ProjectRecord
-    branch?: string | null
-  }
-
-  async function startCodeServerWorkspace(options: CodeServerWorkspaceOptions): Promise<CodeServerSession | null> {
-    if (activeCodeServers.has(options.sessionId)) {
-      return activeCodeServers.get(options.sessionId) ?? null
-    }
-
-    try {
-      const branch = normalizeBranchName(options.branch ?? options.project.defaultBranch)
-      const port = await allocatePort()
-      const basePath = `/code-server/${options.sessionId}`
-      const controller = controllerFactory({
-        host: CODE_SERVER_HOST,
-        port,
-        repoRoot: options.sessionDir,
-        publicBasePath: basePath
-      })
-      const handle = await controller.ensure()
-      if (!handle) {
-        throw new Error('code-server failed to start')
-      }
-      const sessionPublicUrl = buildExternalUrl(handle.publicUrl, publicOrigin) ?? handle.publicUrl
-
-      const targetBase = `http://${CODE_SERVER_HOST}:${port}`
-      const rewriteProxyOriginHeader = (proxyReq: ClientRequest) => {
-        if (!proxyReq.hasHeader('origin')) return
-        proxyReq.setHeader('origin', targetBase)
-      }
-
-      const proxy = createProxyMiddleware({
-        target: targetBase,
-        changeOrigin: true,
-        ws: true,
-        pathRewrite: (pathName: string) => rewriteCodeServerPath(pathName, options.sessionId),
-        on: {
-          proxyRes: applyProxyResponseHeaders,
-          proxyReq: (proxyReq: ClientRequest) => {
-            rewriteProxyOriginHeader(proxyReq)
-          },
-          proxyReqWs: (proxyReq: ClientRequest) => {
-            rewriteProxyOriginHeader(proxyReq)
-          }
-        }
-      } as any) as ProxyWithUpgrade
-
-      const session: CodeServerSession = {
-        id: options.sessionId,
-        dir: options.sessionDir,
-        basePath,
-        projectId: options.project.id,
-        branch,
-        controller,
-        proxy,
-        publicUrl: sessionPublicUrl
-      }
-      activeCodeServers.set(options.sessionId, session)
-      persistence.codeServerSessions.upsert({
-        id: options.sessionId,
-        projectId: options.project.id,
-        branch,
-        workspacePath: options.sessionDir,
-        url: sessionPublicUrl,
-        authToken: 'none',
-        processId: handle.child.pid ?? null
-      })
-      return session
-    } catch (error) {
-      codeServerLogger.warn('Unable to launch code-server session', {
-        sessionId: options.sessionId,
-        projectId: options.project.id,
-        error: toErrorMeta(error)
-      })
-      return null
-    }
-  }
-
-  async function ensureProjectCodeServer(project: ProjectRecord): Promise<CodeServerSession | null> {
-    return await startCodeServerWorkspace({
-      sessionId: deriveProjectSessionId(project.id),
-      sessionDir: project.repositoryPath,
-      project,
-      branch: project.defaultBranch
-    })
-  }
-
-  async function startCodeServerForSession(sessionId: string, sessionDir: string): Promise<CodeServerSession | null> {
-    const project = ensureEphemeralProject(sessionId, sessionDir)
-    return await startCodeServerWorkspace({ sessionId, sessionDir, project, branch: project.defaultBranch })
-  }
-
-  async function shutdownCodeServerSession(sessionId: string): Promise<void> {
-    const session = activeCodeServers.get(sessionId)
-    if (!session) return
-    activeCodeServers.delete(sessionId)
-    await session.controller.shutdown()
-    persistence.codeServerSessions.markStopped(sessionId)
-  }
-
-  async function shutdownAllCodeServers(): Promise<void> {
-    const entries = [...activeCodeServers.keys()]
-    await Promise.all(entries.map((id) => shutdownCodeServerSession(id)))
-  }
-
   const workspaceSummaryRouter = createWorkspaceSummaryRouter({
     wrapAsync,
     persistence,
@@ -588,7 +440,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     persistence,
     ensureWorkspaceDirectory,
     ensureProjectCodeServer: async (project) => {
-      const session = await ensureProjectCodeServer(project)
+      const session = await codeServerSessionManager.ensureProjectSession(project)
       if (!session) return null
       return {
         id: session.id,
@@ -623,7 +475,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     createWorkflowRuntimeService({ runtime: workflowRuntime, manageLifecycle: manageWorkerLifecycle }),
     createReviewSchedulerService(reviewScheduler),
     createTerminalService(workspaceTerminalModule),
-    createCodeServerService({ shutdownAllCodeServers })
+    createCodeServerService({ shutdownAllCodeServers: () => codeServerSessionManager.shutdownAll() })
   ]
 
   await startManagedServices(managedServices)
@@ -748,7 +600,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
       socket.destroy()
       return
     }
-    const session = activeCodeServers.get(sessionIdFromUrl)
+    const session = codeServerSessionManager.getSession(sessionIdFromUrl)
     if (!session?.proxy.upgrade) {
       socket.destroy()
       return
@@ -782,7 +634,7 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     app,
     start,
     shutdown: shutdownApp,
-    getActiveSessionIds: () => [...activeCodeServers.keys()],
+    getActiveSessionIds: () => codeServerSessionManager.listSessionIds(),
     handleUpgrade,
     handlers: {
       codeServerProxy: codeServerProxyHandler
