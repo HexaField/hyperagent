@@ -6,11 +6,11 @@ import os from 'os'
 import path from 'path'
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { verifierWorkerWorkflowDefinition } from '../../../modules/agent/workflows'
 import { opencodeTestHooks } from '../../../modules/agent/opencodeTestHooks'
 import { RunMeta, metaDirectory } from '../../../modules/provenance/provenance'
 import { createWorkspaceSessionsRouter } from './routes'
 
-const MULTI_AGENT_PERSONA_ID = 'multi-agent'
 const TEST_PROMPT = 'You are assisting on a trivial repo. Plan the change then stop.'
 
 const wrapAsync = (h: any) => h
@@ -31,13 +31,6 @@ describe('workspace sessions routes — multi-agent opencode integration', () =>
     expect(exists, "Required CLI 'opencode' not found on PATH").toBe(true)
 
     tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'ha-multi-agent-int-'))
-    process.env.OPENCODE_AGENT_DIR = path.join(tmpRoot, 'agent-personas')
-    await fsp.mkdir(process.env.OPENCODE_AGENT_DIR, { recursive: true })
-    await fsp.writeFile(
-      path.join(process.env.OPENCODE_AGENT_DIR, `${MULTI_AGENT_PERSONA_ID}.md`),
-      `---\nlabel: Multi-Agent Persona\nmode: primary\nmodel: github-copilot/gpt-5-mini\n---\nAct as a multi-agent pair.`,
-      'utf8'
-    )
 
     const deps = {
       wrapAsync,
@@ -95,7 +88,7 @@ describe('workspace sessions routes — multi-agent opencode integration', () =>
 
     const resp = await request(app)
       .post('/api/coding-agent/sessions')
-      .send({ workspacePath: sessionDir, prompt: TEST_PROMPT, personaId: MULTI_AGENT_PERSONA_ID })
+      .send({ workspacePath: sessionDir, prompt: TEST_PROMPT, workflowId: verifierWorkerWorkflowDefinition.id })
 
     expect(resp.status).toBe(202)
     const sessionId = resp.body?.run?.id

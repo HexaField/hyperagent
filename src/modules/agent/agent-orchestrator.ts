@@ -7,6 +7,7 @@ import {
   findLatestRoleMessageId,
   hasRunMeta,
   loadRunMeta,
+  RunMeta,
   recordUserMessage,
   saveRunMeta
 } from '../provenance/provenance'
@@ -38,6 +39,9 @@ export type AgentWorkflowRunOptions = {
   runID?: string
   maxRounds?: number
   onStream?: AgentStreamCallback
+  workflowId?: string
+  workflowSource?: 'builtin' | 'user'
+  workflowLabel?: string
 }
 
 export type WorkflowRoleName<TDefinition extends AgentWorkflowDefinition> = keyof TDefinition['roles'] & string
@@ -158,7 +162,8 @@ const renderSimpleTemplate = (template: string, context: Record<string, string>)
 async function ensureWorkflowSessions(
   definition: AgentWorkflowDefinition,
   runId: string,
-  directory: string
+  directory: string,
+  metaExtras?: Partial<RunMeta>
 ): Promise<SessionMap> {
   const sessions: SessionMap = {}
   const requiredRoles = definition.sessions.roles ?? []
@@ -176,7 +181,7 @@ async function ensureWorkflowSessions(
       createdAgents.push({ role: roleConfig.role, sessionId: session.id })
       sessions[roleConfig.role] = session
     }
-    const runMeta = createRunMeta(directory, runId, createdAgents)
+    const runMeta = createRunMeta(directory, runId, createdAgents, metaExtras)
     saveRunMeta(runMeta, runId, directory)
     return sessions
   }
@@ -636,8 +641,15 @@ export async function runAgentWorkflow<
   const definitionMaxRounds = definition.flow.round.maxRounds ?? 10
   const maxRounds = options.maxRounds ?? definitionMaxRounds
   const runId = options.runID ?? `${definition.id}-${Date.now()}`
-  const sessions = await ensureWorkflowSessions(definition, runId, directory)
-  recordUserMessage(runId, directory, options.userInstructions)
+  const sessions = await ensureWorkflowSessions(definition, runId, directory, {
+    workflowId: options.workflowId ?? definition.id,
+    workflowSource: options.workflowSource,
+    workflowLabel: options.workflowLabel ?? definition.description
+  })
+  recordUserMessage(runId, directory, options.userInstructions, {
+    workflowId: options.workflowId ?? definition.id,
+    workflowSource: options.workflowSource ?? 'builtin'
+  })
 
   const resultPromise = (async (): Promise<AgentWorkflowResult<TDefinition, TParsers>> => {
     const state: Record<string, string> = {}

@@ -3,10 +3,19 @@ import fs from 'fs'
 import path from 'path'
 import { runAgentWorkflow } from '../../../modules/agent/agent-orchestrator'
 import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from '../../../modules/agent/workflows'
-import { loadRunMeta, metaDirectory, type RunMeta } from '../../../modules/provenance/provenance'
+import {
+  loadRunMeta,
+  metaDirectory,
+  saveRunMeta,
+  type RunMeta
+} from '../../../modules/provenance/provenance'
+import {
+  configureAgentWorkflowParsers,
+  readAgentWorkflow,
+  type StoredAgentWorkflow
+} from '../../../modules/agent/workflow-store'
 import { ensureProviderConfig } from '../../../modules/workflowAgentExecutor'
 import { DEFAULT_CODING_AGENT_MODEL } from '../../core/config'
-import { readPersona } from './personas'
 import {
   readWorkspaceRuns,
   resolveWorkspacePath,
@@ -17,6 +26,7 @@ import {
 import type { WorkspaceSessionsDeps } from './routesTypes'
 
 const MULTI_AGENT_PERSONA_ID = 'multi-agent'
+const DEFAULT_WORKFLOW_ID = singleAgentWorkflowDefinition.id
 
 const createLogger = () => {
   const logSessions = (message: string, metadata?: Record<string, unknown>) => {
@@ -76,10 +86,13 @@ const createListRunsHandler = (): RequestHandler => async (req, res) => {
 const createStartSessionHandler =
   ({ logSessions, logSessionsError }: ReturnType<typeof createLogger>): RequestHandler =>
   async (req, res) => {
-    const { workspacePath, prompt, model } = req.body ?? {}
+    const { workspacePath, prompt, model, workflowId: workflowIdRaw } = req.body ?? {}
     const personaId =
       typeof req.body?.personaId === 'string' && req.body.personaId.trim() ? req.body.personaId.trim() : null
-    const multiAgentMode = personaId === MULTI_AGENT_PERSONA_ID
+    const requestedWorkflowId =
+      typeof workflowIdRaw === 'string' && workflowIdRaw.trim().length ? workflowIdRaw.trim() : null
+    const legacyPersonaWorkflowId = personaId === MULTI_AGENT_PERSONA_ID ? verifierWorkerWorkflowDefinition.id : null
+    const workflowId = requestedWorkflowId ?? legacyPersonaWorkflowId ?? DEFAULT_WORKFLOW_ID
     if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
       res.status(400).json({ error: 'workspacePath is required' })
       return
@@ -90,45 +103,36 @@ const createStartSessionHandler =
     }
     const normalizedWorkspace = workspacePath.trim()
 
-    if (personaId) {
-      try {
-        const persona = await readPersona(personaId)
-        if (!persona) {
-          res.status(400).json({ error: `Persona not found: ${personaId}` })
-          return
-        }
-      } catch (err: any) {
-        console.warn('[coding-agent] Failed to read persona file', { personaId, error: err?.message ?? String(err) })
-        res.status(400).json({ error: `Failed to read persona: ${personaId}` })
-        return
-      }
-    }
-
     try {
       const resolvedModel = typeof model === 'string' && model.trim().length ? model.trim() : DEFAULT_CODING_AGENT_MODEL
       const trimmedPrompt = prompt.trim()
 
-      logSessions('Starting coding agent run', { workspacePath: normalizedWorkspace, model: resolvedModel })
+      const workflow = await readAgentWorkflow(workflowId)
+      if (!workflow) {
+        res.status(400).json({ error: `Unknown workflow: ${workflowId}` })
+        return
+      }
+
+      logSessions('Starting coding agent run', {
+        workspacePath: normalizedWorkspace,
+        model: resolvedModel,
+        workflowId: workflow.id,
+        workflowSource: workflow.source
+      })
 
       if (personaId) {
         await ensureProviderConfig(normalizedWorkspace, 'opencode', personaId)
       }
 
-      if (!multiAgentMode) {
-        const { runId } = await runAgentWorkflow(singleAgentWorkflowDefinition, {
-          userInstructions: trimmedPrompt,
-          model: resolvedModel,
-          sessionDir: normalizedWorkspace
-        })
-        const run = loadRunMeta(runId, normalizedWorkspace)
-        res.status(202).json({ run: serializeRunWithDiffs(run) })
-        return
-      }
+      await configureAgentWorkflowParsers()
 
-      const { runId } = await runAgentWorkflow(verifierWorkerWorkflowDefinition, {
+      const { runId } = await runAgentWorkflow(workflow.definition, {
         userInstructions: trimmedPrompt,
         model: resolvedModel,
-        sessionDir: normalizedWorkspace
+        sessionDir: normalizedWorkspace,
+        workflowId: workflow.id,
+        workflowSource: workflow.source,
+        workflowLabel: workflow.definition.description
       })
       const run = loadRunMeta(runId, normalizedWorkspace)
       res.status(202).json({ run: serializeRunWithDiffs(run) })
@@ -157,6 +161,8 @@ const createPostMessageHandler =
       res.status(400).json({ error: 'text is required' })
       return
     }
+    let workflowForResponse: StoredAgentWorkflow | null = null
+
     try {
       const workspacePath = resolveWorkspacePath(req)
       if (!workspacePath) {
@@ -173,35 +179,74 @@ const createPostMessageHandler =
       })
       try {
         const metaDir = metaDirectory(workspacePath)
-        let isMultiAgent = false
+        let workflow: StoredAgentWorkflow | null = null
+        let runMeta: RunMeta | null = null
+
         try {
           const filePath = path.join(metaDir, `${runId}.json`)
           if (fs.existsSync(filePath)) {
             const raw = fs.readFileSync(filePath, 'utf-8')
             const parsed = JSON.parse(raw) as RunMeta
-            const roles = Array.isArray(parsed.agents) ? parsed.agents.map((agent) => agent.role) : []
-            if (roles.includes('worker') || roles.includes('verifier') || roles.length > 1) {
-              isMultiAgent = true
+            runMeta = parsed
+            if (parsed.workflowId) {
+              workflow = await readAgentWorkflow(parsed.workflowId)
             }
           }
         } catch {
-          isMultiAgent = false
+          workflow = null
         }
 
-        const workflowDefinition = isMultiAgent ? verifierWorkerWorkflowDefinition : singleAgentWorkflowDefinition
+        if (!workflow) {
+          let isMultiAgent = false
+          try {
+            const filePath = path.join(metaDir, `${runId}.json`)
+            if (fs.existsSync(filePath)) {
+              const raw = fs.readFileSync(filePath, 'utf-8')
+              const parsed = JSON.parse(raw) as RunMeta
+              const roles = Array.isArray(parsed.agents) ? parsed.agents.map((agent) => agent.role) : []
+              if (roles.includes('worker') || roles.includes('verifier') || roles.length > 1) {
+                isMultiAgent = true
+              }
+            }
+          } catch {
+            isMultiAgent = false
+          }
+          const fallbackWorkflowId = isMultiAgent
+            ? verifierWorkerWorkflowDefinition.id
+            : DEFAULT_WORKFLOW_ID
+          workflow = await readAgentWorkflow(fallbackWorkflowId)
+        }
+
+        if (!workflow) {
+          throw new Error('No matching workflow definition found for this run')
+        }
+
+        workflowForResponse = workflow
+
+        await configureAgentWorkflowParsers()
+
         ;(async () => {
           try {
-            await runAgentWorkflow(workflowDefinition, {
+            await runAgentWorkflow(workflow.definition, {
               runID: runId,
               userInstructions: text,
               model: resolvedModelId,
-              sessionDir: workspacePath
+              sessionDir: workspacePath,
+              workflowId: workflow.id,
+              workflowSource: workflow.source,
+              workflowLabel: workflow.definition.description
             })
           } catch (err) {
-            const label = isMultiAgent ? 'Multi-agent prompt failed' : 'Single-agent prompt failed'
+            const label = `Workflow prompt failed (${workflow.id})`
             logSessionsError(label, err, { sessionId: runId, modelId: resolvedModelId })
           }
         })()
+
+        if (runMeta && !runMeta.workflowId) {
+          runMeta.workflowId = workflow.id
+          runMeta.workflowSource = workflow.source
+          saveRunMeta(runMeta, runId, workspacePath)
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Provider invocation failed'
         logSessionsError('Opencode prompt failed', err, { sessionId: runId, modelId: resolvedModelId })
@@ -214,7 +259,10 @@ const createPostMessageHandler =
         agents: [],
         log: [],
         createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
+        ...(workflowForResponse
+          ? { workflowId: workflowForResponse.id, workflowSource: workflowForResponse.source }
+          : {})
       }
       const run = safeLoadRun(runId, workspacePath) ?? fallbackRun
       res.status(201).json({ run: serializeRunWithDiffs(run) })

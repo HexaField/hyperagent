@@ -5,12 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRunResponse } from './agent/agent'
 import type {
   AgentWorkflowRunOptions,
-  AgentWorkflowTurn,
-  VerifierStructuredResponse,
-  WorkerStructuredResponse
+  AgentWorkflowTurn
 } from './agent/agent-orchestrator'
 import { type VerifierWorkerWorkflowDefinition, type VerifierWorkerWorkflowResult } from './agent/workflows'
-import { createAgentWorkflowExecutor } from './workflowAgentExecutor'
+import {
+  createAgentWorkflowExecutor,
+  type VerifierStructuredResponse,
+  type WorkerStructuredResponse
+} from './workflowAgentExecutor'
 import type { AgentExecutorArgs } from './workflows'
 
 describe('createAgentWorkflowExecutor', () => {
@@ -133,23 +135,23 @@ function buildWorkflowResult(outcome: VerifierWorkerWorkflowResult['outcome']): 
     work: 'Implemented the parser updates.',
     requests: ''
   }
-  const workerTurn: AgentWorkflowTurn<VerifierWorkerWorkflowDefinition> = {
-    key: 'worker',
-    role: 'worker',
+  const workerTurn = {
+    key: 'builder',
+    role: 'builder',
     round: 1,
     raw: JSON.stringify(workerParsed),
     parsed: workerParsed
-  }
-  const verifierTurn: AgentWorkflowTurn<VerifierWorkerWorkflowDefinition> = {
-    key: 'verifier',
-    role: 'verifier',
+  } as unknown as AgentWorkflowTurn<VerifierWorkerWorkflowDefinition>
+  const verifierTurn = {
+    key: 'reviewer',
+    role: 'reviewer',
     round: 1,
     raw: JSON.stringify(verifierParsed),
     parsed: verifierParsed
-  }
-  const bootstrapTurn: AgentWorkflowTurn<VerifierWorkerWorkflowDefinition> = {
+  } as unknown as AgentWorkflowTurn<VerifierWorkerWorkflowDefinition>
+  const bootstrapTurn = {
     key: 'bootstrap',
-    role: 'verifier',
+    role: 'reviewer',
     round: 0,
     raw: JSON.stringify({
       critique: 'Focus on parser edge cases.',
@@ -163,7 +165,7 @@ function buildWorkflowResult(outcome: VerifierWorkerWorkflowResult['outcome']): 
       instructions: 'Outline adjustments.',
       priority: 2
     }
-  }
+  } as unknown as NonNullable<VerifierWorkerWorkflowResult['bootstrap']>
   return {
     outcome,
     reason: outcome === 'approved' ? 'Verifier approved the changes' : 'Verifier rejected the work',
@@ -171,10 +173,10 @@ function buildWorkflowResult(outcome: VerifierWorkerWorkflowResult['outcome']): 
     rounds: [
       {
         round: 1,
-        steps: {
-          worker: workerTurn,
-          verifier: verifierTurn
-        }
+        steps: { builder: workerTurn, reviewer: verifierTurn } as unknown as Record<
+          string,
+          AgentWorkflowTurn<VerifierWorkerWorkflowDefinition>
+        >
       }
     ]
   }

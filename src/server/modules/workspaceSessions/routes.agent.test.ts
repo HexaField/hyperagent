@@ -10,8 +10,6 @@ import * as provenanceModule from '../../../modules/provenance/provenance'
 import { createWorkspaceSessionsRouter } from './routes'
 
 const wrapAsync = (handler: any) => handler
-const MULTI_AGENT_PERSONA_ID = 'multi-agent'
-const NON_MULTI_PERSONA_ID = 'solo-builder'
 const TEST_PROMPT = 'Please handle this task.'
 
 describe('workspace sessions routes — RunMeta payloads', () => {
@@ -21,19 +19,6 @@ describe('workspace sessions routes — RunMeta payloads', () => {
 
   beforeEach(async () => {
     tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), 'ha-router-test-'))
-    const personaDir = path.join(tmpHome, '.config', 'opencode', 'agent')
-    await fs.mkdir(personaDir, { recursive: true })
-    await fs.writeFile(
-      path.join(personaDir, `${MULTI_AGENT_PERSONA_ID}.md`),
-      `---\nlabel: Multi Agent\nmode: primary\n---\n`,
-      'utf8'
-    )
-    await fs.writeFile(
-      path.join(personaDir, `${NON_MULTI_PERSONA_ID}.md`),
-      `---\nlabel: Solo\nmode: assistant\n---\n`,
-      'utf8'
-    )
-    process.env.OPENCODE_AGENT_DIR = personaDir
 
     const singleAgentResult = { runId: 'ses_single', result: Promise.resolve({} as any) }
     const multiAgentResult = { runId: 'ses_multi', result: Promise.resolve({} as any) }
@@ -61,17 +46,15 @@ describe('workspace sessions routes — RunMeta payloads', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks()
-    if (tmpHome) {
-      await fs.rm(tmpHome, { recursive: true, force: true }).catch(() => {})
-      tmpHome = ''
-    }
+    if (tmpHome) await fs.rm(tmpHome, { recursive: true, force: true }).catch(() => {})
+    tmpHome = ''
   })
 
-  it('starts a multi-agent run when persona matches', async () => {
+  it('starts a multi-agent run when workflowId matches', async () => {
     const workspacePath = path.join(tmpHome, 'ws-multi')
     const response = await request(app)
       .post('/api/coding-agent/sessions')
-      .send({ workspacePath, prompt: TEST_PROMPT, personaId: MULTI_AGENT_PERSONA_ID })
+      .send({ workspacePath, prompt: TEST_PROMPT, workflowId: verifierWorkerWorkflowDefinition.id })
 
     expect(response.status).toBe(202)
     expect(runAgentWorkflowSpy).toHaveBeenCalledTimes(1)
@@ -80,11 +63,11 @@ describe('workspace sessions routes — RunMeta payloads', () => {
     expect(response.body.run.id).toBe('ses_multi')
   })
 
-  it('falls back to the single-agent loop for other personas', async () => {
+  it('falls back to the single-agent loop when no workflowId specified', async () => {
     const workspacePath = path.join(tmpHome, 'ws-single')
     const response = await request(app)
       .post('/api/coding-agent/sessions')
-      .send({ workspacePath, prompt: TEST_PROMPT, personaId: NON_MULTI_PERSONA_ID })
+      .send({ workspacePath, prompt: TEST_PROMPT })
 
     expect(response.status).toBe(202)
     expect(runAgentWorkflowSpy).toHaveBeenCalledTimes(1)

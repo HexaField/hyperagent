@@ -28,7 +28,9 @@ type MergedParserSchemas<TDefs extends readonly AgentWorkflowDefinition[]> = {
   >[K]
 }
 
-const collectParserSchemas = <const TDefs extends readonly AgentWorkflowDefinition[]>(...definitions: TDefs) => {
+export const collectParserSchemasFromDefinitions = <const TDefs extends readonly AgentWorkflowDefinition[]>(
+  ...definitions: TDefs
+) => {
   const registry = {} as MergedParserSchemas<TDefs>
   definitions.forEach((definition) => {
     const parsers = definition.parsers ?? {}
@@ -40,7 +42,7 @@ const collectParserSchemas = <const TDefs extends readonly AgentWorkflowDefiniti
 }
 
 export const registeredWorkflowParserSchemas = configureWorkflowParsers(
-  collectParserSchemas(singleAgentWorkflowDocument, verifierWorkerWorkflowDocument)
+  collectParserSchemasFromDefinitions(singleAgentWorkflowDocument, verifierWorkerWorkflowDocument)
 )
 
 export type RegisteredWorkflowParserSchemas = typeof registeredWorkflowParserSchemas

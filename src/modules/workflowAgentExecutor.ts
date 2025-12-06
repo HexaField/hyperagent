@@ -2,13 +2,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import { parseFrontmatter } from '../server/modules/workspaceSessions/personas'
 import type { AgentRunResponse, AgentStreamCallback } from './agent/agent'
-import {
-  runAgentWorkflow,
-  type AgentWorkflowRunOptions,
-  type AgentWorkflowTurn,
-  type VerifierStructuredResponse,
-  type WorkerStructuredResponse
-} from './agent/agent-orchestrator'
+import { runAgentWorkflow, type AgentWorkflowRunOptions, type AgentWorkflowTurn } from './agent/agent-orchestrator'
 import {
   verifierWorkerWorkflowDefinition,
   type VerifierWorkerWorkflowDefinition,
@@ -23,6 +17,20 @@ export type AgentWorkflowExecutorOptions = {
   model?: string
   maxRounds?: number
   onStream?: AgentStreamCallback
+}
+
+export type WorkerStructuredResponse = {
+  status: 'working' | 'done' | 'blocked'
+  plan: string
+  work: string
+  requests: string
+}
+
+export type VerifierStructuredResponse = {
+  verdict: 'instruct' | 'approve' | 'fail'
+  critique: string
+  instructions: string
+  priority: number
 }
 
 type WorkerTurn = {
@@ -145,25 +153,16 @@ function buildCommitMessage({ workflow, step }: AgentExecutorArgs, result: Verif
   return `${workflow.kind}: ${title}${suffix}`.trim()
 }
 
-const WORKER_ROLE = 'worker'
-const VERIFIER_ROLE = 'verifier'
-
 type VerifierWorkflowTurn = AgentWorkflowTurn<VerifierWorkerWorkflowDefinition>
 
 function convertVerifierWorkflowResult(result: VerifierWorkerWorkflowResult) {
   const bootstrap = toVerifierTurn(result.bootstrap, 0)
   const rounds: ConversationRound[] = []
   for (const round of result.rounds) {
-    const worker = toWorkerTurn(round.steps[WORKER_ROLE], round.round)
-    const verifierStep = round.steps[VERIFIER_ROLE]
-    const verifier = verifierStep
-      ? toVerifierTurn(verifierStep, round.round)
-      : worker
-        ? minimalVerifierEcho(worker, round.round)
-        : null
-    if (worker && verifier) {
-      rounds.push({ worker, verifier })
-    }
+    const steps = Object.values(round.steps ?? {}) as VerifierWorkflowTurn[]
+    const worker = findWorkerTurn(steps, round.round)
+    const verifier = findVerifierTurn(steps, round.round) ?? (worker ? minimalVerifierEcho(worker, round.round) : null)
+    if (worker && verifier) rounds.push({ worker, verifier })
   }
   return {
     outcome: normalizeOutcome(result.outcome),
@@ -173,8 +172,20 @@ function convertVerifierWorkflowResult(result: VerifierWorkerWorkflowResult) {
   }
 }
 
+function isWorkerLike(turn: VerifierWorkflowTurn | undefined): turn is VerifierWorkflowTurn & {
+  parsed: WorkerStructuredResponse
+} {
+  return Boolean(turn && turn.parsed && typeof (turn.parsed as any).status === 'string')
+}
+
+function isVerifierLike(turn: VerifierWorkflowTurn | undefined): turn is VerifierWorkflowTurn & {
+  parsed: VerifierStructuredResponse
+} {
+  return Boolean(turn && turn.parsed && typeof (turn.parsed as any).verdict === 'string')
+}
+
 function toWorkerTurn(turn: VerifierWorkflowTurn | undefined, round: number): WorkerTurn | null {
-  if (!turn || turn.role !== WORKER_ROLE) return null
+  if (!isWorkerLike(turn)) return null
   return {
     round,
     raw: turn.raw,
@@ -183,7 +194,7 @@ function toWorkerTurn(turn: VerifierWorkflowTurn | undefined, round: number): Wo
 }
 
 function toVerifierTurn(turn: VerifierWorkflowTurn | undefined, round: number): VerifierTurn {
-  if (!turn || turn.role !== VERIFIER_ROLE) {
+  if (!isVerifierLike(turn)) {
     return {
       round,
       raw: '',
@@ -200,6 +211,17 @@ function toVerifierTurn(turn: VerifierWorkflowTurn | undefined, round: number): 
     raw: turn.raw,
     parsed: turn.parsed
   }
+}
+
+function findWorkerTurn(steps: VerifierWorkflowTurn[], round: number): WorkerTurn | null {
+  const candidate = steps.find((step) => isWorkerLike(step))
+  return toWorkerTurn(candidate, round)
+}
+
+function findVerifierTurn(steps: VerifierWorkflowTurn[], round: number): VerifierTurn | null {
+  const candidate = steps.find((step) => isVerifierLike(step))
+  const verifier = candidate ? toVerifierTurn(candidate, round) : null
+  return verifier
 }
 
 function minimalVerifierEcho(workerTurn: WorkerTurn, round: number): VerifierTurn {

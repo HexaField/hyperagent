@@ -32,6 +32,9 @@ export type RunMeta = {
   log: LogEntry[]
   createdAt: string
   updatedAt: string
+  workflowId?: string
+  workflowSource?: 'builtin' | 'user'
+  workflowLabel?: string
 }
 
 export function hasRunMeta(runId: string, directory: string): boolean {
@@ -42,7 +45,8 @@ export function hasRunMeta(runId: string, directory: string): boolean {
 export function createRunMeta(
   directory: string,
   runId: string,
-  agents: Array<{ role: string; sessionId: string }>
+  agents: Array<{ role: string; sessionId: string }>,
+  extras: Partial<RunMeta> = {}
 ): RunMeta {
   const normalizedId = normalizeRunId(runId)
   const runMeta: RunMeta = {
@@ -50,7 +54,10 @@ export function createRunMeta(
     agents: agents,
     log: [],
     createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    ...(extras.workflowId ? { workflowId: extras.workflowId } : {}),
+    ...(extras.workflowSource ? { workflowSource: extras.workflowSource } : {}),
+    ...(extras.workflowLabel ? { workflowLabel: extras.workflowLabel } : {})
   }
   saveRunMeta(runMeta, runId, directory)
   return runMeta
@@ -68,7 +75,10 @@ export function loadRunMeta(runId: string, directory: string): RunMeta {
     agents,
     log: Array.isArray(parsed.log) ? parsed.log : [],
     createdAt: typeof parsed.createdAt === 'string' ? parsed.createdAt : new Date().toISOString(),
-    updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date().toISOString()
+    updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date().toISOString(),
+    workflowId: typeof parsed.workflowId === 'string' ? parsed.workflowId : undefined,
+    workflowSource: parsed.workflowSource === 'user' || parsed.workflowSource === 'builtin' ? parsed.workflowSource : undefined,
+    workflowLabel: typeof parsed.workflowLabel === 'string' ? parsed.workflowLabel : undefined
   }
 }
 
