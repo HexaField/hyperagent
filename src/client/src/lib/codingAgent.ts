@@ -3,10 +3,7 @@ import { fetchJson } from '../shared/api/httpClient'
 
 export type { LogEntry, RunMeta }
 
-
-export async function fetchCodingAgentSessions(params?: {
-  workspacePath?: string
-}): Promise<RunMeta[]> {
+export async function fetchCodingAgentSessions(params?: { workspacePath?: string }): Promise<RunMeta[]> {
   const query = params?.workspacePath ? `?workspacePath=${encodeURIComponent(params.workspacePath)}` : ''
   const payload = await fetchJson<{ runs: RunMeta[] }>(`/api/coding-agent/sessions${query}`)
   return payload.runs ?? []
@@ -114,15 +111,16 @@ export async function deleteCodingAgentPersona(id: string): Promise<boolean> {
 }
 
 export async function postCodingAgentMessage(
-  sessionId: string,
+  workspacePath: string,
+  runId: string,
   input: { role?: string; text: string; modelId?: string }
 ): Promise<RunMeta | null> {
   const payload = await fetchJson<{ run: RunMeta | null }>(
-    `/api/coding-agent/sessions/${encodeURIComponent(sessionId)}/messages`,
+    `/api/coding-agent/sessions/${encodeURIComponent(runId)}/messages`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: input.role ?? 'user', text: input.text, modelId: input.modelId })
+      body: JSON.stringify({ workspacePath, role: input.role ?? 'user', text: input.text, modelId: input.modelId })
     }
   )
   return payload.run ?? null

@@ -1,6 +1,7 @@
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
 import type { RunMeta } from '../../../modules/provenance/provenance'
+import { fileDiffsToUnifiedPatch } from '../../../shared/diffPatch'
 import { WIDGET_TEMPLATES } from '../constants/widgetTemplates'
 import {
   createCodingAgentPersona,
@@ -15,7 +16,6 @@ import {
   type PersonaDetail,
   type PersonaSummary
 } from '../lib/codingAgent'
-import { fileDiffsToUnifiedPatch } from '../../../shared/diffPatch'
 import ConversationPane from './ConversationPane'
 import DiffViewer from './DiffViewer'
 import { createConversationScrollController } from './conversationScrollController'
@@ -415,7 +415,12 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
 
       const sessionId = selectedSessionId()
       if (!sessionId) return
-      await postCodingAgentMessage(sessionId, { text })
+      const workspacePath = workspaceForFetch().trim()
+      if (!workspacePath) {
+        setError('Workspace path is required')
+        return
+      }
+      await postCodingAgentMessage(workspacePath, sessionId, { text })
       setReplyText('')
       const ta = replyEl()
       if (ta) ta.style.height = 'auto'
@@ -1261,7 +1266,11 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
               Close
             </button>
           </div>
-          <Show when={runDiffPatch()} keyed fallback={<p class="text-sm text-[var(--text-muted)]">No diff available.</p>}>
+          <Show
+            when={runDiffPatch()}
+            keyed
+            fallback={<p class="text-sm text-[var(--text-muted)]">No diff available.</p>}
+          >
             {(patch) => (
               <div class="max-h-[70vh] overflow-auto rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
                 <DiffViewer diffText={patch} />
@@ -1506,7 +1515,9 @@ const SESSION_STATE_META: Record<SessionState, { label: string; badgeClass: stri
 function reconcileMessages(prev: LogEntry[], incoming: LogEntry[]): LogEntry[] {
   if (!incoming || incoming.length === 0) return []
   if (!prev || prev.length === 0) return incoming
-  const prevEntries = new Map(prev.map((message) => [logEntryKey(message), { message, signature: messageSignature(message) }]))
+  const prevEntries = new Map(
+    prev.map((message) => [logEntryKey(message), { message, signature: messageSignature(message) }])
+  )
   let changed = prev.length !== incoming.length
   const next = incoming.map((message) => {
     const key = logEntryKey(message)

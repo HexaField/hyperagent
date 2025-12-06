@@ -8,9 +8,8 @@ import { ensureProviderConfig } from '../../../modules/workflowAgentExecutor'
 import { DEFAULT_CODING_AGENT_MODEL } from '../../core/config'
 import { readPersona } from './personas'
 import {
-  normalizeWorkspacePath,
   readWorkspaceRuns,
-  rememberWorkspacePath,
+  resolveWorkspacePath,
   safeLoadRun,
   serializeRunWithDiffs,
   serializeRunsWithDiffs
@@ -46,12 +45,11 @@ const createLogger = () => {
 
 const createListSessionsHandler = (): RequestHandler => async (req, res) => {
   try {
-    const workspacePath = normalizeWorkspacePath(req.query.workspacePath)
+    const workspacePath = resolveWorkspacePath(req)
     if (!workspacePath) {
       res.json({ runs: [] as RunMeta[] })
       return
     }
-    rememberWorkspacePath(workspacePath)
     const runs = serializeRunsWithDiffs(readWorkspaceRuns(workspacePath))
     res.json({ runs })
   } catch (error) {
@@ -62,12 +60,11 @@ const createListSessionsHandler = (): RequestHandler => async (req, res) => {
 
 const createListRunsHandler = (): RequestHandler => async (req, res) => {
   try {
-    const workspacePath = normalizeWorkspacePath(req.query.workspacePath)
+    const workspacePath = resolveWorkspacePath(req)
     if (!workspacePath) {
       res.json({ runs: [] as RunMeta[] })
       return
     }
-    rememberWorkspacePath(workspacePath)
     const runs = serializeRunsWithDiffs(readWorkspaceRuns(workspacePath))
     res.json({ runs })
   } catch (error) {
@@ -76,7 +73,8 @@ const createListRunsHandler = (): RequestHandler => async (req, res) => {
   }
 }
 
-const createStartSessionHandler = ({ logSessions, logSessionsError }: ReturnType<typeof createLogger>): RequestHandler =>
+const createStartSessionHandler =
+  ({ logSessions, logSessionsError }: ReturnType<typeof createLogger>): RequestHandler =>
   async (req, res) => {
     const { workspacePath, prompt, model } = req.body ?? {}
     const personaId =
@@ -91,7 +89,6 @@ const createStartSessionHandler = ({ logSessions, logSessionsError }: ReturnType
       return
     }
     const normalizedWorkspace = workspacePath.trim()
-    rememberWorkspacePath(normalizedWorkspace)
 
     if (personaId) {
       try {
@@ -144,7 +141,8 @@ const createStartSessionHandler = ({ logSessions, logSessionsError }: ReturnType
 
 const resolveRunId = (params: Record<string, string | undefined>) => params.runId ?? params.sessionId ?? null
 
-const createPostMessageHandler = ({ logSessions, logSessionsError }: ReturnType<typeof createLogger>): RequestHandler =>
+const createPostMessageHandler =
+  ({ logSessions, logSessionsError }: ReturnType<typeof createLogger>): RequestHandler =>
   async (req, res) => {
     const runId = resolveRunId(req.params)
     if (!runId) {
@@ -160,15 +158,13 @@ const createPostMessageHandler = ({ logSessions, logSessionsError }: ReturnType<
       return
     }
     try {
-      const workspacePath =
-        normalizeWorkspacePath(req.query.workspacePath) ?? normalizeWorkspacePath((req.body as any)?.workspacePath)
+      const workspacePath = resolveWorkspacePath(req)
       if (!workspacePath) {
         res.status(400).json({ error: 'workspacePath is required' })
         return
       }
 
       const resolvedModelId = requestedModelId ?? DEFAULT_CODING_AGENT_MODEL
-      rememberWorkspacePath(workspacePath)
       logSessions('Posting coding agent message (opencode prompt)', {
         sessionId: runId,
         modelId: resolvedModelId,

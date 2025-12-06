@@ -1,6 +1,6 @@
 import { Router, type RequestHandler } from 'express'
 import { hasRunMeta, loadRunMeta, type RunMeta } from '../../../modules/provenance/provenance'
-import { findWorkspaceForRun, normalizeWorkspacePath, serializeRunWithDiffs } from './routesShared'
+import { normalizeWorkspacePath, serializeRunWithDiffs } from './routesShared'
 import type { WorkspaceSessionsDeps } from './routesTypes'
 
 type RunMessage = {
@@ -42,11 +42,8 @@ const createGetSessionHandler = (): RequestHandler => async (req, res) => {
   }
   let workspacePath = normalizeWorkspacePath(req.query.workspacePath)
   if (!workspacePath) {
-    workspacePath = findWorkspaceForRun(runId)
-    if (!workspacePath) {
-      res.status(400).json({ error: 'workspacePath query parameter is required' })
-      return
-    }
+    res.status(400).json({ error: 'workspacePath query parameter is required' })
+    return
   }
 
   if (!hasRunMeta(runId, workspacePath)) {

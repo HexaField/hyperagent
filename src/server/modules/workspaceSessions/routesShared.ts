@@ -1,28 +1,15 @@
 import fs from 'fs'
 import path from 'path'
-import { hasRunMeta, loadRunMeta, metaDirectory, type LogEntry, type RunMeta } from '../../../modules/provenance/provenance'
+import { loadRunMeta, metaDirectory, type LogEntry, type RunMeta } from '../../../modules/provenance/provenance'
 import { fileDiffsToUnifiedPatch } from '../../../shared/diffPatch'
 
-const knownWorkspaces = new Set<string>()
-
-export const rememberWorkspacePath = (workspacePath: string | null | undefined) => {
-  if (!workspacePath) return
-  const normalized = workspacePath.trim()
-  if (!normalized.length) return
-  knownWorkspaces.add(normalized)
-}
-
-export const findWorkspaceForRun = (runId: string): string | null => {
-  for (const workspace of knownWorkspaces) {
-    try {
-      if (hasRunMeta(runId, workspace)) {
-        return workspace
-      }
-    } catch {
-      // ignore and continue searching
-    }
-  }
-  return null
+export const resolveWorkspacePath = (req: any): string | null => {
+  return (
+    (req.params && normalizeWorkspacePath(req.params.workspacePath)) ??
+    (req.query && normalizeWorkspacePath(req.query.workspacePath)) ??
+    (req.body && normalizeWorkspacePath(req.body.workspacePath)) ??
+    null
+  )
 }
 
 export const normalizeWorkspacePath = (value: unknown): string | null => {
