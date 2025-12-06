@@ -1,6 +1,6 @@
-import { Part, Session } from '@opencode-ai/sdk'
+import { FileDiff, Part, Session } from '@opencode-ai/sdk'
 import { appendLogEntry } from '../provenance/provenance'
-import { extractResponseText, promptSession } from './opencode'
+import { extractResponseText, getSessionDiff, promptSession } from './opencode'
 
 const MAX_JSON_ATTEMPTS = 3
 
@@ -20,6 +20,48 @@ export type AgentStreamEvent = {
 
 export type AgentStreamCallback = (event: AgentStreamEvent) => void
 
+export type RunDiffSnapshot = {
+  files: FileDiff[]
+  source: 'opencode'
+  messageId?: string
+  capturedAt: string
+}
+
+const extractMessageIdFromParts = (parts: Part[]): string | null => {
+  const messagePart = parts.find((part) => typeof part.messageID === 'string')
+  return messagePart?.messageID ?? null
+}
+
+const captureDiffSnapshot = async (args: {
+  session: Session
+  runId: string
+  directory: string
+  parts: Part[]
+}): Promise<RunDiffSnapshot | null> => {
+  const messageId = extractMessageIdFromParts(args.parts)
+  let files: FileDiff[] = []
+
+  try {
+    files = await getSessionDiff(args.session, messageId ?? undefined)
+  } catch (error) {
+    console.warn('[agent] session diff retrieval failed', {
+      runId: args.runId,
+      error: error instanceof Error ? error.message : String(error)
+    })
+  }
+
+  if (!files.length) {
+    return null
+  }
+
+  return {
+    files,
+    source: 'opencode',
+    messageId: messageId ?? undefined,
+    capturedAt: new Date().toISOString()
+  }
+}
+
 export async function invokeStructuredJsonCall<T>(options: {
   role: string
   systemPrompt: string
@@ -38,6 +80,13 @@ export async function invokeStructuredJsonCall<T>(options: {
     const response = await promptSession(options.session, [options.systemPrompt, prompt], options.model)
     const raw = extractResponseText(response.parts)
 
+    const diffSnapshot = await captureDiffSnapshot({
+      session: options.session,
+      runId: options.runId,
+      directory: options.directory,
+      parts: response.parts
+    })
+
     appendLogEntry(
       options.runId,
       {
@@ -47,7 +96,8 @@ export async function invokeStructuredJsonCall<T>(options: {
           attempt,
           prompt,
           raw,
-          response: response.parts
+          response: response.parts,
+          diff: diffSnapshot ?? undefined
         }
       },
       options.directory

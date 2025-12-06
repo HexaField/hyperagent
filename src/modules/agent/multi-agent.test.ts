@@ -1,14 +1,28 @@
-import { spawnSync } from 'child_process'
+import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
 import { RunMeta } from '../provenance/provenance'
-import { runVerifierWorkerLoop } from './multi-agent'
+import { getMultiAgentRunDiff, runVerifierWorkerLoop } from './multi-agent'
 import { opencodeTestHooks } from './opencodeTestHooks'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
   return res.status === 0
+}
+
+function initGitRepo(directory: string) {
+  try {
+    execSync('git init', { cwd: directory, stdio: 'ignore' })
+    execSync('git config user.email "agent@example.com"', { cwd: directory, stdio: 'ignore' })
+    execSync('git config user.name "HyperAgent"', { cwd: directory, stdio: 'ignore' })
+    execSync('git add .', { cwd: directory, stdio: 'ignore' })
+    execSync('git commit --allow-empty -m "Initialize workspace"', { cwd: directory, stdio: 'ignore' })
+  } catch (error) {
+    throw new Error(
+      `Failed to initialize git workspace in ${directory}: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
 }
 
 const model = 'github-copilot/gpt-5-mini'
@@ -34,6 +48,8 @@ describe('Verifier/worker collaboration loop', () => {
       }
     }
     fs.writeFileSync(path.join(sessionDir, 'opencode.json'), JSON.stringify(opencodeConfig, null, 2))
+
+    initGitRepo(sessionDir)
 
     const scenario = `Create a readme.md file that includes the text "Hello, world".`
 
@@ -97,5 +113,14 @@ describe('Verifier/worker collaboration loop', () => {
     expect(foundReadmes.length).toBeGreaterThan(0)
     const readmeContent = fs.readFileSync(foundReadmes[0], 'utf8')
     expect(readmeContent.includes('Hello, world')).toBe(true)
+
+    const workerDiffs = await getMultiAgentRunDiff(response.runId, sessionDir, { role: 'worker' })
+    expect(workerDiffs.length).toBeGreaterThan(0)
+    const readmeDiff = workerDiffs.find((diff) => diff.file.toLowerCase().includes('readme.md'))
+    expect(readmeDiff).toBeTruthy()
+    expect(readmeDiff?.after.toLowerCase()).toContain('hello, world')
+
+    const verifierDiffs = await getMultiAgentRunDiff(response.runId, sessionDir, { role: 'verifier' })
+    expect(Array.isArray(verifierDiffs)).toBe(true)
   }, 120_000)
 })

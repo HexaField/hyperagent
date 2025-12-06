@@ -1,14 +1,28 @@
-import { spawnSync } from 'child_process'
+import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
 import { RunMeta } from '../provenance/provenance'
 import { opencodeTestHooks } from './opencodeTestHooks'
-import runSingleAgentLoop from './single-agent'
+import runSingleAgentLoop, { getAgentRunDiff } from './single-agent'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
   return res.status === 0
+}
+
+function initGitRepo(directory: string) {
+  try {
+    execSync('git init', { cwd: directory, stdio: 'ignore' })
+    execSync('git config user.email "agent@example.com"', { cwd: directory, stdio: 'ignore' })
+    execSync('git config user.name "HyperAgent"', { cwd: directory, stdio: 'ignore' })
+    execSync('git add .', { cwd: directory, stdio: 'ignore' })
+    execSync('git commit --allow-empty -m "Initialize workspace"', { cwd: directory, stdio: 'ignore' })
+  } catch (error) {
+    throw new Error(
+      `Failed to initialize git workspace in ${directory}: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
 }
 
 const model = 'github-copilot/gpt-5-mini'
@@ -34,6 +48,8 @@ describe('Single agent loop', () => {
       }
     }
     fs.writeFileSync(path.join(sessionDir, 'opencode.json'), JSON.stringify(opencodeConfig, null, 2))
+
+    initGitRepo(sessionDir)
 
     const scenario = `Create a readme.md file that includes the text "Hello, single agent".`
 
@@ -71,5 +87,11 @@ describe('Single agent loop', () => {
       const agentMessages = entry.log.filter((e) => e.role === 'agent')
       expect(agentMessages.length).toBeGreaterThan(0)
     }
+
+    const diffs = await getAgentRunDiff(agentRun.runId, sessionDir)
+    expect(diffs.length).toBeGreaterThan(0)
+    const readmeDiff = diffs.find((diff) => diff.file.toLowerCase().includes('readme.md'))
+    expect(readmeDiff).toBeTruthy()
+    expect(readmeDiff?.after.toLowerCase()).toContain('hello, single agent')
   }, 120_000)
 })

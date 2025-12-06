@@ -1,29 +1,86 @@
+import { execSync } from 'child_process'
+import fs from 'fs'
+import path from 'path'
 import { TextPart } from '@opencode-ai/sdk'
-import os from 'os'
 import { describe, expect, it } from 'vitest'
-import { createSession, promptSession } from './opencode'
+import { createSession, getSessionDiff, promptSession } from './opencode'
 import { opencodeTestHooks } from './opencodeTestHooks'
+
+const MODEL = 'opencode/big-pickle'
+
+const OPENCODE_CONFIG = {
+  $schema: 'https://opencode.ai/config.json',
+  permission: {
+    edit: 'allow',
+    bash: 'allow',
+    webfetch: 'allow',
+    doom_loop: 'allow',
+    external_directory: 'deny'
+  }
+}
+
+const initGitRepo = (directory: string) => {
+  try {
+    execSync('git init', { cwd: directory, stdio: 'ignore' })
+    execSync('git config user.email "agent@example.com"', { cwd: directory, stdio: 'ignore' })
+    execSync('git config user.name "HyperAgent"', { cwd: directory, stdio: 'ignore' })
+    execSync('git add .', { cwd: directory, stdio: 'ignore' })
+    execSync('git commit --allow-empty -m "Initialize workspace"', { cwd: directory, stdio: 'ignore' })
+  } catch (error) {
+    throw new Error(`Failed to initialize git workspace: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+const createSessionDir = () => {
+  const sessionDir = path.join(
+    process.cwd(),
+    '.tests',
+    `opencode-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  )
+  fs.mkdirSync(sessionDir, { recursive: true })
+  fs.writeFileSync(path.join(sessionDir, 'opencode.json'), JSON.stringify(OPENCODE_CONFIG, null, 2))
+  initGitRepo(sessionDir)
+  return sessionDir
+}
 
 describe('Opencode Module', () => {
   opencodeTestHooks()
 
   it('should create a session successfully', async () => {
-    const tmp = os.tmpdir()
-    const session = await createSession(tmp)
+    const sessionDir = createSessionDir()
+    const session = await createSession(sessionDir)
     expect(session).toBeDefined()
     expect(session.id).toBeDefined()
     console.log('Created Opencode session with ID:', session.id)
   })
 
   it('should prompt a session successfully', async () => {
-    const tmp = os.tmpdir()
-    const session = await createSession(tmp)
+    const sessionDir = createSessionDir()
+    const session = await createSession(sessionDir)
     const promptText = 'What is the capital of France?'
-    const response = await promptSession(session, [promptText], 'opencode/big-pickle')
+    const response = await promptSession(session, [promptText], MODEL)
     expect(response).toBeDefined()
     expect(response.parts.length).toBe(3)
     const textParts = response.parts[1] as TextPart
     const answer = textParts.text.trim().toLowerCase()
     expect(answer.includes('paris')).toBe(true)
   })
+
+  it(
+    'should retrieve session diffs after file edits',
+    async () => {
+      const sessionDir = createSessionDir()
+      const session = await createSession(sessionDir)
+      const promptText = `Create (or overwrite) a file named "opencode-test.md" in the workspace root with the exact contents: "Hello from the Opencode tests" followed by a newline. After writing, confirm the file contents.`
+      await promptSession(session, [promptText], MODEL)
+
+      const diffs = await getSessionDiff(session)
+      expect(Array.isArray(diffs)).toBe(true)
+      expect(diffs.length).toBeGreaterThan(0)
+      const readmeDiff = diffs.find((diff) => diff.file.toLowerCase().includes('opencode-test.md'))
+      expect(readmeDiff).toBeTruthy()
+      expect(readmeDiff?.after.toLowerCase()).toContain('hello from the opencode tests')
+    },
+    120_000
+  )
 })

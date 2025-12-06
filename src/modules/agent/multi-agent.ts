@@ -4,8 +4,15 @@
   and relies on the shared `invokeWorker`, `invokeStructuredJsonCall`, and
   parsing helpers implemented in `agent.ts`.
 */
-import { Session } from '@opencode-ai/sdk'
-import { createRunMeta, hasRunMeta, loadRunMeta, saveRunMeta } from '../provenance/provenance'
+import type { FileDiff, Session } from '@opencode-ai/sdk'
+import {
+  createRunMeta,
+  findLatestRoleDiff,
+  findLatestRoleMessageId,
+  hasRunMeta,
+  loadRunMeta,
+  saveRunMeta
+} from '../provenance/provenance'
 import {
   AgentRunResponse,
   AgentStreamCallback,
@@ -13,8 +20,57 @@ import {
   invokeStructuredJsonCall,
   parseJsonPayload
 } from './agent'
-import { createSession, getSession } from './opencode'
+import { createSession, getSession, getSessionDiff } from './opencode'
 export type { AgentStreamCallback, AgentStreamEvent } from './agent'
+
+const WORKER_ROLE = 'worker'
+const VERIFIER_ROLE = 'verifier'
+
+type MultiAgentSessions = {
+  workerSession: Session
+  verifierSession: Session
+}
+
+const ensureMultiAgentSessions = async (
+  runId: string,
+  directory: string,
+  options: { createIfMissing?: boolean } = {}
+): Promise<MultiAgentSessions> => {
+  const { createIfMissing = false } = options
+  const metaExists = hasRunMeta(runId, directory)
+
+  if (!metaExists) {
+    if (!createIfMissing) {
+      throw new Error(`Run meta not found for run: ${runId}`)
+    }
+
+    const workerSession = await createSession(directory, { name: `${runId}-worker` })
+    const verifierSession = await createSession(directory, { name: `${runId}-verifier` })
+    const agents = [
+      { role: WORKER_ROLE, sessionId: workerSession.id },
+      { role: VERIFIER_ROLE, sessionId: verifierSession.id }
+    ]
+    const runMeta = createRunMeta(directory, runId, agents)
+    saveRunMeta(runMeta, runId, directory)
+  }
+
+  const metaData = loadRunMeta(runId, directory)
+
+  const workerSessionID = metaData.agents.find((a) => a.role === WORKER_ROLE)?.sessionId
+  const verifierSessionID = metaData.agents.find((a) => a.role === VERIFIER_ROLE)?.sessionId
+
+  if (!workerSessionID || !verifierSessionID) {
+    throw new Error('Failed to find worker or verifier session IDs in run meta')
+  }
+
+  const workerSession = await getSession(directory, workerSessionID)
+  const verifierSession = await getSession(directory, verifierSessionID)
+
+  if (!workerSession) throw new Error(`Worker session not found: ${workerSessionID}`)
+  if (!verifierSession) throw new Error(`Verifier session not found: ${verifierSessionID}`)
+
+  return { workerSession, verifierSession }
+}
 
 const WORKER_SYSTEM_PROMPT = `You are a meticulous senior engineer agent focused on producing concrete, technically sound deliverables. Follow verifier instructions with discipline.
 
@@ -112,32 +168,7 @@ export async function runVerifierWorkerLoop(options: AgentLoopOptions): Promise<
   const streamCallback = options.onStream
 
   const runId = options.runID ?? `run-${Date.now()}`
-
-  if (!hasRunMeta(runId, directory)) {
-    const workerSession = await createSession(directory, { name: `${runId}-worker` })
-    const verifierSession = await createSession(directory, { name: `${runId}-verifier` })
-    const agents = [
-      { role: 'worker', sessionId: workerSession.id },
-      { role: 'verifier', sessionId: verifierSession.id }
-    ]
-    const runMeta = createRunMeta(directory, runId, agents)
-    saveRunMeta(runMeta, runId, directory)
-  }
-
-  const metaData = loadRunMeta(runId, directory)
-
-  const workerSessionID = metaData.agents.find((a) => a.role === 'worker')?.sessionId
-  const verifierSessionID = metaData.agents.find((a) => a.role === 'verifier')?.sessionId
-
-  if (!workerSessionID || !verifierSessionID) {
-    throw new Error('Failed to find worker or verifier session IDs in run meta')
-  }
-
-  const workerSession = await getSession(directory, workerSessionID)
-  const verifierSession = await getSession(directory, verifierSessionID)
-
-  if (!workerSession) throw new Error(`Worker session not found: ${workerSessionID}`)
-  if (!verifierSession) throw new Error(`Verifier session not found: ${verifierSessionID}`)
+  const { workerSession, verifierSession } = await ensureMultiAgentSessions(runId, directory, { createIfMissing: true })
 
   const result: Promise<AgentLoopResult> = (async (): Promise<AgentLoopResult> => {
     const rounds: ConversationRound[] = []
@@ -368,4 +399,26 @@ export function minimalVerifierEcho(workerTurn: WorkerTurn, round: number): Veri
       priority: 1
     }
   }
+}
+
+export async function getMultiAgentRunDiff(
+  runId: string,
+  directory: string,
+  options: { role?: 'worker' | 'verifier'; messageId?: string } = {}
+): Promise<FileDiff[]> {
+  if (!directory) throw new Error('sessionDir is required for getMultiAgentRunDiff')
+  const role = options.role ?? WORKER_ROLE
+  const meta = loadRunMeta(runId, directory)
+  const logDiff = findLatestRoleDiff(meta, role)
+  if (logDiff?.length) {
+    return logDiff
+  }
+  const { workerSession, verifierSession } = await ensureMultiAgentSessions(runId, directory)
+  const targetSession = role === VERIFIER_ROLE ? verifierSession : workerSession
+  const messageId = options.messageId ?? findLatestRoleMessageId(meta, role) ?? undefined
+  const opencodeDiffs = await getSessionDiff(targetSession, messageId)
+  if (opencodeDiffs.length > 0) {
+    return opencodeDiffs
+  }
+  return []
 }

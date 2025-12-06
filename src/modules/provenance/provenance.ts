@@ -1,3 +1,4 @@
+import type { FileDiff } from '@opencode-ai/sdk'
 import fs from 'fs'
 import path from 'path'
 
@@ -106,4 +107,28 @@ export function findLatestLogEntry(meta: RunMeta, predicate: (entry: LogEntry) =
     if (predicate(entry)) return entry
   }
   return undefined
+}
+
+type MessagePartLike = {
+  messageID?: string
+  [key: string]: unknown
+}
+
+export function findLatestRoleMessageId(meta: RunMeta, role: string): string | null {
+  const entry = findLatestLogEntry(meta, (log) => log.role === role && Array.isArray(log.payload?.response))
+  if (!entry) return null
+  const parts = Array.isArray(entry.payload?.response) ? (entry.payload.response as MessagePartLike[]) : []
+  const messagePart = parts.find((part) => typeof part.messageID === 'string')
+  return messagePart?.messageID ?? null
+}
+
+export function findLatestRoleDiff(meta: RunMeta, role: string): FileDiff[] | null {
+  const entry = findLatestLogEntry(
+    meta,
+    (log) => log.role === role && Array.isArray(log.payload?.diff?.files) && log.payload.diff.files.length > 0
+  )
+  if (!entry) return null
+  const diffPayload = entry.payload?.diff
+  const files = Array.isArray(diffPayload?.files) ? (diffPayload.files as FileDiff[]) : []
+  return files.length ? files : null
 }
