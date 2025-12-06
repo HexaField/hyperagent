@@ -1,9 +1,9 @@
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
-import { configureWorkflowParsers } from './agent'
+import { configureWorkflowParsers, type WorkflowParserRegistry } from './agent'
 import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition, collectParserSchemasFromDefinitions } from './workflows'
-import { workflowDefinitionSchema, type AgentWorkflowDefinition, type WorkflowParserJsonSchema } from './workflow-schema'
+import { workflowDefinitionSchema, type AgentWorkflowDefinition } from './workflow-schema'
 
 export type WorkflowSource = 'builtin' | 'user'
 
@@ -176,7 +176,7 @@ export async function loadAllAgentWorkflows(): Promise<StoredAgentWorkflow[]> {
   return [...builtinWorkflows, ...user]
 }
 
-export async function configureAgentWorkflowParsers(): Promise<Record<string, WorkflowParserJsonSchema>> {
+export async function configureAgentWorkflowParsers(): Promise<WorkflowParserRegistry> {
   const all = await loadAllAgentWorkflows()
   const registry = collectParserSchemasFromDefinitions(...all.map((wf) => wf.definition))
   configureWorkflowParsers(registry)

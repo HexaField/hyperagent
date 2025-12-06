@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal } from 'solid-js'
+import { For, Show, createEffect, createMemo, createSignal } from 'solid-js'
 
 export type GraphNode = {
   id: string
@@ -19,6 +19,10 @@ export type NodeGraphProps = {
   height?: number
   initialNodes?: GraphNode[]
   initialEdges?: GraphEdge[]
+  nodes?: GraphNode[]
+  edges?: GraphEdge[]
+  onGraphChange?: (payload: { nodes: GraphNode[]; edges: GraphEdge[] }) => void
+  onSelectionChange?: (selection: string[]) => void
 }
 
 const DEFAULT_WIDTH = 860
@@ -102,8 +106,11 @@ export function NodeGraph(props: NodeGraphProps) {
   const width = () => props.width ?? DEFAULT_WIDTH
   const height = () => props.height ?? DEFAULT_HEIGHT
 
-  const [nodes, setNodes] = createSignal<GraphNode[]>(duplicateNodes(props.initialNodes ?? DEFAULT_NODES))
-  const [edges, setEdges] = createSignal<GraphEdge[]>(duplicateEdges(props.initialEdges ?? DEFAULT_EDGES))
+  const resolveInitialNodes = () => props.nodes ?? props.initialNodes ?? DEFAULT_NODES
+  const resolveInitialEdges = () => props.edges ?? props.initialEdges ?? DEFAULT_EDGES
+
+  const [nodes, setNodes] = createSignal<GraphNode[]>(duplicateNodes(resolveInitialNodes()))
+  const [edges, setEdges] = createSignal<GraphEdge[]>(duplicateEdges(resolveInitialEdges()))
   const [selection, setSelection] = createSignal<string[]>([])
   const [nodeLabel, setNodeLabel] = createSignal('')
   const [editingNodeId, setEditingNodeId] = createSignal<string | null>(null)
@@ -121,6 +128,38 @@ export function NodeGraph(props: NodeGraphProps) {
       map.set(node.id, node)
     }
     return map
+  })
+
+  createEffect(() => {
+    const controlled = props.nodes
+    if (controlled) setNodes(duplicateNodes(controlled))
+  })
+
+  createEffect(() => {
+    const controlled = props.edges
+    if (controlled) setEdges(duplicateEdges(controlled))
+  })
+
+  createEffect(() => {
+    if (props.nodes) return
+    if (props.initialNodes) setNodes(duplicateNodes(props.initialNodes))
+  })
+
+  createEffect(() => {
+    if (props.edges) return
+    if (props.initialEdges) setEdges(duplicateEdges(props.initialEdges))
+  })
+
+  createEffect(() => {
+    setSelection((prev) => prev.filter((id) => nodeMap().has(id)))
+  })
+
+  createEffect(() => {
+    props.onGraphChange?.({ nodes: nodes(), edges: edges() })
+  })
+
+  createEffect(() => {
+    props.onSelectionChange?.(selection())
   })
 
   const resolvedEdges = createMemo(() => {
