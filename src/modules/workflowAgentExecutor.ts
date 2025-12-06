@@ -4,11 +4,10 @@ import { parseFrontmatter } from '../server/modules/workspaceSessions/personas'
 import type { AgentRunResponse, AgentStreamCallback } from './agent/agent'
 import {
   runAgentWorkflow,
-  type AgentWorkflowResult,
   type AgentWorkflowRunOptions,
   type AgentWorkflowTurn,
-  type WorkerStructuredResponse,
-  type VerifierStructuredResponse
+  type VerifierStructuredResponse,
+  type WorkerStructuredResponse
 } from './agent/agent-orchestrator'
 import {
   verifierWorkerWorkflowDefinition,
@@ -17,9 +16,7 @@ import {
 } from './agent/workflows'
 import type { AgentExecutor, AgentExecutorArgs, AgentExecutorResult } from './workflows'
 
-type VerifierWorkflowRunner = (
-  opts: AgentWorkflowRunOptions
-) => Promise<AgentRunResponse<VerifierWorkerWorkflowResult>>
+type VerifierWorkflowRunner = (opts: AgentWorkflowRunOptions) => Promise<AgentRunResponse<VerifierWorkerWorkflowResult>>
 
 export type AgentWorkflowExecutorOptions = {
   runWorkflow?: VerifierWorkflowRunner

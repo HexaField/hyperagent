@@ -31,8 +31,8 @@ Every workflow document must satisfy `workflowDefinitionSchema` in `workflow-sch
 }
 ```
 
-* `role` must match a key in the `roles` map.
-* `nameTemplate` is optional and can include `{{runId}}` replacements via the same template engine used elsewhere.
+- `role` must match a key in the `roles` map.
+- `nameTemplate` is optional and can include `{{runId}}` replacements via the same template engine used elsewhere.
 
 ### Roles & Parsers
 
@@ -45,11 +45,11 @@ Each entry in `roles` looks like:
 }
 ```
 
-* `systemPrompt` is fed directly to the LLM whenever the role executes a step.
-* `parser` selects how responses are coerced:
-  * `worker`: expects `{ status, plan, work, requests }` and normalizes missing fields.
-  * `verifier`: expects `{ verdict, critique, instructions, priority }`.
-  * `passthrough`: leaves the raw JSON payload intact.
+- `systemPrompt` is fed directly to the LLM whenever the role executes a step.
+- `parser` selects how responses are coerced:
+  - `worker`: expects `{ status, plan, work, requests }` and normalizes missing fields.
+  - `verifier`: expects `{ verdict, critique, instructions, priority }`.
+  - `passthrough`: leaves the raw JSON payload intact.
 
 ### Shared State
 
@@ -61,40 +61,42 @@ Each entry in `roles` looks like:
 
 #### Bootstrap
 
-* Executes exactly once before the first round.
-* Has the same shape as any step (`key`, `role`, `prompt`, optional `stateUpdates`).
-* Useful for initial verifier instructions or seeding state.
+- Executes exactly once before the first round.
+- Has the same shape as any step (`key`, `role`, `prompt`, optional `stateUpdates`).
+- Useful for initial verifier instructions or seeding state.
 
 #### Round
 
 ```jsonc
 {
   "start": "worker",
-  "steps": [ /* ordered workflow steps */ ],
+  "steps": [
+    /* ordered workflow steps */
+  ],
   "maxRounds": 10,
   "defaultOutcome": { "outcome": "max-rounds", "reason": "..." }
 }
 ```
 
-* `start`: the `key` of the first step in each round (defaults to the first step if omitted).
-* `steps`: ordered array of step definitions. Each step includes:
-  * `key`: unique identifier inside the round.
-  * `role`: must map to `roles[role]`.
-  * `prompt`: array of template strings rendered and concatenated with double newlines.
-  * `next`: hard-coded fallback step key (optional).
-  * `stateUpdates`: object of template strings rendered after the step finishes.
-  * `transitions` / `exits`: arrays of conditional transitions (see below).
-* `maxRounds`: optional numeric cap; callers can also override when starting a run.
-* `defaultOutcome`: fallback outcome when the round never triggers an exit.
+- `start`: the `key` of the first step in each round (defaults to the first step if omitted).
+- `steps`: ordered array of step definitions. Each step includes:
+  - `key`: unique identifier inside the round.
+  - `role`: must map to `roles[role]`.
+  - `prompt`: array of template strings rendered and concatenated with double newlines.
+  - `next`: hard-coded fallback step key (optional).
+  - `stateUpdates`: object of template strings rendered after the step finishes.
+  - `transitions` / `exits`: arrays of conditional transitions (see below).
+- `maxRounds`: optional numeric cap; callers can also override when starting a run.
+- `defaultOutcome`: fallback outcome when the round never triggers an exit.
 
 ### Template Rendering
 
 Prompt sections, state initializers, `stateUpdates`, and transition `reason` fields all support handlebars-style expressions:
 
-* `{{user.instructions}}`, `{{run.id}}`, `{{round}}`, `{{maxRounds}}` reference built-in scope values.
-* `{{steps.worker.raw}}` accesses the raw JSON emitted by a prior step within the same round.
-* `{{parsed.instructions}}` refers to the parsed payload of the current step.
-* Literal strings can provide fallbacks using `||`, e.g. `{{parsed.instructions||state.pendingInstructions}}`.
+- `{{user.instructions}}`, `{{run.id}}`, `{{round}}`, `{{maxRounds}}` reference built-in scope values.
+- `{{steps.worker.raw}}` accesses the raw JSON emitted by a prior step within the same round.
+- `{{parsed.instructions}}` refers to the parsed payload of the current step.
+- Literal strings can provide fallbacks using `||`, e.g. `{{parsed.instructions||state.pendingInstructions}}`.
 
 ### Transitions & Exits
 
@@ -109,16 +111,16 @@ Transitions determine whether a step loops, advances, or finishes the run.
 }
 ```
 
-* `condition` can be:
-  * `'always'`
-  * A field comparison (`field` + comparators such as `equals`, `notEquals`, `includes`, `matches`, `in`, `exists`, etc.).
-  * Logical combinators: `{ any: [ ...conditions ] }` or `{ all: [ ...conditions ] }`.
-  * `field` values prefixed with `@` read from the global scope instead of the current step (e.g. `@state.pendingInstructions`).
-* A transition must specify either `nextStep` or `outcome`.
-* If `outcome` is set, `reason` becomes mandatory and is template-rendered.
-* `stateUpdates` borrow the same templating rules; they run only when the transition fires.
-* `transitions`: evaluated first; if none match, the orchestrator falls back to `next` or step order.
-* `exits`: evaluated after transitions and typically used to emit final outcomes.
+- `condition` can be:
+  - `'always'`
+  - A field comparison (`field` + comparators such as `equals`, `notEquals`, `includes`, `matches`, `in`, `exists`, etc.).
+  - Logical combinators: `{ any: [ ...conditions ] }` or `{ all: [ ...conditions ] }`.
+  - `field` values prefixed with `@` read from the global scope instead of the current step (e.g. `@state.pendingInstructions`).
+- A transition must specify either `nextStep` or `outcome`.
+- If `outcome` is set, `reason` becomes mandatory and is template-rendered.
+- `stateUpdates` borrow the same templating rules; they run only when the transition fires.
+- `transitions`: evaluated first; if none match, the orchestrator falls back to `next` or step order.
+- `exits`: evaluated after transitions and typically used to emit final outcomes.
 
 ### Parsers & Typed Results
 
@@ -137,9 +139,9 @@ When defining workflows in TypeScript (`*.workflow.ts`), use `as const` on the d
 
 ### Validation & Tooling
 
-* Validation is performed via Zod (`workflowDefinitionSchema.parse`). Hydration will throw if any structural rule is violated (duplicate step keys, invalid references, missing reasons, etc.).
-* Keep workflow sources JSON-compatible so they can be serialized into configuration bundles or runtime assets.
-* Use `runAgentWorkflow` with the validated definition to execute real runs, and `getWorkflowRunDiff` to inspect resulting file diffs for a specific role.
+- Validation is performed via Zod (`workflowDefinitionSchema.parse`). Hydration will throw if any structural rule is violated (duplicate step keys, invalid references, missing reasons, etc.).
+- Keep workflow sources JSON-compatible so they can be serialized into configuration bundles or runtime assets.
+- Use `runAgentWorkflow` with the validated definition to execute real runs, and `getWorkflowRunDiff` to inspect resulting file diffs for a specific role.
 
 ### Reference Example
 
@@ -161,7 +163,9 @@ When defining workflows in TypeScript (`*.workflow.ts`), use `as const` on the d
     "bootstrap": { "key": "bootstrap", "role": "verifier", "prompt": ["..."] },
     "round": {
       "start": "worker",
-      "steps": [ /* worker + verifier definitions */ ],
+      "steps": [
+        /* worker + verifier definitions */
+      ],
       "maxRounds": 10,
       "defaultOutcome": {
         "outcome": "max-rounds",

@@ -1,12 +1,12 @@
-import { execSync, spawnSync } from 'child_process'
 import type { FileDiff } from '@opencode-ai/sdk'
+import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
 import { RunMeta } from '../provenance/provenance'
 import { getWorkflowRunDiff, runAgentWorkflow } from './agent-orchestrator'
-import { singleAgentWorkflowDefinition } from './workflows'
 import { opencodeTestHooks } from './opencodeTestHooks'
+import { singleAgentWorkflowDefinition } from './workflows'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
@@ -95,7 +95,9 @@ describe('Single agent loop', () => {
       const userMessages = entry.log.filter((e) => e.role === 'user')
       expect(userMessages.length).toBeGreaterThan(0)
       expect(
-        userMessages.some((message) => typeof message.payload?.text === 'string' && message.payload.text.includes('Hello'))
+        userMessages.some(
+          (message) => typeof message.payload?.text === 'string' && message.payload.text.includes('Hello')
+        )
       ).toBe(true)
     }
 

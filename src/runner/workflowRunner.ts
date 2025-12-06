@@ -331,7 +331,8 @@ async function main() {
         ? { agentExecutor: createDeterministicAgentExecutor(testAgentBehavior) }
         : {
             agentExecutorOptions: {
-              runWorkflow: (options) => runAgentWorkflow(verifierWorkerWorkflowDefinition, options as AgentWorkflowRunOptions),
+              runWorkflow: (options) =>
+                runAgentWorkflow(verifierWorkerWorkflowDefinition, options as AgentWorkflowRunOptions),
               model: agentOptions!.model,
               maxRounds: agentOptions!.maxRounds,
               onStream: createAgentStreamLogger(workflowId, stepId, runnerInstanceId)

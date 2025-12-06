@@ -380,21 +380,20 @@ async function createIntegrationHarness(options?: {
   }
   const webSockets = options?.webSockets ?? resolveWebSockets()
 
-  const runWorkflow = vi.fn<
-    [AgentWorkflowRunOptions],
-    Promise<AgentRunResponse<VerifierWorkerWorkflowResult>>
-  >(async (options) => {
-    const chunk: AgentStreamEvent = {
-      role: 'worker',
-      round: 1,
-      parts: [{ id: 'p1', type: 'text', text: 'stream-chunk' } as any],
-      model: 'mock-model',
-      attempt: 1
+  const runWorkflow = vi.fn<[AgentWorkflowRunOptions], Promise<AgentRunResponse<VerifierWorkerWorkflowResult>>>(
+    async (options) => {
+      const chunk: AgentStreamEvent = {
+        role: 'worker',
+        round: 1,
+        parts: [{ id: 'p1', type: 'text', text: 'stream-chunk' } as any],
+        model: 'mock-model',
+        attempt: 1
+      }
+      options.onStream?.(chunk)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      return { runId: 'test-run', result: Promise.resolve(mockResult) }
     }
-    options.onStream?.(chunk)
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    return { runId: 'test-run', result: Promise.resolve(mockResult) }
-  })
+  )
 
   const controllerFactory = vi.fn<[CodeServerOptions], CodeServerController>((options) => {
     expect(options.port).toBe(fakeCodeServer.port)

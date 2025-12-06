@@ -1,6 +1,6 @@
 import type { AgentWorkflowDefinition } from '../workflow-schema'
 
-export const verifierWorkerWorkflowDocument = ({
+export const verifierWorkerWorkflowDocument = {
   $schema: 'https://hyperagent.dev/schemas/agent-workflow.json',
   id: 'verifier-worker.v1',
   description: 'Two-role workflow pairing a worker and verifier with iterative feedback.',
@@ -96,4 +96,4 @@ export const verifierWorkerWorkflowDocument = ({
       }
     }
   }
-} as const) satisfies AgentWorkflowDefinition
+} as const satisfies AgentWorkflowDefinition

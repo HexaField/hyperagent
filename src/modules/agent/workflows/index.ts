@@ -1,11 +1,11 @@
-import { singleAgentWorkflowDocument } from './single-agent.workflow'
-import { verifierWorkerWorkflowDocument } from './verifier-worker.workflow'
+import type { AgentWorkflowResult } from '../agent-orchestrator'
 import {
   workflowDefinitionSchema,
   type AgentWorkflowDefinition,
   type AgentWorkflowDefinitionDraft
 } from '../workflow-schema'
-import type { AgentWorkflowResult } from '../agent-orchestrator'
+import { singleAgentWorkflowDocument } from './single-agent.workflow'
+import { verifierWorkerWorkflowDocument } from './verifier-worker.workflow'
 
 function hydrateWorkflowDefinition<const TSource extends AgentWorkflowDefinition>(source: TSource): TSource {
   workflowDefinitionSchema.parse(source as AgentWorkflowDefinitionDraft)

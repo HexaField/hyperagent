@@ -1,6 +1,6 @@
 import type { AgentWorkflowDefinition } from '../workflow-schema'
 
-export const singleAgentWorkflowDocument = ({
+export const singleAgentWorkflowDocument = {
   $schema: 'https://hyperagent.dev/schemas/agent-workflow.json',
   id: 'single-agent.v1',
   description: 'Single role workflow that streams user instructions directly to one agent.',
@@ -42,4 +42,4 @@ export const singleAgentWorkflowDocument = ({
       }
     }
   }
-} as const) satisfies AgentWorkflowDefinition
+} as const satisfies AgentWorkflowDefinition

@@ -146,7 +146,12 @@ function buildWorkflowResult(outcome: VerifierWorkerWorkflowResult['outcome']): 
     key: 'bootstrap',
     role: 'verifier',
     round: 0,
-    raw: JSON.stringify({ critique: 'Focus on parser edge cases.', instructions: 'Outline adjustments.', verdict: 'instruct', priority: 2 }),
+    raw: JSON.stringify({
+      critique: 'Focus on parser edge cases.',
+      instructions: 'Outline adjustments.',
+      verdict: 'instruct',
+      priority: 2
+    }),
     parsed: {
       verdict: 'instruct',
       critique: 'Focus on parser edge cases.',

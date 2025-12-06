@@ -1,12 +1,12 @@
-import { execSync, spawnSync } from 'child_process'
 import type { FileDiff } from '@opencode-ai/sdk'
+import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
 import { RunMeta } from '../provenance/provenance'
 import { getWorkflowRunDiff, runAgentWorkflow } from './agent-orchestrator'
-import { verifierWorkerWorkflowDefinition } from './workflows'
 import { opencodeTestHooks } from './opencodeTestHooks'
+import { verifierWorkerWorkflowDefinition } from './workflows'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
@@ -110,7 +110,9 @@ describe('Verifier/worker collaboration loop', () => {
       const userMessages = entry.log.filter((e) => e.role === 'user')
       expect(userMessages.length).toBeGreaterThan(0)
       expect(
-        userMessages.some((message) => typeof message.payload?.text === 'string' && message.payload.text.includes('Hello'))
+        userMessages.some(
+          (message) => typeof message.payload?.text === 'string' && message.payload.text.includes('Hello')
+        )
       ).toBe(true)
     }
 
@@ -161,11 +163,10 @@ describe('Verifier/worker collaboration loop', () => {
     const workerSession = { id: 'worker-session', directory: '/tmp/provenance-test' }
     const verifierSession = { id: 'verifier-session', directory: '/tmp/provenance-test' }
     vi.doMock('./opencode', () => ({
-      createSession: vi
-        .fn()
-        .mockResolvedValueOnce(workerSession)
-        .mockResolvedValueOnce(verifierSession),
-      getSession: vi.fn(async (_dir: string, id: string) => (id === workerSession.id ? workerSession : verifierSession)),
+      createSession: vi.fn().mockResolvedValueOnce(workerSession).mockResolvedValueOnce(verifierSession),
+      getSession: vi.fn(async (_dir: string, id: string) =>
+        id === workerSession.id ? workerSession : verifierSession
+      ),
       getSessionDiff: vi.fn().mockResolvedValue([])
     }))
 

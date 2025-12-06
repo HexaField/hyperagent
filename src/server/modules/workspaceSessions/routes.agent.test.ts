@@ -5,10 +5,7 @@ import path from 'path'
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi, type SpyInstance } from 'vitest'
 import * as orchestratorModule from '../../../modules/agent/agent-orchestrator'
-import {
-  singleAgentWorkflowDefinition,
-  verifierWorkerWorkflowDefinition
-} from '../../../modules/agent/workflows'
+import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from '../../../modules/agent/workflows'
 import * as provenanceModule from '../../../modules/provenance/provenance'
 import { createWorkspaceSessionsRouter } from './routes'
 

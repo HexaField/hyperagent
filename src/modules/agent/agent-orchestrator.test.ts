@@ -1,12 +1,12 @@
+import { FileDiff } from '@opencode-ai/sdk'
 import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
-import { FileDiff } from '@opencode-ai/sdk'
 import { describe, expect, it } from 'vitest'
 import { RunMeta } from '../provenance/provenance'
 import { getWorkflowRunDiff, loadWorkflowDefinition, runAgentWorkflow } from './agent-orchestrator'
-import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from './workflows'
 import { opencodeTestHooks } from './opencodeTestHooks'
+import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from './workflows'
 
 const model = 'github-copilot/gpt-5-mini'
 

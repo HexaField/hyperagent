@@ -35,7 +35,6 @@ import { createWorkspaceTerminalModule } from '../modules/workspaceTerminal/modu
 import { createWorkflowLogStream } from '../modules/workspaceWorkflows/logStream'
 import { createWorkspaceWorkflowsRouter } from '../modules/workspaceWorkflows/routes'
 import { createCodeServerProxyHandler, extractCodeServerSessionIdFromUrl } from './codeServerProxy'
-import type { CodeServerSession, ProxyWithUpgrade } from './codeServerTypes'
 import {
   createCodeServerSessionManager,
   type ControllerFactory as CodeServerControllerFactory
@@ -48,8 +47,6 @@ import {
   WORKFLOW_AGENT_MAX_ROUNDS,
   WORKFLOW_AGENT_MODEL,
   WORKFLOW_AGENT_PROVIDER,
-  buildExternalUrl,
-  mergeFrameAncestorsDirective,
   normalizePublicOrigin
 } from './config'
 import { installProcessErrorHandlers, logFullError, wrapAsync } from './errors'

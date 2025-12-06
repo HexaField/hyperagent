@@ -1,14 +1,6 @@
+import type { FileDiff, Session } from '@opencode-ai/sdk'
 import fs from 'fs'
 import path from 'path'
-import type { FileDiff, Session } from '@opencode-ai/sdk'
-import {
-  AgentRunResponse,
-  AgentStreamCallback,
-  coerceString,
-  invokeStructuredJsonCall,
-  parseJsonPayload
-} from './agent'
-import { createSession, getSession, getSessionDiff } from './opencode'
 import {
   createRunMeta,
   findLatestRoleDiff,
@@ -19,9 +11,17 @@ import {
   saveRunMeta
 } from '../provenance/provenance'
 import {
+  AgentRunResponse,
+  AgentStreamCallback,
+  coerceString,
+  invokeStructuredJsonCall,
+  parseJsonPayload
+} from './agent'
+import { createSession, getSession, getSessionDiff } from './opencode'
+import {
   AgentWorkflowDefinition,
-  WorkflowFieldCondition,
   WorkflowCondition,
+  WorkflowFieldCondition,
   WorkflowOutcomeTemplate,
   WorkflowRoleParser,
   WorkflowStepDefinition,
@@ -66,9 +66,8 @@ type ParserLookup<TDefinition extends AgentWorkflowDefinition> = {
 
 type RoundStepDefinition<TDefinition extends AgentWorkflowDefinition> = TDefinition['flow']['round']['steps'][number]
 type RoundStepKey<TDefinition extends AgentWorkflowDefinition> = RoundStepDefinition<TDefinition>['key']
-type BootstrapStepDefinition<TDefinition extends AgentWorkflowDefinition> = TDefinition['flow']['bootstrap'] extends WorkflowStepDefinition
-  ? TDefinition['flow']['bootstrap']
-  : never
+type BootstrapStepDefinition<TDefinition extends AgentWorkflowDefinition> =
+  TDefinition['flow']['bootstrap'] extends WorkflowStepDefinition ? TDefinition['flow']['bootstrap'] : never
 
 type ParserForRole<
   TDefinition extends AgentWorkflowDefinition,
@@ -80,29 +79,31 @@ type ParserOutputForRole<
   Role extends WorkflowRoleName<TDefinition>
 > = ParserOutputMap[ParserForRole<TDefinition, Role>]
 
-type RoundStepTurn<TDefinition extends AgentWorkflowDefinition> = RoundStepDefinition<TDefinition> extends infer Step
-  ? Step extends WorkflowStepDefinition
-    ? {
-        key: Step['key']
-        role: Step['role']
-        round: number
-        raw: string
-        parsed: ParserOutputForRole<TDefinition, Step['role'] & WorkflowRoleName<TDefinition>>
-      }
+type RoundStepTurn<TDefinition extends AgentWorkflowDefinition> =
+  RoundStepDefinition<TDefinition> extends infer Step
+    ? Step extends WorkflowStepDefinition
+      ? {
+          key: Step['key']
+          role: Step['role']
+          round: number
+          raw: string
+          parsed: ParserOutputForRole<TDefinition, Step['role'] & WorkflowRoleName<TDefinition>>
+        }
+      : never
     : never
-  : never
 
-type BootstrapTurn<TDefinition extends AgentWorkflowDefinition> = BootstrapStepDefinition<TDefinition> extends infer Step
-  ? Step extends WorkflowStepDefinition
-    ? {
-        key: Step['key']
-        role: Step['role']
-        round: number
-        raw: string
-        parsed: ParserOutputForRole<TDefinition, Step['role'] & WorkflowRoleName<TDefinition>>
-      }
+type BootstrapTurn<TDefinition extends AgentWorkflowDefinition> =
+  BootstrapStepDefinition<TDefinition> extends infer Step
+    ? Step extends WorkflowStepDefinition
+      ? {
+          key: Step['key']
+          role: Step['role']
+          round: number
+          raw: string
+          parsed: ParserOutputForRole<TDefinition, Step['role'] & WorkflowRoleName<TDefinition>>
+        }
+      : never
     : never
-  : never
 
 export type AgentWorkflowTurn<TDefinition extends AgentWorkflowDefinition = AgentWorkflowDefinition> =
   | RoundStepTurn<TDefinition>
@@ -247,7 +248,10 @@ const scopeWithStep = (scope: TemplateScope, step: RuntimeWorkflowTurn): StepAwa
 
 const getValueAtPath = (source: any, pathExpression: string): any => {
   if (!pathExpression) return undefined
-  const parts = pathExpression.split('.').map((part) => part.trim()).filter(Boolean)
+  const parts = pathExpression
+    .split('.')
+    .map((part) => part.trim())
+    .filter(Boolean)
   let current: any = source
   for (const part of parts) {
     if (current == null) {
@@ -262,7 +266,8 @@ const evaluateExpression = (expression: string, scope: StepAwareScope | Template
   const fallbacks = expression.split('||').map((segment) => segment.trim())
   for (const segment of fallbacks) {
     if (!segment) continue
-    const isQuoted = (segment.startsWith('"') && segment.endsWith('"')) || (segment.startsWith('\'') && segment.endsWith('\''))
+    const isQuoted =
+      (segment.startsWith('"') && segment.endsWith('"')) || (segment.startsWith("'") && segment.endsWith("'"))
     if (isQuoted) {
       const literal = segment.slice(1, -1)
       if (literal.length > 0) {
@@ -296,7 +301,10 @@ const renderTemplateString = (template: string, scope: StepAwareScope | Template
 }
 
 const renderPrompt = (sections: ReadonlyArray<string>, scope: TemplateScope): string => {
-  return sections.map((section) => renderTemplateString(section, scope).trim()).filter(Boolean).join('\n\n')
+  return sections
+    .map((section) => renderTemplateString(section, scope).trim())
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 const initializeState = (initial: Record<string, string> | undefined, scope: TemplateScope): Record<string, string> => {
@@ -399,9 +407,13 @@ const isAllCondition = (condition: WorkflowCondition): condition is { all: Workf
   isRecord(condition) && Array.isArray((condition as { all?: unknown }).all)
 
 const isFieldCondition = (condition: WorkflowCondition): condition is WorkflowFieldCondition =>
-  isRecord(condition) && typeof (condition as WorkflowFieldCondition).field === 'string' && !('any' in condition) && !('all' in condition)
+  isRecord(condition) &&
+  typeof (condition as WorkflowFieldCondition).field === 'string' &&
+  !('any' in condition) &&
+  !('all' in condition)
 
-const normalizeString = (value: string, caseSensitive?: boolean): string => (caseSensitive ? value : value.toLowerCase())
+const normalizeString = (value: string, caseSensitive?: boolean): string =>
+  caseSensitive ? value : value.toLowerCase()
 
 const toStringValue = (value: unknown): string | null => {
   if (value === undefined || value === null) return null
@@ -499,11 +511,7 @@ const evaluateFieldCondition = (
   return true
 }
 
-const matchesCondition = (
-  condition: WorkflowCondition,
-  scope: StepAwareScope,
-  step: RuntimeWorkflowTurn
-): boolean => {
+const matchesCondition = (condition: WorkflowCondition, scope: StepAwareScope, step: RuntimeWorkflowTurn): boolean => {
   if (condition === 'always') return true
   if (isAnyCondition(condition)) {
     return condition.any.some((child) => matchesCondition(child, scope, step))

@@ -110,7 +110,10 @@ const workflowRoundSchema = z
         })
       }
 
-      const validateTransitions = (transitions: z.infer<typeof workflowTransitionSchema>[] | undefined, property: string) => {
+      const validateTransitions = (
+        transitions: z.infer<typeof workflowTransitionSchema>[] | undefined,
+        property: string
+      ) => {
         transitions?.forEach((transition, tIndex) => {
           if (transition.nextStep && !seen.has(transition.nextStep)) {
             ctx.addIssue({

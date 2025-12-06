@@ -100,7 +100,12 @@ export function appendLogEntry(runId: string, entry: LogEntryInit, directory: st
   saveRunMeta(meta, runId, directory)
 }
 
-export function recordUserMessage(runId: string, directory: string, message: string, metadata?: Record<string, unknown>) {
+export function recordUserMessage(
+  runId: string,
+  directory: string,
+  message: string,
+  metadata?: Record<string, unknown>
+) {
   const text = typeof message === 'string' ? message.trim() : ''
   if (!text.length) return
   const payload: Record<string, unknown> = { text }

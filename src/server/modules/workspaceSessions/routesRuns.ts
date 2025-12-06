@@ -2,10 +2,7 @@ import { Router, type RequestHandler } from 'express'
 import fs from 'fs'
 import path from 'path'
 import { runAgentWorkflow } from '../../../modules/agent/agent-orchestrator'
-import {
-  singleAgentWorkflowDefinition,
-  verifierWorkerWorkflowDefinition
-} from '../../../modules/agent/workflows'
+import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from '../../../modules/agent/workflows'
 import { loadRunMeta, metaDirectory, type RunMeta } from '../../../modules/provenance/provenance'
 import { ensureProviderConfig } from '../../../modules/workflowAgentExecutor'
 import { DEFAULT_CODING_AGENT_MODEL } from '../../core/config'

@@ -4,11 +4,7 @@ import type { ClientRequest, IncomingMessage } from 'node:http'
 import type { CodeServerController, CodeServerOptions } from '../../../src/modules/codeServer'
 import type { Persistence, ProjectRecord } from '../../../src/modules/database'
 import type { CodeServerSession, ProxyWithUpgrade } from './codeServerTypes'
-import {
-  CODE_SERVER_HOST,
-  buildExternalUrl,
-  mergeFrameAncestorsDirective
-} from './config'
+import { CODE_SERVER_HOST, buildExternalUrl, mergeFrameAncestorsDirective } from './config'
 import type { Logger } from './logging'
 import { toErrorMeta } from './logging'
 
@@ -82,15 +78,8 @@ type CreateCodeServerSessionManagerOptions = {
 export const createCodeServerSessionManager = (
   options: CreateCodeServerSessionManagerOptions
 ): CodeServerSessionManager => {
-  const {
-    controllerFactory,
-    allocatePort,
-    persistence,
-    publicOrigin,
-    corsOrigin,
-    frameAncestorOrigin,
-    logger
-  } = options
+  const { controllerFactory, allocatePort, persistence, publicOrigin, corsOrigin, frameAncestorOrigin, logger } =
+    options
 
   persistence.codeServerSessions.resetAllRunning()
 
