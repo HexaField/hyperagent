@@ -1,5 +1,4 @@
 import type { ReviewScheduler } from '../../../src/modules/review/scheduler'
-import type { WorkflowRuntime } from '../../../src/modules/workflows'
 import type { WorkspaceTerminalModule } from '../modules/workspaceTerminal/module'
 
 export type ManagedService = {
@@ -17,24 +16,6 @@ export const startManagedServices = async (services: ManagedService[]): Promise<
 export const stopManagedServices = async (services: ManagedService[]): Promise<void> => {
   for (const service of [...services].reverse()) {
     await service.stop()
-  }
-}
-
-export const createWorkflowRuntimeService = (options: {
-  runtime: WorkflowRuntime
-  manageLifecycle: boolean
-}): ManagedService => {
-  const { runtime, manageLifecycle } = options
-  return {
-    name: 'workflowRuntime',
-    start: async () => {
-      if (!manageLifecycle) return
-      runtime.startWorker()
-    },
-    stop: async () => {
-      if (!manageLifecycle) return
-      await runtime.stopWorker()
-    }
   }
 }
 

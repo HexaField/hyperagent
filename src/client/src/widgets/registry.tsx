@@ -8,11 +8,6 @@ const WorkspaceSummaryView = lazy(async () => {
   return { default: module.WorkspaceSummary }
 })
 
-const WorkflowsWidgetView = lazy(async () => {
-  const module = await import('./workspaceWorkflows')
-  return { default: module.WorkflowsWidget }
-})
-
 const WorkspaceTerminalView = lazy(async () => {
   const module = await import('./workspaceTerminal')
   return { default: module.WorkspaceTerminalWidget }
@@ -62,13 +57,13 @@ const definitionMap: Record<WidgetTemplateId, WidgetDefinition> = {
   },
   'workspace-workflows': {
     id: 'workspace-workflows',
-    title: 'Workflows',
-    description: 'Run history and queue',
+    title: 'Agent runs',
+    description: 'Run history and docker/local toggle',
     icon: '🧩',
     initialPosition: { x: 280, y: -100 },
     initialSize: { width: 920, height: 760 },
     startOpen: true,
-    render: ({ workspace }) => <WorkflowsWidgetView workspaceId={workspace.id} workspaceName={workspace.name} />
+    render: ({ workspace }) => <SessionsWidgetView workspacePath={workspace.repositoryPath} />
   },
   'workspace-terminal': {
     id: 'workspace-terminal',

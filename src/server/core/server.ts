@@ -2,7 +2,6 @@ import cors from 'cors'
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import express from 'express'
 import fs from 'fs/promises'
-import { spawnSync } from 'node:child_process'
 import type { IncomingMessage } from 'node:http'
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
 import { createServer as createNetServer, type AddressInfo, type Socket } from 'node:net'
@@ -18,13 +17,8 @@ import { createPullRequestModule } from '../../../src/modules/review/pullRequest
 import { createDockerReviewRunnerGateway } from '../../../src/modules/review/runnerGateway'
 import { createReviewSchedulerModule } from '../../../src/modules/review/scheduler'
 import { createTerminalModule, type TerminalModule } from '../../../src/modules/terminal'
-import { createWorkflowPolicyFromEnv } from '../../../src/modules/workflowPolicy'
-import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
-import { createDockerWorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
-import { createWorkflowRuntime, type WorkflowRuntime } from '../../../src/modules/workflows'
-import type { AgentRunResponse } from '../../modules/agent/agent'
-import { runAgentWorkflow, type AgentWorkflowRunOptions } from '../../modules/agent/agent-orchestrator'
-import { verifierWorkerWorkflowDefinition, type VerifierWorkerWorkflowResult } from '../../modules/agent/workflows'
+import { runAgentWorkflow } from '../../modules/agent/agent-orchestrator'
+import { verifierWorkerWorkflowDefinition } from '../../modules/agent/workflows'
 import { runGitCommand } from '../../modules/git'
 import { createWorkspaceCodeServerRouter } from '../modules/workspaceCodeServer/routes'
 import { createWorkspaceNarratorRouter, type NarratorRelay } from '../modules/workspaceNarrator/routes'
@@ -32,8 +26,6 @@ import { seedDefaultPersonas } from '../modules/workspaceSessions/personas'
 import { createWorkspaceSessionsRouter } from '../modules/workspaceSessions/routes'
 import { createWorkspaceSummaryRouter } from '../modules/workspaceSummary/routes'
 import { createWorkspaceTerminalModule } from '../modules/workspaceTerminal/module'
-import { createWorkflowLogStream } from '../modules/workspaceWorkflows/logStream'
-import { createWorkspaceWorkflowsRouter } from '../modules/workspaceWorkflows/routes'
 import { createCodeServerProxyHandler, extractCodeServerSessionIdFromUrl } from './codeServerProxy'
 import {
   createCodeServerSessionManager,
@@ -44,9 +36,6 @@ import {
   DEFAULT_PORT,
   GRAPH_BRANCH_LIMIT,
   GRAPH_COMMITS_PER_BRANCH,
-  WORKFLOW_AGENT_MAX_ROUNDS,
-  WORKFLOW_AGENT_MODEL,
-  WORKFLOW_AGENT_PROVIDER,
   normalizePublicOrigin
 } from './config'
 import { installProcessErrorHandlers, logFullError, wrapAsync } from './errors'
@@ -56,7 +45,6 @@ import {
   createCodeServerService,
   createReviewSchedulerService,
   createTerminalService,
-  createWorkflowRuntimeService,
   startManagedServices,
   stopManagedServices,
   type ManagedService
@@ -68,47 +56,18 @@ import { loadWebSocketModule, type WebSocketBindings } from './ws'
 
 export type { CodeServerSession, ProxyWithUpgrade } from './codeServerTypes'
 
-type WorkflowRunner = (options: AgentWorkflowRunOptions) => Promise<AgentRunResponse<VerifierWorkerWorkflowResult>>
 type ControllerFactory = CodeServerControllerFactory
 
-function ensureWorkflowAgentProviderReady(provider: string | undefined) {
-  if (!provider) return
-  const binary = resolveWorkflowAgentBinary(provider)
-  if (!binary) return
-  const check = spawnSync('which', [binary], { stdio: 'ignore' })
-  if (check.status !== 0) {
-    throw new Error(`Workflow agent provider "${provider}" requires the "${binary}" CLI to be available on PATH`)
-  }
-}
-
-function resolveWorkflowAgentBinary(provider: string): string | null {
-  switch (provider) {
-    case 'opencode':
-      return 'opencode'
-    case 'ollama':
-    case 'ollama-cli':
-      return 'ollama'
-    case 'goose':
-      return 'goose'
-    default:
-      return null
-  }
-}
-
 export type CreateServerOptions = {
-  runWorkflow?: WorkflowRunner
   controllerFactory?: ControllerFactory
   tmpDir?: string
   port?: number
   allocatePort?: () => Promise<number>
   persistence?: Persistence
   persistenceFile?: string
-  workflowRuntime?: WorkflowRuntime
-  workflowPollIntervalMs?: number
   reviewPollIntervalMs?: number
   radicleModule?: RadicleModule
   terminalModule?: TerminalModule
-  workflowRunnerGateway?: WorkflowRunnerGateway
   tls?: TlsConfig
   publicOrigin?: string
   corsOrigin?: string
@@ -126,22 +85,19 @@ export type ServerInstance = {
   getActiveSessionIds: () => string[]
   handleUpgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void
   handlers: {
-    codeServerProxy: RequestHandler
+    codeServerProxy: ReturnType<typeof createCodeServerProxyHandler>
   }
 }
 
-const serverLogger = createLogger('ui/server/core/server', { service: 'ui-server' })
-
-export async function createServerApp(options: CreateServerOptions = {}): Promise<ServerInstance> {
-  const lifecycleLogger = serverLogger.child({ scope: 'lifecycle' })
-  const agentLogger = serverLogger.child({ scope: 'agent-run' })
+export const createServer = async (options: CreateServerOptions = {}): Promise<ServerInstance> => {
+  const serverLogger = createLogger('server', { scope: 'server' })
   const codeServerLogger = serverLogger.child({ scope: 'code-server' })
+  const lifecycleLogger = serverLogger.child({ scope: 'lifecycle' })
   const runnerAuthLogger = serverLogger.child({ scope: 'runner-auth' })
+
   const wsModule = options.webSockets ?? (await loadWebSocketModule())
   const WebSocketCtor = wsModule.WebSocket
   const WebSocketServerCtor = wsModule.WebSocketServer
-  const runWorkflow =
-    options.runWorkflow ?? ((runnerOptions) => runAgentWorkflow(verifierWorkerWorkflowDefinition, runnerOptions))
   const controllerFactory = options.controllerFactory ?? createCodeServerController
   const tmpDir = options.tmpDir ?? os.tmpdir()
   const defaultPort = options.port ?? DEFAULT_PORT
@@ -240,62 +196,12 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 
-  ensureWorkflowAgentProviderReady(WORKFLOW_AGENT_PROVIDER)
-
-  const workflowAgentExecutorOptions = {
-    runWorkflow,
-    provider: WORKFLOW_AGENT_PROVIDER,
-    model: WORKFLOW_AGENT_MODEL,
-    maxRounds: WORKFLOW_AGENT_MAX_ROUNDS
-  }
-
-  const workflowPolicy = createWorkflowPolicyFromEnv(process.env)
-  const workflowLogStream = createWorkflowLogStream()
-
-  const workflowCallbackBaseUrl =
-    process.env.WORKFLOW_CALLBACK_BASE_URL ?? `https://host.docker.internal:${defaultPort}`
-  const workflowRunnerToken = process.env.WORKFLOW_RUNNER_TOKEN ?? process.env.WORKFLOW_CALLBACK_TOKEN ?? null
-  const workflowRunnerGateway =
-    options.workflowRunnerGateway ??
-    createDockerWorkflowRunnerGateway({
-      dockerBinary: process.env.WORKFLOW_DOCKER_BINARY,
-      image: process.env.WORKFLOW_RUNNER_IMAGE,
-      callbackBaseUrl: workflowCallbackBaseUrl,
-      callbackToken: workflowRunnerToken ?? undefined,
-      timeoutMs: process.env.WORKFLOW_RUNNER_TIMEOUT ? Number(process.env.WORKFLOW_RUNNER_TIMEOUT) : undefined,
-      caCertPath: process.env.WORKFLOW_RUNNER_CA_PATH ?? defaultCertPath,
-      onLog: (event) => {
-        workflowLogStream.ingestRunnerChunk({
-          workflowId: event.workflowId,
-          stepId: event.stepId,
-          runnerInstanceId: event.runnerInstanceId,
-          stream: event.stream,
-          line: event.line
-        })
-      }
-    })
-
   const pullRequestModule = createPullRequestModule({
     projects: persistence.projects,
     pullRequests: persistence.pullRequests,
     pullRequestCommits: persistence.pullRequestCommits,
     pullRequestEvents: persistence.pullRequestEvents
   })
-
-  const manageWorkerLifecycle = !options.workflowRuntime
-  const workflowRuntime =
-    options.workflowRuntime ??
-    createWorkflowRuntime({
-      persistence,
-      persistenceFilePath: persistence.db.name,
-      pollIntervalMs: options.workflowPollIntervalMs,
-      radicle: radicleModule,
-      commitAuthor,
-      agentExecutorOptions: workflowAgentExecutorOptions,
-      runnerGateway: workflowRunnerGateway,
-      pullRequestModule,
-      policy: workflowPolicy
-    })
   const reviewCallbackBaseUrl = process.env.REVIEW_CALLBACK_BASE_URL ?? `https://host.docker.internal:${defaultPort}`
   const reviewRunnerToken = process.env.REVIEW_RUNNER_TOKEN ?? process.env.REVIEW_CALLBACK_TOKEN ?? null
   const reviewRunnerGateway = createDockerReviewRunnerGateway({
@@ -387,26 +293,10 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     return valid
   }
 
-  const validateWorkflowRunnerToken = (req: Request): boolean => {
-    if (!workflowRunnerToken) return true
-    const value = pickUserIdValue(req.headers['x-workflow-runner-token'])
-    const valid = value === workflowRunnerToken
-    if (!valid) {
-      runnerAuthLogger.warn('Workflow runner token rejected', {
-        kind: 'workflow',
-        event: 'runner_token_invalid',
-        remoteAddress: req.ip ?? req.socket.remoteAddress ?? null,
-        path: req.originalUrl
-      })
-    }
-    return valid
-  }
-
   const workspaceSummaryRouter = createWorkspaceSummaryRouter({
     wrapAsync,
     persistence,
     radicleModule,
-    workflowRuntime,
     readGitMetadata,
     runGitCommand,
     graphBranchLimit: GRAPH_BRANCH_LIMIT,
@@ -421,15 +311,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   const workspaceNarratorRouter = createWorkspaceNarratorRouter({
     wrapAsync,
     narratorRelay: options.narratorRelay
-  })
-
-  const workspaceWorkflowsRouter = createWorkspaceWorkflowsRouter({
-    wrapAsync,
-    workflowRuntime,
-    persistence,
-    runGitCommand,
-    validateWorkflowRunnerToken,
-    workflowLogStream
   })
 
   const workspaceCodeServerRouter = createWorkspaceCodeServerRouter({
@@ -469,7 +350,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   })
 
   const managedServices: ManagedService[] = [
-    createWorkflowRuntimeService({ runtime: workflowRuntime, manageLifecycle: manageWorkerLifecycle }),
     createReviewSchedulerService(reviewScheduler),
     createTerminalService(workspaceTerminalModule),
     createCodeServerService({ shutdownAllCodeServers: () => codeServerSessionManager.shutdownAll() })
@@ -490,16 +370,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     '/api/health',
     wrapAsync((_req, res) => {
       res.json({ ok: true })
-    })
-  )
-
-  app.get(
-    '/api/health/workflows',
-    wrapAsync((_req, res) => {
-      const metrics = persistence.workflowSteps.getQueueMetrics()
-      const deadLetters = persistence.workflowRunnerDeadLetters.listRecent(20)
-      const events = persistence.workflowRunnerEvents.listRecent(100)
-      res.json({ ok: true, metrics, deadLetters, events })
     })
   )
 
@@ -562,7 +432,6 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
   app.use(workspaceSummaryRouter)
   app.use(workspaceSessionsRouter)
   app.use(workspaceNarratorRouter)
-  app.use(workspaceWorkflowsRouter)
   app.use(workspaceCodeServerRouter)
   app.use(workspaceTerminalModule.router)
 
@@ -638,3 +507,5 @@ export async function createServerApp(options: CreateServerOptions = {}): Promis
     }
   }
 }
+
+export const createServerApp = createServer

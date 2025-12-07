@@ -1,20 +1,10 @@
 import { Router, type RequestHandler } from 'express'
 import fs from 'fs'
 import path from 'path'
-import { runAgentWorkflow } from '../../../modules/agent/agent-orchestrator'
 import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from '../../../modules/agent/workflows'
-import {
-  loadRunMeta,
-  metaDirectory,
-  saveRunMeta,
-  type RunMeta
-} from '../../../modules/provenance/provenance'
-import {
-  configureAgentWorkflowParsers,
-  readAgentWorkflow,
-  type StoredAgentWorkflow
-} from '../../../modules/agent/workflow-store'
-import { ensureProviderConfig } from '../../../modules/workflowAgentExecutor'
+import { loadRunMeta, metaDirectory, saveRunMeta, type RunMeta } from '../../../modules/provenance/provenance'
+import { type AgentWorkflowDefinition } from '../../../modules/agent/workflow-schema'
+import { ensureProviderConfig } from '../../../modules/providerConfig'
 import { DEFAULT_CODING_AGENT_MODEL } from '../../core/config'
 import {
   readWorkspaceRuns,
@@ -24,9 +14,28 @@ import {
   serializeRunsWithDiffs
 } from './routesShared'
 import type { WorkspaceSessionsDeps } from './routesTypes'
+import { runAgent, type AgentExecutionMode } from './agentRunner'
 
 const MULTI_AGENT_PERSONA_ID = 'multi-agent'
 const DEFAULT_WORKFLOW_ID = singleAgentWorkflowDefinition.id
+
+type BuiltinWorkflow = {
+  id: string
+  source: 'builtin'
+  definition: AgentWorkflowDefinition
+}
+
+const BUILTIN_WORKFLOWS: readonly BuiltinWorkflow[] = [
+  { id: singleAgentWorkflowDefinition.id, source: 'builtin', definition: singleAgentWorkflowDefinition },
+  { id: verifierWorkerWorkflowDefinition.id, source: 'builtin', definition: verifierWorkerWorkflowDefinition }
+]
+
+const workflowById = new Map(BUILTIN_WORKFLOWS.map((wf) => [wf.id, wf]))
+
+const resolveWorkflow = (id: string | null | undefined): BuiltinWorkflow | null => {
+  if (!id) return null
+  return workflowById.get(id) ?? null
+}
 
 const createLogger = () => {
   const logSessions = (message: string, metadata?: Record<string, unknown>) => {
@@ -86,7 +95,7 @@ const createListRunsHandler = (): RequestHandler => async (req, res) => {
 const createStartSessionHandler =
   ({ logSessions, logSessionsError }: ReturnType<typeof createLogger>): RequestHandler =>
   async (req, res) => {
-    const { workspacePath, prompt, model, workflowId: workflowIdRaw } = req.body ?? {}
+    const { workspacePath, prompt, model, workflowId: workflowIdRaw, execution, runInDocker } = req.body ?? {}
     const personaId =
       typeof req.body?.personaId === 'string' && req.body.personaId.trim() ? req.body.personaId.trim() : null
     const requestedWorkflowId =
@@ -102,12 +111,14 @@ const createStartSessionHandler =
       return
     }
     const normalizedWorkspace = workspacePath.trim()
+    const executionMode: AgentExecutionMode = resolveExecutionMode(execution, runInDocker)
+    const runId = buildRunId(workflowId)
 
     try {
       const resolvedModel = typeof model === 'string' && model.trim().length ? model.trim() : DEFAULT_CODING_AGENT_MODEL
       const trimmedPrompt = prompt.trim()
 
-      const workflow = await readAgentWorkflow(workflowId)
+      const workflow = resolveWorkflow(workflowId)
       if (!workflow) {
         res.status(400).json({ error: `Unknown workflow: ${workflowId}` })
         return
@@ -117,22 +128,21 @@ const createStartSessionHandler =
         workspacePath: normalizedWorkspace,
         model: resolvedModel,
         workflowId: workflow.id,
-        workflowSource: workflow.source
+        workflowSource: workflow.source,
+        execution: executionMode
       })
 
       if (personaId) {
         await ensureProviderConfig(normalizedWorkspace, 'opencode', personaId)
       }
-
-      await configureAgentWorkflowParsers()
-
-      const { runId } = await runAgentWorkflow(workflow.definition, {
-        userInstructions: trimmedPrompt,
+      await runAgent({
+        workflow,
+        prompt: trimmedPrompt,
         model: resolvedModel,
-        sessionDir: normalizedWorkspace,
-        workflowId: workflow.id,
-        workflowSource: workflow.source,
-        workflowLabel: workflow.definition.description
+        workspacePath: normalizedWorkspace,
+        runId,
+        execution: executionMode,
+        personaId
       })
       const run = loadRunMeta(runId, normalizedWorkspace)
       res.status(202).json({ run: serializeRunWithDiffs(run) })
@@ -144,6 +154,14 @@ const createStartSessionHandler =
   }
 
 const resolveRunId = (params: Record<string, string | undefined>) => params.runId ?? params.sessionId ?? null
+
+const resolveExecutionMode = (rawMode: unknown, runInDocker?: unknown): AgentExecutionMode => {
+  if (runInDocker === true) return 'docker'
+  if (typeof rawMode === 'string' && rawMode.toLowerCase() === 'docker') return 'docker'
+  return 'local'
+}
+
+const buildRunId = (workflowId: string) => `${workflowId}-${Date.now()}`
 
 const createPostMessageHandler =
   ({ logSessions, logSessionsError }: ReturnType<typeof createLogger>): RequestHandler =>
@@ -157,11 +175,12 @@ const createPostMessageHandler =
     const text = typeof body.text === 'string' ? body.text.trim() : ''
     const requestedModelId = typeof body.modelId === 'string' && body.modelId.trim().length ? body.modelId.trim() : null
     const role = typeof body.role === 'string' && body.role.trim().length ? body.role.trim() : 'user'
+    const executionMode: AgentExecutionMode = resolveExecutionMode(body.execution, body.runInDocker)
     if (!text.length) {
       res.status(400).json({ error: 'text is required' })
       return
     }
-    let workflowForResponse: StoredAgentWorkflow | null = null
+    let workflowForResponse: BuiltinWorkflow | null = null
 
     try {
       const workspacePath = resolveWorkspacePath(req)
@@ -175,11 +194,12 @@ const createPostMessageHandler =
         sessionId: runId,
         modelId: resolvedModelId,
         role,
-        workspacePath
+        workspacePath,
+        execution: executionMode
       })
       try {
         const metaDir = metaDirectory(workspacePath)
-        let workflow: StoredAgentWorkflow | null = null
+        let workflow: BuiltinWorkflow | null = null
         let runMeta: RunMeta | null = null
 
         try {
@@ -189,7 +209,7 @@ const createPostMessageHandler =
             const parsed = JSON.parse(raw) as RunMeta
             runMeta = parsed
             if (parsed.workflowId) {
-              workflow = await readAgentWorkflow(parsed.workflowId)
+              workflow = resolveWorkflow(parsed.workflowId)
             }
           }
         } catch {
@@ -211,10 +231,8 @@ const createPostMessageHandler =
           } catch {
             isMultiAgent = false
           }
-          const fallbackWorkflowId = isMultiAgent
-            ? verifierWorkerWorkflowDefinition.id
-            : DEFAULT_WORKFLOW_ID
-          workflow = await readAgentWorkflow(fallbackWorkflowId)
+          const fallbackWorkflowId = isMultiAgent ? verifierWorkerWorkflowDefinition.id : DEFAULT_WORKFLOW_ID
+          workflow = resolveWorkflow(fallbackWorkflowId)
         }
 
         if (!workflow) {
@@ -223,18 +241,16 @@ const createPostMessageHandler =
 
         workflowForResponse = workflow
 
-        await configureAgentWorkflowParsers()
-
         ;(async () => {
           try {
-            await runAgentWorkflow(workflow.definition, {
-              runID: runId,
-              userInstructions: text,
+            await runAgent({
+              workflow,
+              prompt: text,
               model: resolvedModelId,
-              sessionDir: workspacePath,
-              workflowId: workflow.id,
-              workflowSource: workflow.source,
-              workflowLabel: workflow.definition.description
+              workspacePath,
+              runId,
+              execution: executionMode,
+              personaId: null
             })
           } catch (err) {
             const label = `Workflow prompt failed (${workflow.id})`

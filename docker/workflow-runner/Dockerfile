@@ -40,4 +40,4 @@ RUN mkdir -p "$OPENCODE_LOG_DIR"
 
 RUN npm run build:runner
 
-ENTRYPOINT ["node", "dist/src/runner/workflowRunner.js"]
+ENTRYPOINT ["node", "--experimental-specifier-resolution=node", "dist/src/runner/agentSessionRunner.js"]

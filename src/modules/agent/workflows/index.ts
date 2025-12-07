@@ -1,14 +1,14 @@
-import { configureWorkflowParsers } from '../agent'
-import type { AgentWorkflowResult } from '../agent-orchestrator'
+import { configureWorkflowParsers } from '../agent.js'
+import type { AgentWorkflowResult } from '../agent-orchestrator.js'
 import {
   workflowDefinitionSchema,
   workflowParserSchemaToZod,
   type AgentWorkflowDefinition,
   type AgentWorkflowDefinitionDraft,
   type WorkflowParserJsonSchema
-} from '../workflow-schema'
-import { singleAgentWorkflowDocument } from './single-agent.workflow'
-import { verifierWorkerWorkflowDocument } from './verifier-worker.workflow'
+} from '../workflow-schema.js'
+import { singleAgentWorkflowDocument } from './single-agent.workflow.js'
+import { verifierWorkerWorkflowDocument } from './verifier-worker.workflow.js'
 
 type UnionToIntersection<U> = (U extends any ? (arg: U) => void : never) extends (arg: infer I) => void ? I : never
 

@@ -47,19 +47,6 @@ import {
   type TerminalSessionsBindings,
   type TerminalSessionsRepository
 } from './terminal'
-import {
-  workflowsPersistence,
-  type WorkflowInput,
-  type WorkflowKind,
-  type WorkflowRecord,
-  type WorkflowStatus,
-  type WorkflowStepInput,
-  type WorkflowStepRecord,
-  type WorkflowStepStatus,
-  type WorkflowStepsRepository,
-  type WorkflowsBindings,
-  type WorkflowsRepository
-} from './workflows'
 
 export type Timestamp = string
 
@@ -95,7 +82,6 @@ function ensureParentDir(file: string): void {
 }
 
 const defaultModules: readonly PersistenceModule<Record<string, unknown>>[] = [
-  workflowsPersistence,
   agentRunsPersistence,
   codeServerSessionsPersistence,
   radicleRegistrationsPersistence,
@@ -103,8 +89,7 @@ const defaultModules: readonly PersistenceModule<Record<string, unknown>>[] = [
   reviewPersistence
 ]
 
-type DefaultBindings = WorkflowsBindings &
-  AgentRunsBindings &
+type DefaultBindings = AgentRunsBindings &
   CodeServerSessionsBindings &
   RadicleRegistrationsBindings &
   TerminalSessionsBindings &
@@ -151,14 +136,5 @@ export type {
   TerminalSessionRecord,
   TerminalSessionStatus,
   TerminalSessionUpdateInput,
-  TerminalSessionsRepository,
-  WorkflowInput,
-  WorkflowKind,
-  WorkflowRecord,
-  WorkflowStatus,
-  WorkflowStepInput,
-  WorkflowStepRecord,
-  WorkflowStepStatus,
-  WorkflowStepsRepository,
-  WorkflowsRepository
+  TerminalSessionsRepository
 }

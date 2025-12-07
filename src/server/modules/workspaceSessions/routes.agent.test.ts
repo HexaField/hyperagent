@@ -4,10 +4,10 @@ import os from 'os'
 import path from 'path'
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi, type SpyInstance } from 'vitest'
-import * as orchestratorModule from '../../../modules/agent/agent-orchestrator'
 import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from '../../../modules/agent/workflows'
 import * as provenanceModule from '../../../modules/provenance/provenance'
 import { createWorkspaceSessionsRouter } from './routes'
+import * as agentRunnerModule from './agentRunner'
 
 const wrapAsync = (handler: any) => handler
 const TEST_PROMPT = 'Please handle this task.'
@@ -15,22 +15,13 @@ const TEST_PROMPT = 'Please handle this task.'
 describe('workspace sessions routes — RunMeta payloads', () => {
   let tmpHome = ''
   let app: express.Express
-  let runAgentWorkflowSpy: SpyInstance
+  let runAgentSpy: SpyInstance
 
   beforeEach(async () => {
     tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), 'ha-router-test-'))
+    vi.spyOn(Date, 'now').mockReturnValue(1_717_171_717)
 
-    const singleAgentResult = { runId: 'ses_single', result: Promise.resolve({} as any) }
-    const multiAgentResult = { runId: 'ses_multi', result: Promise.resolve({} as any) }
-    runAgentWorkflowSpy = vi.spyOn(orchestratorModule, 'runAgentWorkflow').mockImplementation(async (definition) => {
-      if (definition.id === verifierWorkerWorkflowDefinition.id) {
-        return multiAgentResult
-      }
-      if (definition.id === singleAgentWorkflowDefinition.id) {
-        return singleAgentResult
-      }
-      throw new Error(`Unexpected workflow definition: ${definition.id}`)
-    })
+    runAgentSpy = vi.spyOn(agentRunnerModule, 'runAgent').mockResolvedValue()
     vi.spyOn(provenanceModule, 'loadRunMeta').mockImplementation((runId: string) => ({
       id: runId,
       agents: [],
@@ -57,10 +48,10 @@ describe('workspace sessions routes — RunMeta payloads', () => {
       .send({ workspacePath, prompt: TEST_PROMPT, workflowId: verifierWorkerWorkflowDefinition.id })
 
     expect(response.status).toBe(202)
-    expect(runAgentWorkflowSpy).toHaveBeenCalledTimes(1)
-    const [definition] = runAgentWorkflowSpy.mock.calls[0]
-    expect(definition.id).toBe(verifierWorkerWorkflowDefinition.id)
-    expect(response.body.run.id).toBe('ses_multi')
+    expect(runAgentSpy).toHaveBeenCalledTimes(1)
+    const [call] = runAgentSpy.mock.calls
+    expect(call[0].workflow.id).toBe(verifierWorkerWorkflowDefinition.id)
+    expect(response.body.run.id).toBe(`${verifierWorkerWorkflowDefinition.id}-1717171717`)
   })
 
   it('falls back to the single-agent loop when no workflowId specified', async () => {
@@ -70,10 +61,10 @@ describe('workspace sessions routes — RunMeta payloads', () => {
       .send({ workspacePath, prompt: TEST_PROMPT })
 
     expect(response.status).toBe(202)
-    expect(runAgentWorkflowSpy).toHaveBeenCalledTimes(1)
-    const [definition] = runAgentWorkflowSpy.mock.calls[0]
-    expect(definition.id).toBe(singleAgentWorkflowDefinition.id)
-    expect(response.body.run.id).toBe('ses_single')
+    expect(runAgentSpy).toHaveBeenCalledTimes(1)
+    const [call] = runAgentSpy.mock.calls
+    expect(call[0].workflow.id).toBe(singleAgentWorkflowDefinition.id)
+    expect(response.body.run.id).toBe(`${singleAgentWorkflowDefinition.id}-1717171717`)
   })
 
   it('returns the latest RunMeta payload when posting a message', async () => {
@@ -84,7 +75,7 @@ describe('workspace sessions routes — RunMeta payloads', () => {
       .send({ text: 'hello world' })
 
     expect(response.status).toBe(201)
-    expect(runAgentWorkflowSpy).toHaveBeenCalled()
+    expect(runAgentSpy).toHaveBeenCalled()
     expect(response.body.run).toMatchObject({ id: 'run-123' })
   })
 
@@ -95,6 +86,6 @@ describe('workspace sessions routes — RunMeta payloads', () => {
 
     expect(response.status).toBe(400)
     expect(response.body.error).toMatch(/workspacePath/i)
-    expect(runAgentWorkflowSpy).not.toHaveBeenCalled()
+    expect(runAgentSpy).not.toHaveBeenCalled()
   })
 })

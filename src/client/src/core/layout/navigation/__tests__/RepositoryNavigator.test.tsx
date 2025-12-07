@@ -61,8 +61,8 @@ function setupApiMocks(params?: { projects?: ProjectPayload[]; radicle?: Radicle
     if (input === '/api/radicle/register') {
       return { status: 'ok' }
     }
-    if (input === '/api/workflows') {
-      return { workflow: { id: 'wf-1' } }
+    if (input === '/api/coding-agent/sessions') {
+      return { run: { id: 'run-1' } }
     }
     throw new Error(`Unhandled request: ${input}`)
   })

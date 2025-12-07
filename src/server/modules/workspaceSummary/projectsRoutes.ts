@@ -4,7 +4,6 @@ import { spawn } from 'node:child_process'
 import path from 'path'
 import type { ProjectRecord } from '../../../../src/modules/database'
 import { listBranchCommits, listGitBranches } from '../../../../src/modules/git'
-import { extractCommitFromWorkflowStep } from '../../../../src/modules/workflows'
 import { FILE_STASH_PREFIX, parseGitStashList } from '../../lib/git'
 import { createSseStream } from '../../lib/sse'
 import type { WorkspaceSummaryDeps } from './types'
@@ -14,17 +13,7 @@ export type ProjectsRoutesDeps = WorkspaceSummaryDeps
 
 export const createProjectsRoutes = (deps: ProjectsRoutesDeps) => {
   const router = Router()
-  const {
-    wrapAsync,
-    persistence,
-    radicleModule,
-    workflowRuntime,
-    readGitMetadata,
-    runGitCommand,
-    graphBranchLimit,
-    graphCommitsPerBranch,
-    initializeWorkspaceRepository
-  } = deps
+  const { wrapAsync, persistence, radicleModule, readGitMetadata, runGitCommand, graphBranchLimit, graphCommitsPerBranch, initializeWorkspaceRepository } = deps
 
   const listProjectsHandler: RequestHandler = async (_req, res) => {
     try {
@@ -108,49 +97,6 @@ export const createProjectsRoutes = (deps: ProjectsRoutesDeps) => {
       if (!branchMap.size) {
         branchMap.set(project.defaultBranch, [])
       }
-
-      const workflows = workflowRuntime.listWorkflows(project.id)
-      workflows.forEach((workflow) => {
-        const steps = persistence.workflowSteps.listByWorkflow(workflow.id)
-        steps.forEach((step) => {
-          const commit = extractCommitFromWorkflowStep(step)
-          if (!commit) return
-          const branchName = commit.branch === 'unknown' ? project.defaultBranch : commit.branch
-          const label =
-            typeof step.data?.title === 'string' && step.data.title.length ? step.data.title : `Step ${step.sequence}`
-          const node: GraphCommitNode = {
-            id: commit.commitHash,
-            commitHash: commit.commitHash,
-            branch: branchName,
-            message: commit.message,
-            label,
-            workflowId: workflow.id,
-            stepId: step.id,
-            timestamp: step.updatedAt,
-            authorName: 'Hyperagent Workflow',
-            authorEmail: null,
-            source: 'hyperagent'
-          }
-          const list = branchMap.get(branchName) ?? []
-          const existingIndex = list.findIndex((entry) => entry.commitHash === node.commitHash)
-          if (existingIndex >= 0) {
-            const existing = list[existingIndex]
-            list[existingIndex] = {
-              ...existing,
-              label: node.label,
-              workflowId: node.workflowId,
-              stepId: node.stepId,
-              source: 'hyperagent',
-              timestamp: node.timestamp,
-              authorName: existing.authorName ?? node.authorName,
-              authorEmail: existing.authorEmail ?? node.authorEmail
-            }
-          } else {
-            list.push(node)
-          }
-          branchMap.set(branchName, sortCommitsByTimestamp(list).slice(-graphCommitsPerBranch))
-        })
-      })
 
       const branches = [...branchMap.entries()].map(([name, commits]) => ({ name, commits }))
 

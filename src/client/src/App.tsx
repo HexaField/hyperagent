@@ -21,7 +21,6 @@ import { CanvasNavigatorContext, useCanvasNavigator } from './core/state/CanvasN
 import { WorkspaceSelectionProvider } from './core/state/WorkspaceSelectionContext'
 import { type SingleWidgetViewDetail } from './core/state/singleWidgetView'
 import WorkspacePage from './pages/WorkspacePage'
-import WorkflowEditorPage from './pages/WorkflowEditorPage'
 import { fetchJson } from './shared/api/httpClient'
 
 type RadicleStatus = {
@@ -142,7 +141,6 @@ export default function App() {
         )}
       >
         <Route path="/" component={WorkspacePage} />
-        <Route path="/workflow-editor" component={WorkflowEditorPage} />
       </Router>
     </Show>
   )

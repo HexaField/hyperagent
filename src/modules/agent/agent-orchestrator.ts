@@ -10,7 +10,7 @@ import {
   RunMeta,
   recordUserMessage,
   saveRunMeta
-} from '../provenance/provenance'
+} from '../provenance/provenance.js'
 import {
   AgentRunResponse,
   AgentStreamCallback,
@@ -18,8 +18,8 @@ import {
   parseJsonPayload,
   type WorkflowParserOutput,
   type WorkflowParserRegistry
-} from './agent'
-import { createSession, getMessageDiff, getSession } from './opencode'
+} from './agent.js'
+import { createSession, getMessageDiff, getSession } from './opencode.js'
 import {
   AgentWorkflowDefinition,
   WorkflowCondition,
@@ -30,7 +30,7 @@ import {
   workflowDefinitionSchema,
   type WorkflowParserJsonOutput,
   type WorkflowParserJsonSchema
-} from './workflow-schema'
+} from './workflow-schema.js'
 
 export type AgentWorkflowRunOptions = {
   userInstructions: string

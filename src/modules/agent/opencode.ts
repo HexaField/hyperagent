@@ -83,6 +83,13 @@ type CreateSessionOptions = {
   name?: string
 }
 
+const buildFallbackParts = (reason: string): Part[] => [
+  {
+    type: 'text',
+    text: JSON.stringify({ status: 'error', summary: reason })
+  } as Part
+]
+
 /**
  * Creates and returns a new Opencode session for the specified directory.
  *
@@ -131,18 +138,34 @@ export const promptSession = async (session: Session, prompts: string[], model: 
 
   const [providerID, modelID] = model.split('/')
 
-  const response = await opencode.session.prompt({
-    path: { id: session.id },
-    body: {
-      model: { providerID, modelID },
-      parts: prompts.map((prompt) => ({ type: 'text', text: prompt }))
-    },
-    signal
-  })
+  const controller = new AbortController()
+  const timeoutMs = Number(process.env.OPENCODE_PROMPT_TIMEOUT_MS ?? '15000')
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
-  if (!response?.data!) throw new Error('Failed to prompt Opencode session')
+  try {
+    const response = await opencode.session.prompt({
+      path: { id: session.id },
+      body: {
+        model: { providerID, modelID },
+        parts: prompts.map((prompt) => ({ type: 'text', text: prompt }))
+      },
+      signal: signal ?? controller.signal
+    })
 
-  return response?.data!
+    const payload = (response?.data ?? {}) as { parts?: Part[] }
+    const parts: Part[] = Array.isArray(payload.parts) && payload.parts?.length
+      ? payload.parts
+      : buildFallbackParts('opencode returned no response parts')
+
+    return { ...(payload as Record<string, unknown>), parts }
+  } catch (error) {
+    const reason = controller.signal.aborted
+      ? 'opencode prompt timed out'
+      : `opencode prompt failed: ${(error as Error)?.message ?? 'unknown error'}`
+    return { parts: buildFallbackParts(reason) }
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 export const getMessageDiff = async (session: Session, messageID: string): Promise<FileDiff[]> => {
@@ -175,8 +198,10 @@ export const getMessageDiff = async (session: Session, messageID: string): Promi
   return []
 }
 
-export const extractResponseText = (response: Part[]): string => {
-  console.log(response)
+export const extractResponseText = (response?: Part[]): string => {
+  if (!Array.isArray(response) || response.length === 0) {
+    return JSON.stringify({ status: 'error', summary: 'opencode response contained no parts' })
+  }
   return (
     response
       .filter((part) => part.type === 'text')
