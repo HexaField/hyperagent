@@ -138,34 +138,22 @@ export const promptSession = async (session: Session, prompts: string[], model: 
 
   const [providerID, modelID] = model.split('/')
 
-  const controller = new AbortController()
-  const timeoutMs = Number(process.env.OPENCODE_PROMPT_TIMEOUT_MS ?? '15000')
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  const response = await opencode.session.prompt({
+    path: { id: session.id },
+    body: {
+      model: { providerID, modelID },
+      parts: prompts.map((prompt) => ({ type: 'text', text: prompt }))
+    },
+    signal
+  })
 
-  try {
-    const response = await opencode.session.prompt({
-      path: { id: session.id },
-      body: {
-        model: { providerID, modelID },
-        parts: prompts.map((prompt) => ({ type: 'text', text: prompt }))
-      },
-      signal: signal ?? controller.signal
-    })
-
-    const payload = (response?.data ?? {}) as { parts?: Part[] }
-    const parts: Part[] = Array.isArray(payload.parts) && payload.parts?.length
+  const payload = (response?.data ?? {}) as { parts?: Part[] }
+  const parts: Part[] =
+    Array.isArray(payload.parts) && payload.parts?.length
       ? payload.parts
       : buildFallbackParts('opencode returned no response parts')
 
-    return { ...(payload as Record<string, unknown>), parts }
-  } catch (error) {
-    const reason = controller.signal.aborted
-      ? 'opencode prompt timed out'
-      : `opencode prompt failed: ${(error as Error)?.message ?? 'unknown error'}`
-    return { parts: buildFallbackParts(reason) }
-  } finally {
-    clearTimeout(timeout)
-  }
+  return { ...(payload as Record<string, unknown>), parts }
 }
 
 export const getMessageDiff = async (session: Session, messageID: string): Promise<FileDiff[]> => {
