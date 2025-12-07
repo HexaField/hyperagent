@@ -6,7 +6,8 @@ import { describe, expect, it } from 'vitest'
 import { createSession, getMessageDiff, promptSession } from './opencode'
 import { opencodeTestHooks } from './opencodeTestHooks'
 
-const MODEL = 'opencode/big-pickle'
+//note: big-pickle likes to have a reasoning step
+const MODEL = 'github-copilot/gpt-5-mini' // 'opencode/big-pickle'
 
 const OPENCODE_CONFIG = {
   $schema: 'https://opencode.ai/config.json',
@@ -55,6 +56,7 @@ describe('Opencode Module', () => {
     const session = await createSession(sessionDir)
     const promptText = 'What is the capital of France?'
     const response = await promptSession(session, [promptText], MODEL)
+    console.log('Received response from Opencode session:', response)
     expect(response).toBeDefined()
     expect(response.parts.length).toBe(3)
     const textParts = response.parts[1] as TextPart
