@@ -1,7 +1,7 @@
-import { FileDiff, Part, Session } from '@opencode-ai/sdk'
+import type { FileDiff, Part, Session } from '@opencode-ai/sdk'
 import { z } from 'zod'
-import { appendLogEntry } from '../provenance/provenance.js'
-import { extractResponseText, getMessageDiff, promptSession } from './opencode.js'
+import { appendLogEntry } from '../provenance/provenance'
+import { extractResponseText, getMessageDiff, promptSession } from './opencode'
 
 const MAX_JSON_ATTEMPTS = 3
 

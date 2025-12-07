@@ -1,4 +1,4 @@
-import type { AgentWorkflowDefinition } from '../workflow-schema.js'
+import type { AgentWorkflowDefinition } from '../workflow-schema'
 
 export const verifierWorkerWorkflowDocument = {
   $schema: 'https://hyperagent.dev/schemas/agent-workflow.json',

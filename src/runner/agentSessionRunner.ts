@@ -1,7 +1,7 @@
-import { runAgentWorkflow } from '../modules/agent/agent-orchestrator.js'
-import { closeOpencodeServer } from '../modules/agent/opencode.js'
-import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from '../modules/agent/workflows/index.js'
-import { ensureProviderConfig } from '../modules/providerConfig.js'
+import { runAgentWorkflow } from '../modules/agent/agent-orchestrator'
+import { closeOpencodeServer } from '../modules/agent/opencode'
+import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from '../modules/agent/workflows/index'
+import { ensureProviderConfig } from '../modules/providerConfig'
 
 const getEnv = (key: string) => process.env[key]?.trim()
 
