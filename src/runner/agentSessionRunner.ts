@@ -9,7 +9,7 @@ async function main() {
   try {
     const workspacePath = getEnv('AGENT_WORKSPACE_PATH')
     const prompt = getEnv('AGENT_PROMPT') ?? ''
-    const model = getEnv('AGENT_MODEL') ?? 'gpt-4o-mini'
+    const model = getEnv('AGENT_MODEL') ?? 'github-copilot/gpt-5-mini'
     const workflowId = getEnv('AGENT_WORKFLOW_ID') ?? singleAgentWorkflowDefinition.id
     const workflowSource = (getEnv('AGENT_WORKFLOW_SOURCE') as 'builtin' | 'user' | undefined) ?? 'builtin'
     const runId = getEnv('AGENT_RUN_ID')
