@@ -58,7 +58,6 @@ Each widget is a self-contained Solid component paired with an API surface under
 | Widget | Purpose | Key files / APIs |
 | --- | --- | --- |
 | Workspace overview (`workspace-summary`) | Git status, branch switching, commit/stash helpers, remote sync controls, and repo graph context for the selected workspace. | `widgets/workspaceSummary/index.tsx`, server router `src/server/modules/workspaceSummary/routes.ts` (hits git + workflow runtime) |
-| Workflows (`workspace-workflows`) | Lists workflow runs, launches new plans via `WorkflowLaunchModal`, and streams per-step logs/progress. | `widgets/workspaceWorkflows/index.tsx`, `src/server/modules/workspaceWorkflows/routes.ts`, `workflowAgentExecutor.ts`, `workflowRunnerGateway.ts` |
 | Terminal (`workspace-terminal`) | Manages multiplexed shell sessions over websockets using xterm.js, with session lifecycle controls. | `widgets/workspaceTerminal/index.tsx`, server `src/server/modules/workspaceTerminal/module.ts`, websocket bridge in `core/server.ts` |
 | Code workspace (`workspace-code-server`) | Embeds code-server/VS Code sessions, auto-launches Devspace environments, opens tabs externally. | `widgets/workspaceCodeServer/index.tsx`, client libs `lib/codeServer.ts` + `lib/devspace.ts`, server `workspaceCodeServer/routes.ts` |
 | Coding Agent sessions (`workspace-sessions`) | Filters the coding agent console feed to the workspace repository, showing background automation history. | `widgets/workspaceSessions/index.tsx`, `components/CodingAgentConsole.tsx`, backend `workspaceSessions/routes.ts` |
@@ -67,12 +66,11 @@ Each widget is a self-contained Solid component paired with an API surface under
 ```mermaid
 flowchart LR
   WorkspaceSummary -->|REST| SummaryRouter
-  WorkflowsWidget -->|REST+SSE| WorkflowsRouter
   TerminalWidget -->|WS+REST| TerminalModule
   CodeServerWidget -->|REST| CodeServerRouter
   SessionsWidget -->|REST| SessionsRouter
   NarratorWidget -->|REST| NarratorRouter
-  SummaryRouter & WorkflowsRouter & TerminalModule & CodeServerRouter & SessionsRouter & NarratorRouter --> ServerCore
+  SummaryRouter & TerminalModule & CodeServerRouter & SessionsRouter & NarratorRouter --> ServerCore
   ServerCore --> WorkflowRuntime & Radicle & TerminalEngine & CodeServerCtrl & NarratorRelay
 ```
 

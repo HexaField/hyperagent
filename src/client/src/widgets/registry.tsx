@@ -55,16 +55,6 @@ const definitionMap: Record<WidgetTemplateId, WidgetDefinition> = {
     startOpen: true,
     render: ({ workspace }) => <WorkspaceSummaryView workspace={workspace} />
   },
-  'workspace-workflows': {
-    id: 'workspace-workflows',
-    title: 'Agent runs',
-    description: 'Run history and docker/local toggle',
-    icon: '🧩',
-    initialPosition: { x: 280, y: -100 },
-    initialSize: { width: 920, height: 760 },
-    startOpen: true,
-    render: ({ workspace }) => <SessionsWidgetView workspacePath={workspace.repositoryPath} />
-  },
   'workspace-terminal': {
     id: 'workspace-terminal',
     title: 'Terminal',
@@ -102,23 +92,23 @@ const definitionMap: Record<WidgetTemplateId, WidgetDefinition> = {
     initialSize: { width: 720, height: 520 },
     startOpen: true,
     render: ({ workspace }) => <SessionsWidgetView workspacePath={workspace.repositoryPath} />
-  },
-  'workspace-narrator': {
-    id: 'workspace-narrator',
-    title: 'Narrator activity',
-    description: 'Streaming LLM narration timeline',
-    icon: '📣',
-    initialPosition: { x: 120, y: 1080 },
-    initialSize: { width: 760, height: 560 },
-    startOpen: true,
-    render: ({ workspace }) => (
-      <WorkspaceNarratorView
-        workspaceId={workspace.id}
-        workspaceName={workspace.name}
-        repositoryPath={workspace.repositoryPath}
-      />
-    )
   }
+  // 'workspace-narrator': {
+  //   id: 'workspace-narrator',
+  //   title: 'Narrator activity',
+  //   description: 'Streaming LLM narration timeline',
+  //   icon: '📣',
+  //   initialPosition: { x: 120, y: 1080 },
+  //   initialSize: { width: 760, height: 560 },
+  //   startOpen: true,
+  //   render: ({ workspace }) => (
+  //     <WorkspaceNarratorView
+  //       workspaceId={workspace.id}
+  //       workspaceName={workspace.name}
+  //       repositoryPath={workspace.repositoryPath}
+  //     />
+  //   )
+  // }
 }
 
 export function getWidgetDefinition(id: WidgetTemplateId): WidgetDefinition | undefined {

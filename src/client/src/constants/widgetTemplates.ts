@@ -1,10 +1,9 @@
 export type WidgetTemplateId =
   | 'workspace-summary'
-  | 'workspace-workflows'
   | 'workspace-terminal'
   | 'workspace-code-server'
   | 'workspace-sessions'
-  | 'workspace-narrator'
+// | 'workspace-narrator'
 
 export type WidgetTemplate = {
   id: WidgetTemplateId
@@ -23,11 +22,6 @@ export const WIDGET_TEMPLATES: WidgetTemplate[] = [
     description: 'Repository details and quick actions'
   },
   {
-    id: 'workspace-workflows',
-    label: 'Workflows',
-    description: 'Run history and queue'
-  },
-  {
     id: 'workspace-terminal',
     label: 'Terminal',
     description: 'Shell access scoped to this workspace'
@@ -41,10 +35,10 @@ export const WIDGET_TEMPLATES: WidgetTemplate[] = [
     id: 'workspace-sessions',
     label: 'Coding Agent sessions',
     description: 'Background Coding Agent activity feed'
-  },
-  {
-    id: 'workspace-narrator',
-    label: 'Narrator activity',
-    description: 'Streaming LLM narration timeline'
   }
+  // {
+  //   id: 'workspace-narrator',
+  //   label: 'Narrator activity',
+  //   description: 'Streaming LLM narration timeline'
+  // }
 ]
