@@ -40,7 +40,7 @@ describe('agent runner docker image', () => {
 
   it('bundles git, opencode, and rad CLIs', () => {
     const buildResult = buildRunnerImage()
-    expect(buildResult.status, buildResult.stderr).toBe(0)
+    expect(buildResult.status, buildResult.stderr?.toString()).toBe(0)
 
     log('checking opencode version')
     const runOpencode = spawnSync(
@@ -70,7 +70,7 @@ describe('agent runner docker image', () => {
 
   it('executes the agent orchestrator end-to-end with the bundled opencode and rad', () => {
     const buildResult = buildRunnerImage()
-    expect(buildResult.status, buildResult.stderr).toBe(0)
+    expect(buildResult.status, buildResult.stderr?.toString()).toBe(0)
 
     const gitPresent = commandExists('git')
     expect(gitPresent, "git must be installed on the host to prepare a workspace mount").toBe(true)

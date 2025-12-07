@@ -10,8 +10,6 @@ import type { CodeServerController, CodeServerHandle, CodeServerOptions } from '
 import type { RadicleModule } from '../../../src/modules/radicle'
 import type { TerminalModule, TerminalSessionRecord } from '../../../src/modules/terminal'
 import type { LiveTerminalSession } from '../../../src/modules/terminal'
-import type { WorkflowRunnerGateway } from '../../../src/modules/workflowRunnerGateway'
-import type { AgentLoopResult } from '../../../src/modules/agent'
 import type { IPty } from 'node-pty'
 import { EventEmitter } from 'node:events'
 import type WebSocketType from 'ws'
@@ -37,8 +35,6 @@ export async function startBackendServerHarness(options: StubOptions = {}): Prom
   const radicleModule = createStubRadicleModule(radicleWorkspace)
   const terminalModule = createStubTerminalModule()
   const controllerFactory = createStubCodeServerController()
-  const workflowRunnerGateway = createStubWorkflowRunnerGateway()
-  const runLoop = createStubRunLoop()
   const webSockets = createStubWebSockets()
 
   const appServer = await createServerApp({
@@ -47,8 +43,6 @@ export async function startBackendServerHarness(options: StubOptions = {}): Prom
     radicleModule,
     terminalModule,
     controllerFactory,
-    workflowRunnerGateway,
-    runLoop,
     tls: tlsMaterials,
     webSockets,
     narratorRelay: options.narratorRelay
@@ -114,26 +108,6 @@ function createStubCodeServerController(): (options: CodeServerOptions) => CodeS
     }
     const shutdown = async () => {}
     return { ensure, shutdown }
-  }
-}
-
-function createStubRunLoop() {
-  return async function runLoop(): Promise<AgentLoopResult> {
-    return {
-      outcome: 'approved',
-      reason: 'stubbed',
-      bootstrap: {
-        round: 0,
-        raw: JSON.stringify({ verdict: 'approve', critique: '', instructions: '', priority: 1 }),
-        parsed: {
-          verdict: 'approve',
-          critique: '',
-          instructions: '',
-          priority: 1
-        }
-      },
-      rounds: []
-    }
   }
 }
 
@@ -275,12 +249,6 @@ function createStubPty(record: TerminalSessionRecord): IPty {
 
 function cryptoRandomId(): string {
   return `term-${Math.random().toString(36).slice(2, 10)}`
-}
-
-function createStubWorkflowRunnerGateway(): WorkflowRunnerGateway {
-  return {
-    enqueue: async () => {}
-  }
 }
 
 function createStubWebSockets(): { WebSocket: typeof WebSocketType; WebSocketServer: typeof WebSocketServerType } {
