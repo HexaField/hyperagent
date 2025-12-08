@@ -3,6 +3,7 @@ export type WidgetTemplateId =
   | 'workspace-terminal'
   | 'workspace-code-server'
   | 'workspace-sessions'
+  | 'workspace-workflows'
 // | 'workspace-narrator'
 
 export type WidgetTemplate = {
@@ -35,6 +36,11 @@ export const WIDGET_TEMPLATES: WidgetTemplate[] = [
     id: 'workspace-sessions',
     label: 'Coding Agent sessions',
     description: 'Background Coding Agent activity feed'
+  },
+  {
+    id: 'workspace-workflows',
+    label: 'Workflows',
+    description: 'Author, validate, and save workflows'
   }
   // {
   //   id: 'workspace-narrator',

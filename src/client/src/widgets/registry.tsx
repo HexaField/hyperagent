@@ -28,6 +28,11 @@ const WorkspaceNarratorView = lazy(async () => {
   return { default: module.WorkspaceNarratorWidget }
 })
 
+const WorkspaceWorkflowsView = lazy(async () => {
+  const module = await import('./workflows')
+  return { default: module.WorkflowsWidget }
+})
+
 export type WidgetRenderContext = {
   workspace: WorkspaceRecord
   navigator: CanvasNavigatorController
@@ -92,6 +97,16 @@ const definitionMap: Record<WidgetTemplateId, WidgetDefinition> = {
     initialSize: { width: 720, height: 520 },
     startOpen: true,
     render: ({ workspace }) => <SessionsWidgetView workspacePath={workspace.repositoryPath} />
+  },
+  'workspace-workflows': {
+    id: 'workspace-workflows',
+    title: 'Workflows',
+    description: 'Author, validate, and save workflows',
+    icon: '🧩',
+    initialPosition: { x: -320, y: 940 },
+    initialSize: { width: 780, height: 640 },
+    startOpen: true,
+    render: ({ workspace }) => <WorkspaceWorkflowsView workspace={workspace} />
   }
   // 'workspace-narrator': {
   //   id: 'workspace-narrator',
