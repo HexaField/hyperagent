@@ -209,6 +209,18 @@ export function WorkflowsWidget(props: WorkflowsWidgetProps) {
           </label>
 
           <div class="flex flex-wrap items-center gap-2 text-sm">
+            <button
+              class={`rounded-xl border px-3 py-1 ${selectedTemplateId() === null ? 'border-blue-500 text-blue-600' : 'border-[var(--border)] text-[var(--text)]'}`}
+              type="button"
+              onClick={() => {
+                setSelectedTemplateId(null)
+                setDraftJson('')
+                setMessage('No template selected')
+              }}
+              disabled={isBusy()}
+            >
+              No Template
+            </button>
             <For each={workflowTemplates}>
               {(template) => (
                 <button
