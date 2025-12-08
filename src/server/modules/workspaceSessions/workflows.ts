@@ -2,6 +2,8 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { workflowDefinitionSchema, type AgentWorkflowDefinition } from '../../../modules/agent/workflow-schema'
+import { collectParserSchemasFromDefinitions, registeredWorkflowParserSchemas } from '../../../modules/agent/workflows'
+import { configureWorkflowParsers } from '../../../modules/agent/agent'
 
 export type WorkflowSummary = {
   id: string
@@ -98,6 +100,14 @@ export async function writeWorkflow(definition: AgentWorkflowDefinition): Promis
   const file = workflowPathFor(id)
   const payload = JSON.stringify(hydrated, null, 2)
   await fs.writeFile(file, payload, 'utf8')
+  try {
+    const newParsers = collectParserSchemasFromDefinitions(hydrated)
+    const merged = { ...(registeredWorkflowParserSchemas ?? {}), ...(newParsers ?? {}) }
+    configureWorkflowParsers(merged)
+  } catch (error) {
+    // Non-fatal: registration failure should not prevent write; log and continue
+    console.warn('Failed to register workflow parser schemas', error)
+  }
   return { id, path: file }
 }
 
