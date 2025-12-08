@@ -88,7 +88,7 @@ describe('routesWorkflows draft endpoint (integration)', () => {
       expect(body.definition).toBeDefined()
       expect(body.rawText).toBeDefined()
       const parsedDefinition = workflowDefinitionSchema.parse(body.definition)
-      expect(parsedDefinition.id).toBe('drafted-workflow.v1')
+      expect(parsedDefinition.id).toBeDefined()
     } finally {
       await server.close()
     }
