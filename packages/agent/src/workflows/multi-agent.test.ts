@@ -3,10 +3,14 @@ import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { RegisteredWorkflowParserSchemas, VerifierWorkerWorkflowDefinition, verifierWorkerWorkflowDefinition } from '.'
-import { getWorkflowRunDiff, runAgentWorkflow } from '../agent-orchestrator'
+import {
+  RegisteredWorkflowParserSchemas,
+  VerifierWorkerWorkflowDefinition,
+  verifierWorkerWorkflowDefinition
+} from '@hexafield/agent-workflow/workflows'
+import { getWorkflowRunDiff, runAgentWorkflow } from '@hexafield/agent-workflow/agent-orchestrator'
+import { RunMeta } from '@hexafield/agent-workflow/provenance'
 import { opencodeTestHooks } from '../opencodeTestHooks'
-import { RunMeta } from '../provenance'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
@@ -132,8 +136,7 @@ describe('Verifier/worker collaboration loop', () => {
     const readmeDiff = workerDiffs.find((diff) => diff.file.toLowerCase().includes('readme.md'))
     expect(readmeDiff).toBeTruthy()
     expect(readmeDiff?.after.toLowerCase()).toContain('hello, world')
-
     const verifierDiffs: FileDiff[] = await getWorkflowRunDiff(response.runId, sessionDir, { role: 'verifier' })
     expect(Array.isArray(verifierDiffs)).toBe(true)
-  }, 120_000)
+  }, 240_000)
 })

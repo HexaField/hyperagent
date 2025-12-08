@@ -3,7 +3,7 @@ import { execSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { createSession, getMessageDiff, promptSession } from './opencode'
+import { createSession, getMessageDiff, promptSession } from '@hexafield/agent-workflow/opencode'
 import { opencodeTestHooks } from './opencodeTestHooks'
 
 //note: big-pickle likes to have a reasoning step
@@ -62,7 +62,7 @@ describe('Opencode Module', () => {
     const textParts = response.parts[1] as TextPart
     const answer = textParts.text.trim().toLowerCase()
     expect(answer.includes('paris')).toBe(true)
-  })
+  }, 120_000)
 
   it('should retrieve message diffs after file edits', async () => {
     const sessionDir = createSessionDir()

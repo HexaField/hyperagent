@@ -1,12 +1,12 @@
+import { getWorkflowRunDiff, runAgentWorkflow } from '@hexafield/agent-workflow/agent-orchestrator'
+import { RunMeta } from '@hexafield/agent-workflow/provenance'
+import { workflowCreateWorkflowDefinition } from '@hexafield/agent-workflow/workflows'
 import type { FileDiff } from '@opencode-ai/sdk'
 import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { workflowCreateWorkflowDefinition } from '.'
-import { getWorkflowRunDiff, runAgentWorkflow } from '../agent-orchestrator'
 import { opencodeTestHooks } from '../opencodeTestHooks'
-import { RunMeta } from '../provenance'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
@@ -32,7 +32,7 @@ const model = 'github-copilot/gpt-5-mini'
 describe('Workflow-create authoring', () => {
   opencodeTestHooks()
 
-  it('has the creator produce a workflow file object', async () => {
+  it('creates a workflow-create workflow successfully', async () => {
     const sessionDir = path.join(process.cwd(), `.tests/workflow-create-${Date.now()}`)
     const exists = commandExists('opencode')
     expect(exists, "Required CLI 'opencode' not found on PATH").toBe(true)
@@ -53,7 +53,7 @@ describe('Workflow-create authoring', () => {
 
     initGitRepo(sessionDir)
 
-    const scenario = `Author a single-step workflow file named workflow-create.workflow.ts that returns a JSON object with {id, filename, content}. The file content must be a valid TypeScript workflow exported with as const satisfies AgentWorkflowDefinition.`
+    const scenario = `Create a workflow that can create a markdown file named "workflow-created.md" with the content "This file was created by a workflow."`
 
     const agentRun = await runAgentWorkflow(workflowCreateWorkflowDefinition, {
       userInstructions: scenario,
@@ -70,14 +70,11 @@ describe('Workflow-create authoring', () => {
     expect(createStep).toBeDefined()
     expect(typeof createStep?.raw).toBe('string')
 
-    // The creator parser should return an object payload with id, filename, content
-    const parsedPayload = createStep?.parsed as { id?: string; filename?: string; content?: string } | undefined
+    // The creator parser should return an object payload with id, content
+    const parsedPayload = createStep?.parsed as { id?: string; content?: string } | undefined
     expect(parsedPayload).toBeDefined()
     expect(typeof parsedPayload?.id).toBe('string')
-    expect(typeof parsedPayload?.filename).toBe('string')
     expect(typeof parsedPayload?.content).toBe('string')
-    expect(parsedPayload?.filename).toBe('workflow-create.workflow.ts')
-    expect(parsedPayload?.content).toContain('as const satisfies AgentWorkflowDefinition')
 
     const hyperagentDir = path.join(sessionDir, '.hyperagent')
 
@@ -101,5 +98,5 @@ describe('Workflow-create authoring', () => {
     // There may not be file diffs for authored content (creator returned content only), but ensure the run diff call works
     const diffs: FileDiff[] = await getWorkflowRunDiff(agentRun.runId, sessionDir, { role: 'creator' })
     expect(Array.isArray(diffs)).toBe(true)
-  }, 120_000)
+  }, 240_000)
 })

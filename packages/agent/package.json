@@ -11,7 +11,6 @@
     "./agent": "./dist/agent.js",
     "./agent-orchestrator": "./dist/agent-orchestrator.js",
     "./opencode": "./dist/opencode.js",
-    "./opencodeTestHooks": "./dist/opencodeTestHooks.js",
     "./provenance": "./dist/provenance.js",
     "./workflow-schema": "./dist/workflow-schema.js",
     "./workflows": "./dist/workflows/index.js",
@@ -22,8 +21,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "cd \"$(dirname \"$npm_package_json\")\" && tsup && rm -f tsconfig.tsbuildinfo && npx tsc --incremental false -p tsconfig.json --emitDeclarationOnly --declaration --declarationMap --outDir dist",
-    "test": "vitest run"
+    "build": "cd \"$(dirname \"$npm_package_json\")\" && tsup && rm -f tsconfig.tsbuildinfo && npx tsc --incremental false -p tsconfig.json --emitDeclarationOnly --declaration --declarationMap --outDir dist && mkdir -p dist/workflows && cp src/workflows/README.md dist/README.md && cp src/workflows/README.md dist/workflows/README.md",
+    "pretest": "npm run build",
+    "test": "PKG_DIR=\"$(dirname \"$npm_package_json\")\" && ROOT=\"$(cd \"$PKG_DIR/../..\" && pwd)\" && vitest run --config \"$ROOT/vitest.config.ts\" --root \"$ROOT\" --dir \"$PKG_DIR/src\""
   },
   "dependencies": {
     "@opencode-ai/sdk": "^1.0.129",

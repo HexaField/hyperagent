@@ -1,4 +1,4 @@
-import { workflowDefinitionSchema, type AgentWorkflowDefinition } from '@hexafield/agent-workflow'
+import { type AgentWorkflowDefinition } from '@hexafield/agent-workflow'
 import { fetchJson } from '../shared/api/httpClient'
 import type { WorkflowTemplate } from './workflows'
 
@@ -38,7 +38,7 @@ const requestWorkflowCreateDraft = async (
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ instructions: prompt, template })
   })
-  const definition = workflowDefinitionSchema.parse(payload.definition)
+  const definition = payload.definition
   return { definition, rawText: payload.rawText, source: 'workflow-create' }
 }
 

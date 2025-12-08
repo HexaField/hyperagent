@@ -1,4 +1,4 @@
-import { workflowDefinitionSchema, type AgentWorkflowDefinition } from '@hexafield/agent-workflow'
+import type { AgentWorkflowDefinition } from '@hexafield/agent-workflow'
 import { fetchJson } from '../shared/api/httpClient'
 
 export type WorkflowSummary = {
@@ -77,10 +77,6 @@ export async function deleteWorkflow(id: string): Promise<boolean> {
   }
 }
 
-export function validateLocally(definition: unknown): AgentWorkflowDefinition {
-  return workflowDefinitionSchema.parse(definition)
-}
-
 export async function validateRemotely(definition: AgentWorkflowDefinition): Promise<AgentWorkflowDefinition> {
   const payload = await fetchJson<{ definition: AgentWorkflowDefinition }>(`/api/workflows/validate`, {
     method: 'POST',
@@ -102,5 +98,5 @@ export function summarizeDefinition(definition: AgentWorkflowDefinition): Workfl
 
 export function parseWorkflowJson(input: string): AgentWorkflowDefinition {
   const parsed = JSON.parse(input)
-  return validateLocally(parsed)
+  return parsed
 }

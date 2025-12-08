@@ -3,16 +3,16 @@ import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { getWorkflowRunDiff, loadWorkflowDefinition, runAgentWorkflow } from './agent-orchestrator'
-import { opencodeTestHooks } from './opencodeTestHooks'
-import { RunMeta } from './provenance'
+import { getWorkflowRunDiff, loadWorkflowDefinition, runAgentWorkflow } from '@hexafield/agent-workflow/agent-orchestrator'
+import { RunMeta } from '@hexafield/agent-workflow/provenance'
 import {
   RegisteredWorkflowParserSchemas,
   SingleAgentWorkflowDefinition,
   VerifierWorkerWorkflowDefinition,
   singleAgentWorkflowDefinition,
   verifierWorkerWorkflowDefinition
-} from './workflows'
+} from '@hexafield/agent-workflow/workflows'
+import { opencodeTestHooks } from './opencodeTestHooks'
 
 const model = 'github-copilot/gpt-5-mini'
 

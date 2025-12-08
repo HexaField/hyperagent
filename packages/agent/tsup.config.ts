@@ -7,12 +7,12 @@ export default defineConfig({
     'src/agent.ts',
     'src/agent-orchestrator.ts',
     'src/opencode.ts',
-    'src/opencodeTestHooks.ts',
     'src/provenance.ts',
     'src/workflow-schema.ts',
     'src/workflows/index.ts',
     'src/workflows/*.workflow.ts'
   ],
+  bundle: false,
   tsconfig: path.resolve(__dirname, 'tsconfig.json'),
   format: ['esm'],
   target: 'node18',

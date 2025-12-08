@@ -190,10 +190,9 @@ export const extractResponseText = (response?: Part[]): string => {
   if (!Array.isArray(response) || response.length === 0) {
     return JSON.stringify({ status: 'error', summary: 'opencode response contained no parts' })
   }
-  return (
-    response
-      .filter((part) => part.type === 'text')
-      .reverse()
-      .at(-1) as TextPart
-  ).text
+  const textPart = response.filter((part) => part.type === 'text').at(-1) as TextPart | undefined
+  if (textPart?.text) {
+    return textPart.text
+  }
+  return JSON.stringify({ status: 'error', summary: 'opencode response contained no text parts' })
 }

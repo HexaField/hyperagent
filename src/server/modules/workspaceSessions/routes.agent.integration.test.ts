@@ -1,4 +1,4 @@
-import { RunMeta, metaDirectory, opencodeTestHooks, verifierWorkerWorkflowDefinition } from '@hexafield/agent-workflow'
+import { RunMeta, metaDirectory, verifierWorkerWorkflowDefinition } from '@hexafield/agent-workflow'
 import { spawnSync } from 'child_process'
 import express from 'express'
 import fs from 'fs'
@@ -7,6 +7,7 @@ import os from 'os'
 import path from 'path'
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { opencodeTestHooks } from '../../../../packages/agent/src/opencodeTestHooks'
 import { createWorkspaceSessionsRouter } from './routes'
 
 const TEST_PROMPT = 'You are assisting on a trivial repo. Plan the change then stop.'

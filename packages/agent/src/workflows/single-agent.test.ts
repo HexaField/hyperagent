@@ -3,10 +3,10 @@ import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { singleAgentWorkflowDefinition } from '.'
-import { getWorkflowRunDiff, runAgentWorkflow } from '../agent-orchestrator'
+import { singleAgentWorkflowDefinition } from '@hexafield/agent-workflow/workflows'
+import { getWorkflowRunDiff, runAgentWorkflow } from '@hexafield/agent-workflow/agent-orchestrator'
+import { RunMeta } from '@hexafield/agent-workflow/provenance'
 import { opencodeTestHooks } from '../opencodeTestHooks'
-import { RunMeta } from '../provenance'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
