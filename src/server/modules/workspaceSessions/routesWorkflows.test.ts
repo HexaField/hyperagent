@@ -1,6 +1,6 @@
+import { workflowDefinitionSchema } from '@hexafield/agent-workflow'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startBackendServerHarness } from '../../../../tests/e2e/helpers/serverHarness'
-import { workflowDefinitionSchema } from '../../../modules/agent/workflow-schema'
 
 const baseDefinition = workflowDefinitionSchema.parse({
   $schema: 'https://hyperagent.dev/schemas/agent-workflow.json',

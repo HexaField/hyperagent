@@ -4,7 +4,7 @@ import fs from 'fs/promises'
 import os from 'os'
 
 // Import opencode helpers from the project
-import { closeOpencodeServer, createSession, extractResponseText, promptSession } from '../src/modules/agent/opencode'
+import { closeOpencodeServer, createSession, extractResponseText, promptSession } from '@hexafield/agent-workflow'
 
 const app = express()
 app.use(cors())

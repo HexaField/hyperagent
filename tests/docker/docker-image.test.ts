@@ -1,7 +1,7 @@
 import fs from 'fs'
+import { spawnSync } from 'node:child_process'
 import os from 'os'
 import path from 'path'
-import { spawnSync } from 'node:child_process'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 const IMAGE_TAG = 'hyperagent-workflow-runner:latest'
@@ -12,14 +12,10 @@ const log = (...args: unknown[]) => console.log('[docker-image.test]', ...args)
 
 const buildRunnerImage = () => {
   log('building image', IMAGE_TAG)
-  const result = spawnSync(
-    'docker',
-    ['build', '-t', IMAGE_TAG, '-f', 'docker/workflow-runner/Dockerfile', '.'],
-    {
-      stdio: 'inherit',
-      timeout: 300_000
-    }
-  )
+  const result = spawnSync('docker', ['build', '-t', IMAGE_TAG, '-f', 'docker/workflow-runner/Dockerfile', '.'], {
+    stdio: 'inherit',
+    timeout: 300_000
+  })
   log('build finished', {
     status: result.status,
     signal: result.signal,
@@ -52,19 +48,15 @@ describe('agent runner docker image', () => {
     expect(runOpencode.stdout.trim().length).toBeGreaterThan(0)
 
     log('checking rad version')
-    const runRad = spawnSync(
-      'docker',
-      ['run', '--rm', '--entrypoint', '/usr/local/bin/rad', IMAGE_TAG, '--version'],
-      { encoding: 'utf8' }
-    )
+    const runRad = spawnSync('docker', ['run', '--rm', '--entrypoint', '/usr/local/bin/rad', IMAGE_TAG, '--version'], {
+      encoding: 'utf8'
+    })
     expect(runRad.status, runRad.stderr).toBe(0)
 
     log('checking git version')
-    const runGit = spawnSync(
-      'docker',
-      ['run', '--rm', '--entrypoint', '/usr/bin/git', IMAGE_TAG, '--version'],
-      { encoding: 'utf8' }
-    )
+    const runGit = spawnSync('docker', ['run', '--rm', '--entrypoint', '/usr/bin/git', IMAGE_TAG, '--version'], {
+      encoding: 'utf8'
+    })
     expect(runGit.status, runGit.stderr).toBe(0)
   }, 240_000)
 
@@ -73,7 +65,7 @@ describe('agent runner docker image', () => {
     expect(buildResult.status, buildResult.stderr?.toString()).toBe(0)
 
     const gitPresent = commandExists('git')
-    expect(gitPresent, "git must be installed on the host to prepare a workspace mount").toBe(true)
+    expect(gitPresent, 'git must be installed on the host to prepare a workspace mount').toBe(true)
 
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ha-agent-docker-'))
     const workspaceDir = path.join(tmpRoot, 'workspace')
@@ -96,13 +88,20 @@ describe('agent runner docker image', () => {
       [
         'run',
         '--rm',
-        '-v', `${workspaceDir}:/workspace`,
-        '-e', 'AGENT_WORKSPACE_PATH=/workspace',
-        '-e', `AGENT_PROMPT=${prompt}`,
-        '-e', 'AGENT_MODEL=local/echo',
-        '-e', 'OPENCODE_PROMPT_TIMEOUT_MS=5000',
-        '-e', 'OPENCODE_LOG_LEVEL=debug',
-        '-e', 'NODE_OPTIONS=--max-old-space-size=512',
+        '-v',
+        `${workspaceDir}:/workspace`,
+        '-e',
+        'AGENT_WORKSPACE_PATH=/workspace',
+        '-e',
+        `AGENT_PROMPT=${prompt}`,
+        '-e',
+        'AGENT_MODEL=local/echo',
+        '-e',
+        'OPENCODE_PROMPT_TIMEOUT_MS=5000',
+        '-e',
+        'OPENCODE_LOG_LEVEL=debug',
+        '-e',
+        'NODE_OPTIONS=--max-old-space-size=512',
         IMAGE_TAG
       ],
       {

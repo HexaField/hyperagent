@@ -3,9 +3,9 @@ import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { RunMeta } from '../provenance/provenance'
 import { getWorkflowRunDiff, loadWorkflowDefinition, runAgentWorkflow } from './agent-orchestrator'
 import { opencodeTestHooks } from './opencodeTestHooks'
+import { RunMeta } from './provenance'
 import {
   RegisteredWorkflowParserSchemas,
   SingleAgentWorkflowDefinition,
@@ -59,15 +59,15 @@ describe('Agent orchestrator workflows', () => {
 
     const scenario = 'Create a readme.md file that includes the text "Hello, world".'
 
-    const response = await runAgentWorkflow<
-      VerifierWorkerWorkflowDefinition,
-      RegisteredWorkflowParserSchemas
-    >(workflow, {
-      userInstructions: scenario,
-      model,
-      sessionDir,
-      maxRounds: 5
-    })
+    const response = await runAgentWorkflow<VerifierWorkerWorkflowDefinition, RegisteredWorkflowParserSchemas>(
+      workflow,
+      {
+        userInstructions: scenario,
+        model,
+        sessionDir,
+        maxRounds: 5
+      }
+    )
 
     const result = await response.result
 
@@ -140,10 +140,7 @@ describe('Agent orchestrator workflows', () => {
 
     const scenario = 'Create a log.txt file that includes a single line "orchestrator".'
 
-    const response = await runAgentWorkflow<
-      SingleAgentWorkflowDefinition,
-      RegisteredWorkflowParserSchemas
-    >(workflow, {
+    const response = await runAgentWorkflow<SingleAgentWorkflowDefinition, RegisteredWorkflowParserSchemas>(workflow, {
       userInstructions: scenario,
       model,
       sessionDir,

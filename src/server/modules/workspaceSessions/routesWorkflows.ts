@@ -1,10 +1,13 @@
+import {
+  runAgentWorkflow,
+  workflowCreateWorkflowDefinition,
+  workflowDefinitionSchema,
+  type AgentWorkflowDefinition
+} from '@hexafield/agent-workflow'
 import { Router, type RequestHandler } from 'express'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
-import { runAgentWorkflow } from '../../../modules/agent/agent-orchestrator'
-import { workflowDefinitionSchema, type AgentWorkflowDefinition } from '../../../modules/agent/workflow-schema'
-import { workflowCreateWorkflowDefinition } from '../../../modules/agent/workflows'
 import type { WorkspaceSessionsDeps } from './routesTypes'
 import { deleteWorkflow, hydrateWorkflow, listWorkflows, readWorkflow, writeWorkflow } from './workflows'
 

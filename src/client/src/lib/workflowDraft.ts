@@ -1,4 +1,4 @@
-import { workflowDefinitionSchema, type AgentWorkflowDefinition } from '../../../modules/agent/workflow-schema'
+import { workflowDefinitionSchema, type AgentWorkflowDefinition } from '@hexafield/agent-workflow'
 import { fetchJson } from '../shared/api/httpClient'
 import type { WorkflowTemplate } from './workflows'
 

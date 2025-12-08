@@ -45,14 +45,17 @@ server.on('connection', (socket) => {
         )
       }, index * tokenDelay)
     })
-    setTimeout(() => {
-      socket.send(
-        JSON.stringify({
-          type: 'done',
-          conversation_id: conversationId
-        })
-      )
-    }, parts.length * tokenDelay + tokenDelay)
+    setTimeout(
+      () => {
+        socket.send(
+          JSON.stringify({
+            type: 'done',
+            conversation_id: conversationId
+          })
+        )
+      },
+      parts.length * tokenDelay + tokenDelay
+    )
   })
 })
 

@@ -1,6 +1,6 @@
+import { loadRunMeta, metaDirectory, type LogEntry, type RunMeta } from '@hexafield/agent-workflow'
 import fs from 'fs'
 import path from 'path'
-import { loadRunMeta, metaDirectory, type LogEntry, type RunMeta } from '../../../modules/provenance/provenance'
 import { fileDiffsToUnifiedPatch } from '../../../shared/diffPatch'
 
 export const resolveWorkspacePath = (req: any): string | null => {

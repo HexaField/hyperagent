@@ -1,11 +1,18 @@
+import {
+  loadRunMeta,
+  metaDirectory,
+  saveRunMeta,
+  singleAgentWorkflowDefinition,
+  verifierWorkerWorkflowDefinition,
+  type AgentWorkflowDefinition,
+  type RunMeta
+} from '@hexafield/agent-workflow'
 import { Router, type RequestHandler } from 'express'
 import fs from 'fs'
 import path from 'path'
-import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from '../../../modules/agent/workflows'
-import { loadRunMeta, metaDirectory, saveRunMeta, type RunMeta } from '../../../modules/provenance/provenance'
-import { type AgentWorkflowDefinition } from '../../../modules/agent/workflow-schema'
 import { ensureProviderConfig } from '../../../modules/providerConfig'
 import { DEFAULT_CODING_AGENT_MODEL } from '../../core/config'
+import { runAgent, type AgentExecutionMode } from './agentRunner'
 import {
   readWorkspaceRuns,
   resolveWorkspacePath,
@@ -14,7 +21,6 @@ import {
   serializeRunsWithDiffs
 } from './routesShared'
 import type { WorkspaceSessionsDeps } from './routesTypes'
-import { runAgent, type AgentExecutionMode } from './agentRunner'
 
 const MULTI_AGENT_PERSONA_ID = 'multi-agent'
 const DEFAULT_WORKFLOW_ID = singleAgentWorkflowDefinition.id
@@ -240,7 +246,6 @@ const createPostMessageHandler =
         }
 
         workflowForResponse = workflow
-
         ;(async () => {
           try {
             await runAgent({

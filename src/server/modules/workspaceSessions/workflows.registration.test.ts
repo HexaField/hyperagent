@@ -1,5 +1,4 @@
-import { parseJsonPayload } from '../../../modules/agent/agent'
-import { workflowDefinitionSchema } from '../../../modules/agent/workflow-schema'
+import { parseJsonPayload, workflowDefinitionSchema } from '@hexafield/agent-workflow'
 import { deleteWorkflow, writeWorkflow } from './workflows'
 
 import { describe, expect, it } from 'vitest'

@@ -1,4 +1,4 @@
-import type { LogEntry, RunMeta } from '../../../modules/provenance/provenance'
+import type { LogEntry, RunMeta } from '@hexafield/agent-workflow'
 import { fetchJson } from '../shared/api/httpClient'
 
 export type { LogEntry, RunMeta }

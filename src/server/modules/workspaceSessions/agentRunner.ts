@@ -1,7 +1,6 @@
+import { runAgentWorkflow, type AgentWorkflowDefinition, type AgentWorkflowRunOptions } from '@hexafield/agent-workflow'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
-import { runAgentWorkflow, type AgentWorkflowRunOptions } from '../../../modules/agent/agent-orchestrator'
-import type { AgentWorkflowDefinition } from '../../../modules/agent/workflow-schema'
 
 export type AgentExecutionMode = 'local' | 'docker'
 
@@ -61,13 +60,20 @@ async function runAgentInDocker(invocation: AgentRunInvocation): Promise<void> {
   const args = [
     'run',
     '--rm',
-    '-v', `${resolvedWorkspace}:/workspace`,
-    '-e', `AGENT_WORKSPACE_PATH=/workspace`,
-    '-e', `AGENT_PROMPT=${escapeEnvValue(prompt)}`,
-    '-e', `AGENT_MODEL=${escapeEnvValue(model)}`,
-    '-e', `AGENT_WORKFLOW_ID=${escapeEnvValue(workflow.id)}`,
-    '-e', `AGENT_WORKFLOW_SOURCE=${escapeEnvValue(workflow.source)}`,
-    '-e', `AGENT_RUN_ID=${escapeEnvValue(runId)}`
+    '-v',
+    `${resolvedWorkspace}:/workspace`,
+    '-e',
+    `AGENT_WORKSPACE_PATH=/workspace`,
+    '-e',
+    `AGENT_PROMPT=${escapeEnvValue(prompt)}`,
+    '-e',
+    `AGENT_MODEL=${escapeEnvValue(model)}`,
+    '-e',
+    `AGENT_WORKFLOW_ID=${escapeEnvValue(workflow.id)}`,
+    '-e',
+    `AGENT_WORKFLOW_SOURCE=${escapeEnvValue(workflow.source)}`,
+    '-e',
+    `AGENT_RUN_ID=${escapeEnvValue(runId)}`
   ]
 
   if (personaId) {

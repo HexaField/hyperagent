@@ -1,6 +1,6 @@
 # Opencode Ollama-compat Serve
 
-This small service exposes a minimal Ollama-compatible HTTP surface that forwards requests to the project's `opencode` helpers located in `src/modules/agent/opencode.ts`.
+This small service exposes a minimal Ollama-compatible HTTP surface that forwards requests to the project's `opencode` helpers located in the `@hexafield/agent-workflow` package (`packages/agent/src/opencode.ts`).
 
 Quick start
 

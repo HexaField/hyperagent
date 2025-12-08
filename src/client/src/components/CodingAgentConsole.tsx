@@ -1,6 +1,6 @@
+import type { RunMeta } from '@hexafield/agent-workflow'
 import type { JSX } from 'solid-js'
 import { For, Show, createEffect, createMemo, createResource, createSignal, onCleanup, onMount } from 'solid-js'
-import type { RunMeta } from '../../../modules/provenance/provenance'
 import { fileDiffsToUnifiedPatch } from '../../../shared/diffPatch'
 import { WIDGET_TEMPLATES } from '../constants/widgetTemplates'
 import {

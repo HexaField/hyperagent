@@ -11,8 +11,13 @@
     "forceConsistentCasingInFileNames": true,
     "moduleResolution": "bundler",
     "jsx": "preserve",
-    "jsxImportSource": "solid-js"
+    "jsxImportSource": "solid-js",
+    "baseUrl": ".",
+    "paths": {
+      "@hexafield/agent-workflow": ["packages/agent/src/index.ts"],
+      "@hexafield/agent-workflow/*": ["packages/agent/src/*"]
+    }
   },
-  "include": ["src", "tests"],
+  "include": ["src", "tests", "packages"],
   "exclude": ["node_modules"]
 }

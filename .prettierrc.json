@@ -12,5 +12,5 @@
   "arrowParens": "always",
   "proseWrap": "never",
   "endOfLine": "lf",
-  "plugins": ["prettier-plugin-organize-imports"]
+  "plugins": ["@ianvs/prettier-plugin-sort-imports", "prettier-plugin-organize-imports"]
 }

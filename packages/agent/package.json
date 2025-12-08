@@ -1,0 +1,40 @@
+{
+  "name": "@hexafield/agent-workflow",
+  "version": "0.1.0",
+  "description": "Agent workflow orchestration utilities for Hyperagent",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./agent": "./dist/agent.js",
+    "./agent-orchestrator": "./dist/agent-orchestrator.js",
+    "./opencode": "./dist/opencode.js",
+    "./opencodeTestHooks": "./dist/opencodeTestHooks.js",
+    "./provenance": "./dist/provenance.js",
+    "./workflow-schema": "./dist/workflow-schema.js",
+    "./workflows": "./dist/workflows/index.js",
+    "./workflows/*": "./dist/workflows/*.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "cd \"$(dirname \"$npm_package_json\")\" && tsup && rm -f tsconfig.tsbuildinfo && npx tsc --incremental false -p tsconfig.json --emitDeclarationOnly --declaration --declarationMap --outDir dist",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@opencode-ai/sdk": "^1.0.129",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1",
+    "typescript": "^5.4.2",
+    "vitest": "^1.2.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

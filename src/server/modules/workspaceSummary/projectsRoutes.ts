@@ -13,7 +13,16 @@ export type ProjectsRoutesDeps = WorkspaceSummaryDeps
 
 export const createProjectsRoutes = (deps: ProjectsRoutesDeps) => {
   const router = Router()
-  const { wrapAsync, persistence, radicleModule, readGitMetadata, runGitCommand, graphBranchLimit, graphCommitsPerBranch, initializeWorkspaceRepository } = deps
+  const {
+    wrapAsync,
+    persistence,
+    radicleModule,
+    readGitMetadata,
+    runGitCommand,
+    graphBranchLimit,
+    graphCommitsPerBranch,
+    initializeWorkspaceRepository
+  } = deps
 
   const listProjectsHandler: RequestHandler = async (_req, res) => {
     try {

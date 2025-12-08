@@ -1,5 +1,5 @@
-import { singleAgentWorkflowDocument } from '../../../modules/agent/workflows/single-agent.workflow'
-import { verifierWorkerWorkflowDocument } from '../../../modules/agent/workflows/verifier-worker.workflow'
+import { singleAgentWorkflowDocument } from '@hexafield/agent-workflow/workflows/single-agent.workflow'
+import { verifierWorkerWorkflowDocument } from '@hexafield/agent-workflow/workflows/verifier-worker.workflow'
 import type { WorkflowTemplate } from '../lib/workflows'
 
 export const workflowTemplates: WorkflowTemplate[] = [

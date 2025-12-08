@@ -1,19 +1,17 @@
 import fs from 'fs/promises'
-import { once } from 'node:events'
+import type { IPty } from 'node-pty'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { EventEmitter, once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 import os from 'os'
 import path from 'path'
 import selfsigned from 'selfsigned'
-import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { createServerApp } from '../../../src/server/app'
-import type { CodeServerController, CodeServerHandle, CodeServerOptions } from '../../../src/modules/codeServer'
-import type { RadicleModule } from '../../../src/modules/radicle'
-import type { TerminalModule, TerminalSessionRecord } from '../../../src/modules/terminal'
-import type { LiveTerminalSession } from '../../../src/modules/terminal'
-import type { IPty } from 'node-pty'
-import { EventEmitter } from 'node:events'
 import type WebSocketType from 'ws'
 import type { WebSocketServer as WebSocketServerType } from 'ws'
+import type { CodeServerController, CodeServerHandle, CodeServerOptions } from '../../../src/modules/codeServer'
+import type { RadicleModule } from '../../../src/modules/radicle'
+import type { LiveTerminalSession, TerminalModule, TerminalSessionRecord } from '../../../src/modules/terminal'
+import { createServerApp } from '../../../src/server/app'
 import type { NarratorRelay } from '../../../src/server/modules/workspaceNarrator/routes'
 
 type ServerHarness = {
@@ -101,9 +99,7 @@ function createStubCodeServerController(): (options: CodeServerOptions) => CodeS
       return {
         child,
         running: true,
-        publicUrl: `${options.publicBasePath ?? '/code-server'}/?folder=${encodeURIComponent(
-          options.repoRoot ?? ''
-        )}`
+        publicUrl: `${options.publicBasePath ?? '/code-server'}/?folder=${encodeURIComponent(options.repoRoot ?? '')}`
       }
     }
     const shutdown = async () => {}

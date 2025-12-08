@@ -77,7 +77,8 @@ export function loadRunMeta(runId: string, directory: string): RunMeta {
     createdAt: typeof parsed.createdAt === 'string' ? parsed.createdAt : new Date().toISOString(),
     updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date().toISOString(),
     workflowId: typeof parsed.workflowId === 'string' ? parsed.workflowId : undefined,
-    workflowSource: parsed.workflowSource === 'user' || parsed.workflowSource === 'builtin' ? parsed.workflowSource : undefined,
+    workflowSource:
+      parsed.workflowSource === 'user' || parsed.workflowSource === 'builtin' ? parsed.workflowSource : undefined,
     workflowLabel: typeof parsed.workflowLabel === 'string' ? parsed.workflowLabel : undefined
   }
 }

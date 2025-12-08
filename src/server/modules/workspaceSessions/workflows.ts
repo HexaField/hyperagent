@@ -1,9 +1,13 @@
+import {
+  collectParserSchemasFromDefinitions,
+  configureWorkflowParsers,
+  registeredWorkflowParserSchemas,
+  workflowDefinitionSchema,
+  type AgentWorkflowDefinition
+} from '@hexafield/agent-workflow'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
-import { workflowDefinitionSchema, type AgentWorkflowDefinition } from '../../../modules/agent/workflow-schema'
-import { collectParserSchemasFromDefinitions, registeredWorkflowParserSchemas } from '../../../modules/agent/workflows'
-import { configureWorkflowParsers } from '../../../modules/agent/agent'
 
 export type WorkflowSummary = {
   id: string

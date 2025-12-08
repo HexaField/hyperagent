@@ -1,13 +1,13 @@
+import * as provenanceModule from '@hexafield/agent-workflow'
+import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from '@hexafield/agent-workflow'
 import express from 'express'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi, type SpyInstance } from 'vitest'
-import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from '../../../modules/agent/workflows'
-import * as provenanceModule from '../../../modules/provenance/provenance'
-import { createWorkspaceSessionsRouter } from './routes'
 import * as agentRunnerModule from './agentRunner'
+import { createWorkspaceSessionsRouter } from './routes'
 
 const wrapAsync = (handler: any) => handler
 const TEST_PROMPT = 'Please handle this task.'
@@ -56,9 +56,7 @@ describe('workspace sessions routes — RunMeta payloads', () => {
 
   it('falls back to the single-agent loop when no workflowId specified', async () => {
     const workspacePath = path.join(tmpHome, 'ws-single')
-    const response = await request(app)
-      .post('/api/coding-agent/sessions')
-      .send({ workspacePath, prompt: TEST_PROMPT })
+    const response = await request(app).post('/api/coding-agent/sessions').send({ workspacePath, prompt: TEST_PROMPT })
 
     expect(response.status).toBe(202)
     expect(runAgentSpy).toHaveBeenCalledTimes(1)

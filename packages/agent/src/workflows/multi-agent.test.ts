@@ -4,9 +4,9 @@ import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
 import { RegisteredWorkflowParserSchemas, VerifierWorkerWorkflowDefinition, verifierWorkerWorkflowDefinition } from '.'
-import { RunMeta } from '../../provenance/provenance'
 import { getWorkflowRunDiff, runAgentWorkflow } from '../agent-orchestrator'
 import { opencodeTestHooks } from '../opencodeTestHooks'
+import { RunMeta } from '../provenance'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])

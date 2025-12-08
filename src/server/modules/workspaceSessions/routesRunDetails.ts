@@ -1,5 +1,5 @@
+import { hasRunMeta, loadRunMeta, type RunMeta } from '@hexafield/agent-workflow'
 import { Router, type RequestHandler } from 'express'
-import { hasRunMeta, loadRunMeta, type RunMeta } from '../../../modules/provenance/provenance'
 import { normalizeWorkspacePath, serializeRunWithDiffs } from './routesShared'
 import type { WorkspaceSessionsDeps } from './routesTypes'
 

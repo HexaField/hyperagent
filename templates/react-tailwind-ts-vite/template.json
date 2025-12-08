@@ -1,5 +1,5 @@
 {
-    "name": "React Frontend",
-    "description": "Typescript, React & Tailwind",
-    "setup": ["npm i", "npm run gen:certs"]
+  "name": "React Frontend",
+  "description": "Typescript, React & Tailwind",
+  "setup": ["npm i", "npm run gen:certs"]
 }

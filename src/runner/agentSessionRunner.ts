@@ -1,6 +1,9 @@
-import { runAgentWorkflow } from '../modules/agent/agent-orchestrator'
-import { closeOpencodeServer } from '../modules/agent/opencode'
-import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from '../modules/agent/workflows/index'
+import {
+  closeOpencodeServer,
+  runAgentWorkflow,
+  singleAgentWorkflowDefinition,
+  verifierWorkerWorkflowDefinition
+} from '@hexafield/agent-workflow'
 import { ensureProviderConfig } from '../modules/providerConfig'
 
 const getEnv = (key: string) => process.env[key]?.trim()

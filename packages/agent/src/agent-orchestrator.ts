@@ -2,16 +2,6 @@ import type { FileDiff, Session } from '@opencode-ai/sdk'
 import fs from 'fs'
 import path from 'path'
 import {
-  createRunMeta,
-  findLatestRoleDiff,
-  findLatestRoleMessageId,
-  hasRunMeta,
-  loadRunMeta,
-  RunMeta,
-  recordUserMessage,
-  saveRunMeta
-} from '../provenance/provenance'
-import {
   AgentRunResponse,
   AgentStreamCallback,
   invokeStructuredJsonCall,
@@ -20,6 +10,16 @@ import {
   type WorkflowParserRegistry
 } from './agent'
 import { createSession, getMessageDiff, getSession } from './opencode'
+import {
+  RunMeta,
+  createRunMeta,
+  findLatestRoleDiff,
+  findLatestRoleMessageId,
+  hasRunMeta,
+  loadRunMeta,
+  recordUserMessage,
+  saveRunMeta
+} from './provenance'
 import {
   AgentWorkflowDefinition,
   WorkflowCondition,

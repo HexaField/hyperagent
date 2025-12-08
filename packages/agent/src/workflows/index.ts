@@ -14,12 +14,11 @@ import { workflowCreateWorkflowDocument } from './workflow-create.workflow'
 type UnionToIntersection<U> = (U extends any ? (arg: U) => void : never) extends (arg: infer I) => void ? I : never
 
 type ParserSchemasOf<T extends AgentWorkflowDefinition> =
-  NonNullable<T['parsers']> extends Record<
-    string,
-    WorkflowParserJsonSchema
-  >
+  NonNullable<T['parsers']> extends Record<string, WorkflowParserJsonSchema>
     ? {
-        [K in keyof NonNullable<T['parsers']>]: ReturnType<typeof workflowParserSchemaToZod<NonNullable<T['parsers']>[K]>>
+        [K in keyof NonNullable<T['parsers']>]: ReturnType<
+          typeof workflowParserSchemaToZod<NonNullable<T['parsers']>[K]>
+        >
       }
     : {}
 

@@ -177,44 +177,45 @@ const workflowRoleDefinitionSchema = z.object({
   parser: z.string()
 })
 
-const workflowParserJsonSchema: z.ZodType<WorkflowParserJsonSchemaDraft> = z.lazy(() =>
-  z.union([
-    z.object({
-      type: z.literal('unknown'),
-      default: z.any().optional()
-    }),
-    z.object({
-      type: z.literal('string'),
-      enum: z.array(z.string()).min(1).optional(),
-      default: z.string().optional(),
-      minLength: z.number().int().min(0).optional(),
-      maxLength: z.number().int().min(0).optional()
-    }),
-    z.object({
-      type: z.literal('number'),
-      enum: z.array(z.number()).min(1).optional(),
-      minimum: z.number().optional(),
-      maximum: z.number().optional(),
-      integer: z.boolean().optional(),
-      default: z.number().optional()
-    }),
-    z.object({
-      type: z.literal('boolean'),
-      default: z.boolean().optional()
-    }),
-    z.object({
-      type: z.literal('array'),
-      items: workflowParserJsonSchema,
-      default: z.array(z.any()).optional()
-    }),
-    z.object({
-      type: z.literal('object'),
-      properties: z.record(z.string(), workflowParserJsonSchema),
-      required: z.array(z.string()).optional(),
-      additionalProperties: z.boolean().optional(),
-      default: z.any().optional()
-    })
-  ]) as z.ZodType<WorkflowParserJsonSchemaDraft>
+const workflowParserJsonSchema: z.ZodType<WorkflowParserJsonSchemaDraft> = z.lazy(
+  () =>
+    z.union([
+      z.object({
+        type: z.literal('unknown'),
+        default: z.any().optional()
+      }),
+      z.object({
+        type: z.literal('string'),
+        enum: z.array(z.string()).min(1).optional(),
+        default: z.string().optional(),
+        minLength: z.number().int().min(0).optional(),
+        maxLength: z.number().int().min(0).optional()
+      }),
+      z.object({
+        type: z.literal('number'),
+        enum: z.array(z.number()).min(1).optional(),
+        minimum: z.number().optional(),
+        maximum: z.number().optional(),
+        integer: z.boolean().optional(),
+        default: z.number().optional()
+      }),
+      z.object({
+        type: z.literal('boolean'),
+        default: z.boolean().optional()
+      }),
+      z.object({
+        type: z.literal('array'),
+        items: workflowParserJsonSchema,
+        default: z.array(z.any()).optional()
+      }),
+      z.object({
+        type: z.literal('object'),
+        properties: z.record(z.string(), workflowParserJsonSchema),
+        required: z.array(z.string()).optional(),
+        additionalProperties: z.boolean().optional(),
+        default: z.any().optional()
+      })
+    ]) as z.ZodType<WorkflowParserJsonSchemaDraft>
 )
 
 const workflowRolesSchema = z
@@ -282,7 +283,7 @@ export type JsonSchemaType<T extends WorkflowParserJsonSchema> = T extends { typ
 
 export type WorkflowParserJsonOutput<TSchema extends WorkflowParserJsonSchema> = JsonSchemaType<TSchema>
 
-type RequiredKeyUnion<Keys> = Keys extends ReadonlyArray<infer K> ? (K & string) : never
+type RequiredKeyUnion<Keys> = Keys extends ReadonlyArray<infer K> ? K & string : never
 
 type ObjectFromProperties<
   Props extends Record<string, WorkflowParserJsonSchema>,

@@ -1,5 +1,5 @@
+import { workflowDefinitionSchema } from '@hexafield/agent-workflow'
 import { describe, expect, it } from 'vitest'
-import { workflowDefinitionSchema } from '../../../modules/agent/workflow-schema'
 import { workflowTemplates } from './workflowTemplates'
 
 describe('workflow templates', () => {

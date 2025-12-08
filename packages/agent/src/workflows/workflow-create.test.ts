@@ -3,10 +3,10 @@ import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { singleAgentWorkflowDefinition } from '.'
-import { RunMeta } from '../../provenance/provenance'
+import { workflowCreateWorkflowDefinition } from '.'
 import { getWorkflowRunDiff, runAgentWorkflow } from '../agent-orchestrator'
 import { opencodeTestHooks } from '../opencodeTestHooks'
+import { RunMeta } from '../provenance'
 
 function commandExists(cmd: string): boolean {
   const res = spawnSync('which', [cmd])
@@ -29,11 +29,11 @@ function initGitRepo(directory: string) {
 
 const model = 'github-copilot/gpt-5-mini'
 
-describe('Single agent loop', () => {
+describe('Workflow-create authoring', () => {
   opencodeTestHooks()
 
-  it('creates provenance and runs at least one agent turn', async () => {
-    const sessionDir = path.join(process.cwd(), `.tests/single-agent-${Date.now()}`)
+  it('has the creator produce a workflow file object', async () => {
+    const sessionDir = path.join(process.cwd(), `.tests/workflow-create-${Date.now()}`)
     const exists = commandExists('opencode')
     expect(exists, "Required CLI 'opencode' not found on PATH").toBe(true)
 
@@ -53,9 +53,9 @@ describe('Single agent loop', () => {
 
     initGitRepo(sessionDir)
 
-    const scenario = `Create a readme.md file that includes the text "Hello, single agent".`
+    const scenario = `Author a single-step workflow file named workflow-create.workflow.ts that returns a JSON object with {id, filename, content}. The file content must be a valid TypeScript workflow exported with as const satisfies AgentWorkflowDefinition.`
 
-    const agentRun = await runAgentWorkflow(singleAgentWorkflowDefinition, {
+    const agentRun = await runAgentWorkflow(workflowCreateWorkflowDefinition, {
       userInstructions: scenario,
       model: model,
       sessionDir
@@ -66,9 +66,19 @@ describe('Single agent loop', () => {
 
     expect(parsed.rounds.length).toBeGreaterThan(0)
     const firstRound = parsed.rounds[0]
-    const agentStep = firstRound?.steps.agent
-    expect(agentStep).toBeDefined()
-    expect(typeof agentStep?.raw).toBe('string')
+    const createStep = firstRound?.steps.createWorkflow
+    expect(createStep).toBeDefined()
+    expect(typeof createStep?.raw).toBe('string')
+
+    // The creator parser should return an object payload with id, filename, content
+    const parsedPayload = createStep?.parsed as { id?: string; filename?: string; content?: string } | undefined
+    expect(parsedPayload).toBeDefined()
+    expect(typeof parsedPayload?.id).toBe('string')
+    expect(typeof parsedPayload?.filename).toBe('string')
+    expect(typeof parsedPayload?.content).toBe('string')
+    expect(parsedPayload?.filename).toBe('workflow-create.workflow.ts')
+    expect(parsedPayload?.content).toContain('as const satisfies AgentWorkflowDefinition')
+
     const hyperagentDir = path.join(sessionDir, '.hyperagent')
 
     const metaFiles = fs
@@ -84,27 +94,12 @@ describe('Single agent loop', () => {
 
     for (const entry of logs) {
       expect(typeof entry.id).toBe('string')
-
-      expect(entry.agents.length).toBe(1)
-      const agent = entry.agents.find((a) => a.role === 'agent')
-      expect(agent?.sessionId).toBeDefined()
-
+      expect(entry.agents.length).toBeGreaterThanOrEqual(1)
       expect(entry.log.length).toBeGreaterThan(0)
-      const agentMessages = entry.log.filter((e) => e.role === 'agent')
-      expect(agentMessages.length).toBeGreaterThan(0)
-      const userMessages = entry.log.filter((e) => e.role === 'user')
-      expect(userMessages.length).toBeGreaterThan(0)
-      expect(
-        userMessages.some(
-          (message) => typeof message.payload?.text === 'string' && message.payload.text.includes('Hello')
-        )
-      ).toBe(true)
     }
 
-    const diffs: FileDiff[] = await getWorkflowRunDiff(agentRun.runId, sessionDir, { role: 'agent' })
-    expect(diffs.length).toBeGreaterThan(0)
-    const readmeDiff = diffs.find((diff) => diff.file.toLowerCase().includes('readme.md'))
-    expect(readmeDiff).toBeTruthy()
-    expect(readmeDiff?.after.toLowerCase()).toContain('hello, single agent')
+    // There may not be file diffs for authored content (creator returned content only), but ensure the run diff call works
+    const diffs: FileDiff[] = await getWorkflowRunDiff(agentRun.runId, sessionDir, { role: 'creator' })
+    expect(Array.isArray(diffs)).toBe(true)
   }, 120_000)
 })
