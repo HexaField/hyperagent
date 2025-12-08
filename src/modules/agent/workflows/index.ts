@@ -9,6 +9,7 @@ import {
 } from '../workflow-schema'
 import { singleAgentWorkflowDocument } from './single-agent.workflow'
 import { verifierWorkerWorkflowDocument } from './verifier-worker.workflow'
+import { workflowCreateWorkflowDocument } from './workflow-create.workflow'
 
 type UnionToIntersection<U> = (U extends any ? (arg: U) => void : never) extends (arg: infer I) => void ? I : never
 
@@ -42,7 +43,11 @@ export const collectParserSchemasFromDefinitions = <const TDefs extends readonly
 }
 
 export const registeredWorkflowParserSchemas = configureWorkflowParsers(
-  collectParserSchemasFromDefinitions(singleAgentWorkflowDocument, verifierWorkerWorkflowDocument)
+  collectParserSchemasFromDefinitions(
+    singleAgentWorkflowDocument,
+    verifierWorkerWorkflowDocument,
+    workflowCreateWorkflowDocument
+  )
 )
 
 export type RegisteredWorkflowParserSchemas = typeof registeredWorkflowParserSchemas
@@ -63,5 +68,12 @@ export const verifierWorkerWorkflowDefinition = hydrateWorkflowDefinition(verifi
 export type VerifierWorkerWorkflowDefinition = typeof verifierWorkerWorkflowDefinition
 export type VerifierWorkerWorkflowResult = AgentWorkflowResult<
   VerifierWorkerWorkflowDefinition,
+  RegisteredWorkflowParserSchemas
+>
+
+export const workflowCreateWorkflowDefinition = hydrateWorkflowDefinition(workflowCreateWorkflowDocument)
+export type WorkflowCreateWorkflowDefinition = typeof workflowCreateWorkflowDefinition
+export type WorkflowCreateWorkflowResult = AgentWorkflowResult<
+  WorkflowCreateWorkflowDefinition,
   RegisteredWorkflowParserSchemas
 >
