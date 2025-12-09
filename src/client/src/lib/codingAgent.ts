@@ -15,7 +15,7 @@ export async function startCodingAgentRun(input: {
   title?: string
   model?: string
   personaId?: string
-  launchMode?: 'local' | 'docker'
+  execution?: 'local' | 'docker'
 }): Promise<RunMeta> {
   // Keep payload backward-compatible: include personaId when provided
   const body: Record<string, unknown> = {
@@ -25,7 +25,7 @@ export async function startCodingAgentRun(input: {
   if (input.title) body.title = input.title
   if (input.model) body.model = input.model
   if (input.personaId) body.personaId = input.personaId
-  if (input.launchMode) body.launchMode = input.launchMode
+  if (input.execution) body.execution = input.execution
 
   const payload = await fetchJson<{ run: RunMeta }>(`/api/coding-agent/sessions`, {
     method: 'POST',

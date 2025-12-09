@@ -391,14 +391,14 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           prompt: text,
               model: modelId,
               personaId: personaToUse,
-              launchMode: draftLaunchMode()
+              execution: draftLaunchMode()
         })
         setSessionOverrides((prev) => ({
           ...prev,
           [run.id]: {
             modelId: normalizeModelId(null, modelId),
                 ...(personaToUse ? { personaId: personaToUse } : {}),
-                launchMode: draftLaunchMode()
+                execution: draftLaunchMode()
           }
         }))
         setDraftingSession(false)
