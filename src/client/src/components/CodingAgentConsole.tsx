@@ -35,6 +35,7 @@ const DEFAULT_MODELS = [
 type SessionOverride = {
   modelId?: string
   personaId?: string
+  launchMode?: 'local' | 'docker'
 }
 const DEFAULT_MODEL_ID = 'github-copilot/gpt-5-mini'
 type PersistedState = {
@@ -187,6 +188,9 @@ function parseSessionOverrides(raw: string | null): Record<string, SessionOverri
       const normalized: SessionOverride = {}
       if (entry.modelId) normalized.modelId = normalizeModelId(null, String(entry.modelId))
       if (entry.personaId) normalized.personaId = String(entry.personaId)
+      if (entry.launchMode && (entry.launchMode === 'local' || entry.launchMode === 'docker')) {
+        normalized.launchMode = entry.launchMode
+      }
       if (Object.keys(normalized).length > 0) {
         next[sessionId] = normalized
       }
@@ -236,17 +240,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   })
 
   // keep the new-session selector defaulted to the workspace default persona
-  createEffect(() => {
-    const def = defaultPersonaId()
-    if (def && !newSessionPersonaId()) setNewSessionPersonaId(def)
-  })
-
-  // if no explicit choice, default the new-session selector to the first persona in the list
-  createEffect(() => {
-    const current = newSessionPersonaId()
-    const list = personasList()
-    if (!current && list && list.length > 0) setNewSessionPersonaId(list[0].id)
-  })
+  // NOTE: persona selection moved to drafting area; no defaulting needed here
 
   const [sessions, { refetch: refetchSessions }] = createResource(workspaceForFetch, async (value) => {
     const trimmed = value?.trim()
@@ -281,7 +275,8 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [editingPersonaMarkdown, setEditingPersonaMarkdown] = createSignal<string>('')
   const [draftPersonaId, setDraftPersonaId] = createSignal<string | null>(null)
   const [draftPersonaDetail, setDraftPersonaDetail] = createSignal<PersonaDetail | null>(null)
-  const [newSessionPersonaId, setNewSessionPersonaId] = createSignal<string | null>(null)
+  
+  const [draftLaunchMode, setDraftLaunchMode] = createSignal<'local' | 'docker'>('local')
   let drawerHideTimeout: number | null = null
   const scrollController = createConversationScrollController()
   const [selectedSessionPersonaDetail, setSelectedSessionPersonaDetail] = createSignal<PersonaDetail | null>(null)
@@ -358,7 +353,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     setError(null)
     // Set the draft persona first to avoid a reactive ordering/race where the
     // drafting flag causes other effects to run and clear the selection.
-    setDraftPersonaId(newSessionPersonaId() ?? defaultPersonaId() ?? null)
+    setDraftPersonaId(defaultPersonaId() ?? null)
     setDraftingSession(true)
     setDraftingWorkspace(workspacePath)
     setPendingSessionId(null)
@@ -394,14 +389,16 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         const run = await startCodingAgentRun({
           workspacePath,
           prompt: text,
-          model: modelId,
-          personaId: personaToUse
+              model: modelId,
+              personaId: personaToUse,
+              launchMode: draftLaunchMode()
         })
         setSessionOverrides((prev) => ({
           ...prev,
           [run.id]: {
             modelId: normalizeModelId(null, modelId),
-            ...(personaToUse ? { personaId: personaToUse } : {})
+                ...(personaToUse ? { personaId: personaToUse } : {}),
+                launchMode: draftLaunchMode()
           }
         }))
         setDraftingSession(false)
@@ -734,16 +731,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
           >
             {draftingSession() ? 'Drafting…' : 'New session'}
           </button>
-          <div>
-            <select
-              class="ml-2 rounded border border-[var(--border)] bg-[var(--bg-muted)] px-2 py-1 text-sm"
-              value={newSessionPersonaId() ?? ''}
-              onInput={(e) => setNewSessionPersonaId(e.currentTarget.value || null)}
-            >
-              <option value="">(none)</option>
-              <For each={personasList()}>{(p: any) => <option value={p.id}>{p.label ?? p.id}</option>}</For>
-            </select>
-          </div>
           <div class="flex items-center gap-2">
             <button
               type="button"
@@ -848,6 +835,17 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                         <option value="">(none)</option>
                         <For each={personasList()}>{(p: any) => <option value={p.id}>{p.label ?? p.id}</option>}</For>
                       </select>
+                      <div class="ml-2">
+                        <label class="text-xs text-[var(--text-muted)] mr-2">Launch:</label>
+                        <select
+                          class="rounded border border-[var(--border)] bg-[var(--bg-muted)] px-2 py-1 text-sm"
+                          value={draftLaunchMode()}
+                          onInput={(e) => setDraftLaunchMode((e.currentTarget.value as 'local' | 'docker') ?? 'local')}
+                        >
+                          <option value="local">Local</option>
+                          <option value="docker">Docker</option>
+                        </select>
+                      </div>
                     </div>
                     <Show when={draftPersonaDetail()} keyed>
                       {(d) => (
@@ -1004,6 +1002,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     if (isMobileVariant) {
       return (
         <section class={sectionClass}>
+          {infoBlock}
           <div class="flex-1 min-h-0">{conversationPane}</div>
         </section>
       )
