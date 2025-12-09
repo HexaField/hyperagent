@@ -1,9 +1,6 @@
-import type { ChildProcess } from 'child_process'
-import { spawn } from 'child_process'
-import { EventEmitter } from 'events'
 import fs from 'fs'
 import os from 'os'
-import pacote from 'pacote'
+import { execSync } from 'child_process'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -18,59 +15,40 @@ import {
   uninstallDependencies
 } from './npm'
 
-vi.mock('pacote', () => {
-  return {
-    default: {
-      manifest: vi.fn(),
-      extract: vi.fn()
-    }
-  }
-})
-
-vi.mock('child_process', () => {
-  return {
-    spawn: vi.fn(() => {
-      const proc = new EventEmitter() as unknown as ChildProcess
-      const stdout = new EventEmitter()
-      const stderr = new EventEmitter()
-      ;(proc as any).stdout = stdout
-      ;(proc as any).stderr = stderr
-      queueMicrotask(() => proc.emit('close', 0))
-      return proc
-    })
-  }
-})
-
 const fsp = fs.promises
-
-const mockedPacote = vi.mocked(pacote)
-const mockedSpawn = vi.mocked(spawn)
 
 describe('generatePackageContracts', () => {
   let fixtureDir: string
 
+  let packedTarball: string | undefined
+
   beforeEach(async () => {
     fixtureDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'npm-fixture-'))
+    await fsp.writeFile(
+      path.join(fixtureDir, 'package.json'),
+      JSON.stringify({ name: 'mock-lib', version: '1.0.0', types: 'index.ts' }),
+      'utf-8'
+    )
+
     await fsp.writeFile(
       path.join(fixtureDir, 'index.ts'),
       `export interface GreeterOptions {\n  name: string\n  excited?: boolean\n}\n\nexport type ResultInfo =\n  | { kind: 'success'; payload: GreeterOptions }\n  | { kind: 'failure'; message: string }\n\nexport async function fetchProfile(name: string): Promise<GreeterOptions> {\n  return { name, excited: name.length % 2 === 0 }\n}\n\nexport const DEFAULT_RESULT: ResultInfo = {\n  kind: 'success',\n  payload: { name: 'Bot', excited: true }\n}\n\nexport function add(a: number, b: number) {\n  return a + b\n}\n\nexport class Greeter {\n  constructor(private readonly options: GreeterOptions) {}\n  greet(times: number) {\n    const base = this.options.excited ? this.options.name.toUpperCase() : this.options.name\n    return Array.from({ length: times }).map(() => base).join(' ')\n  }\n  async greetAsync(times: number): Promise<string[]> {\n    const base = this.options.excited ? this.options.name.toUpperCase() : this.options.name\n    return Array.from({ length: times }).map(() => base)\n  }\n  static async version(): Promise<string> {\n    return '1.0.0'\n  }\n}\n`,
       'utf-8'
     )
-    mockedPacote.manifest.mockResolvedValue({ name: 'mock-lib', version: '1.0.0', types: 'index.ts' } as any)
-    mockedPacote.extract.mockImplementation(async (_spec: string, target?: string) => {
-      if (!target) throw new Error('missing target path')
-      await fsp.cp(fixtureDir, target, { recursive: true })
-      return {} as any
-    })
+    // Create a tarball so pacote.extract can operate on a file spec instead of a directory
+    const out = execSync('npm pack', { cwd: fixtureDir })
+    const tarName = out.toString().trim().split(/\r?\n/).pop() || ''
+    packedTarball = path.join(fixtureDir, tarName)
   })
 
   afterEach(async () => {
     await fsp.rm(fixtureDir, { recursive: true, force: true })
-    vi.clearAllMocks()
   })
 
   it('produces function and class contracts from extracted package', async () => {
-    const result = await generatePackageContracts('mock-lib')
+    // Use the generated tarball so pacote can extract it reliably
+    const spec = `file:${packedTarball}`
+    const result = await generatePackageContracts(spec)
     expect(result.contracts.length).toBeGreaterThan(0)
 
     const addContract = result.contracts.find(
@@ -118,22 +96,45 @@ describe('dependency command helpers', () => {
     vi.clearAllMocks()
   })
 
-  it('runs npm install with provided packages', async () => {
-    await installDependencies(['left-pad@1.0.0'], { cwd: tempDir, dev: true })
-    expect(mockedSpawn).toHaveBeenCalledWith(
-      'npm',
-      expect.arrayContaining(['install', 'left-pad@1.0.0', '--save-dev']),
-      expect.objectContaining({ cwd: tempDir })
+  it('installs a local package via file: spec and records it in package.json', async () => {
+    const depDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'local-dep-'))
+    await fsp.writeFile(
+      path.join(depDir, 'package.json'),
+      JSON.stringify({ name: 'local-dep', version: '1.0.0', main: 'index.js' })
     )
+    await fsp.writeFile(path.join(depDir, 'index.js'), 'module.exports = { ok: true }', 'utf-8')
+
+    await installDependencies([`file:${depDir}`], { cwd: tempDir, dev: true })
+
+    const pkgJson = JSON.parse(await fsp.readFile(path.join(tempDir, 'package.json'), 'utf-8'))
+    const devDeps = pkgJson.devDependencies ?? {}
+    expect(devDeps['local-dep'] ?? devDeps['local-dep']).toBeDefined()
+
+    // node_modules should contain the installed package
+    const installed = await fsp.stat(path.join(tempDir, 'node_modules', 'local-dep')).catch(() => undefined)
+    expect(installed).toBeDefined()
   })
 
-  it('runs npm uninstall with provided packages', async () => {
-    await uninstallDependencies(['left-pad'], { cwd: tempDir })
-    expect(mockedSpawn).toHaveBeenCalledWith(
-      'npm',
-      expect.arrayContaining(['uninstall', 'left-pad']),
-      expect.objectContaining({ cwd: tempDir })
+  it('uninstalls a previously installed local package', async () => {
+    const depDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'local-dep-'))
+    await fsp.writeFile(
+      path.join(depDir, 'package.json'),
+      JSON.stringify({ name: 'local-dep', version: '1.0.0', main: 'index.js' })
     )
+    await fsp.writeFile(path.join(depDir, 'index.js'), 'module.exports = { ok: true }', 'utf-8')
+
+    // install first
+    await installDependencies([`file:${depDir}`], { cwd: tempDir, dev: true })
+
+    // now uninstall
+    await uninstallDependencies(['local-dep'], { cwd: tempDir })
+
+    const pkgJsonAfter = JSON.parse(await fsp.readFile(path.join(tempDir, 'package.json'), 'utf-8'))
+    const devDepsAfter = pkgJsonAfter.devDependencies ?? {}
+    expect(devDepsAfter['local-dep']).toBeUndefined()
+
+    const installedAfter = await fsp.stat(path.join(tempDir, 'node_modules', 'local-dep')).catch(() => undefined)
+    expect(installedAfter).toBeUndefined()
   })
 })
 
