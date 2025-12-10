@@ -38,6 +38,12 @@ RUN chmod +x docker/workflow-runner/bin/rad \
 ENV OPENCODE_LOG_DIR=/var/log/opencode
 RUN mkdir -p "$OPENCODE_LOG_DIR"
 
+# Build the local agent package first so declaration files exist for the top-level tsc build
+RUN npm --prefix packages/agent install
+RUN npm --prefix packages/agent run build
 RUN npm run build:runner
+
+# Ensure ESM relative imports include .js extension for Node resolution
+RUN node docker/workflow-runner/patch-imports.js
 
 ENTRYPOINT ["node", "--experimental-specifier-resolution=node", "dist/src/runner/agentSessionRunner.js"]

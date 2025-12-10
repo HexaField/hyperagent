@@ -90,10 +90,32 @@ async function runAgentInDocker(invocation: AgentRunInvocation): Promise<void> {
   args.push(image, 'node', 'dist/src/runner/agentSessionRunner.js')
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('docker', args, { stdio: ['ignore', 'inherit', 'inherit'] })
+    // Capture stdout/stderr so we can include container output in error messages
+    const child = spawn('docker', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+
+    const forward = (data: Buffer | string, target: 'stdout' | 'stderr') => {
+      try {
+        const text = data instanceof Buffer ? data.toString('utf8') : String(data)
+        if (target === 'stdout') {
+          process.stdout.write(text)
+          stdout += text
+        } else {
+          process.stderr.write(text)
+          stderr += text
+        }
+      } catch {}
+    }
+
+    if (child.stdout) child.stdout.on('data', (d) => forward(d, 'stdout'))
+    if (child.stderr) child.stderr.on('data', (d) => forward(d, 'stderr'))
+
     const timer = setTimeout(() => {
-      child.kill('SIGKILL')
-      reject(new Error(`Agent docker run timed out after ${timeoutMs}ms`))
+      try {
+        child.kill('SIGKILL')
+      } catch {}
+      reject(new Error(`Agent docker run timed out after ${timeoutMs}ms\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`))
     }, timeoutMs)
 
     child.once('error', (error) => {
@@ -104,7 +126,11 @@ async function runAgentInDocker(invocation: AgentRunInvocation): Promise<void> {
     child.once('close', (code) => {
       clearTimeout(timer)
       if (code !== 0) {
-        reject(new Error(`Agent docker run failed with exit code ${code ?? 'unknown'}`))
+        reject(
+          new Error(
+            `Agent docker run failed with exit code ${code ?? 'unknown'}\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`
+          )
+        )
         return
       }
       resolve()

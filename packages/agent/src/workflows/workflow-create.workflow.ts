@@ -1,9 +1,12 @@
 import fs from 'fs'
 import path from 'path'
+import { fileURLToPath } from 'url'
 import type { AgentWorkflowDefinition } from '../workflow-schema'
 
 // Read the workflows README.md at module load so the prompt contains the file verbatim.
-const workflowsReadme = fs.readFileSync(path.resolve(__dirname, 'README.md'), 'utf8')
+const __filename__ = fileURLToPath(import.meta.url)
+const __dirname__ = path.dirname(__filename__)
+const workflowsReadme = fs.readFileSync(path.resolve(__dirname__, 'README.md'), 'utf8')
 
 export const workflowCreateWorkflowDocument = {
   $schema: 'https://hyperagent.dev/schemas/agent-workflow.json',

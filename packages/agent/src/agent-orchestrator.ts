@@ -1,6 +1,7 @@
 import type { FileDiff, Session } from '@opencode-ai/sdk'
 import fs from 'fs'
 import path from 'path'
+import { fileURLToPath } from 'url'
 import {
   AgentRunResponse,
   AgentStreamCallback,
@@ -139,7 +140,9 @@ export type AgentWorkflowResult<
 }
 
 export function loadWorkflowDefinition(filePath: string): AgentWorkflowDefinition {
-  const resolved = path.isAbsolute(filePath) ? filePath : path.join(__dirname, filePath)
+  const __filename__ = fileURLToPath(import.meta.url)
+  const __dirname__ = path.dirname(__filename__)
+  const resolved = path.isAbsolute(filePath) ? filePath : path.join(__dirname__, filePath)
   const contents = fs.readFileSync(resolved, 'utf8')
   const parsed = JSON.parse(contents)
   try {

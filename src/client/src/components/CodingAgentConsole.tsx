@@ -816,7 +816,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
     const infoBlock = (
       <div class="flex items-start gap-3">
         <div class="flex-1 min-w-0">
-          <p class="text-sm font-semibold text-[var(--text-muted)]">Session detail</p>
           <Show
             when={selectedRun()}
             keyed
@@ -875,17 +874,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
             {(run) => (
               <div class="flex flex-col gap-2">
                 <div class="flex flex-wrap items-center gap-3">
-                  <h3 class={`text-base font-semibold text-[var(--text)] ${isMobileVariant ? 'truncate' : ''}`}>
-                    {run.id}
-                  </h3>
-                  <Show when={selectedSessionPersonaDetail()} keyed>
-                    {(pd) => (
-                      <div class="ml-3 text-xs text-[var(--text-muted)]">
-                        Persona: {String(pd.frontmatter?.title ?? pd.id)}{' '}
-                        {pd.frontmatter?.model ? `· ${String(pd.frontmatter.model)}` : ''}
-                      </div>
-                    )}
-                  </Show>
                   <Show when={!isMobileVariant}>
                     <Show when={selectedSessionMeta()?.state} keyed>
                       {(state) => (
@@ -895,40 +883,6 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
                       )}
                     </Show>
                   </Show>
-                  <Show when={isMobileVariant}>
-                    <Show when={selectedSessionMeta()?.state} keyed>
-                      {(state) => <span class={`${sessionStateDotClass(state)} ml-2`} />}
-                    </Show>
-                  </Show>
-                </div>
-                <Show
-                  when={selectedRunSessionIds().length > 0}
-                  fallback={<p class="text-xs text-[var(--text-muted)]">No opencode sessions linked yet.</p>}
-                >
-                  <div class="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
-                    <span class="font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">
-                      Opencode sessions
-                    </span>
-                    <For each={selectedRunSessionIds()}>
-                      {(sessionId) => (
-                        <code
-                          class="rounded-full border border-[var(--border)] bg-[var(--bg-muted)] px-2 py-0.5 font-mono text-[var(--text)]"
-                          title={sessionId}
-                        >
-                          {formatSessionIdDisplay(sessionId)}
-                        </code>
-                      )}
-                    </For>
-                  </div>
-                </Show>
-                <div class="flex flex-wrap items-center gap-3 text-xs">
-                  <button
-                    type="button"
-                    class="rounded-full border border-[var(--border)] bg-[var(--bg-muted)] px-3 py-1 font-semibold text-[var(--text)] transition hover:border-blue-400 hover:text-blue-500"
-                    onClick={() => openSingleWidgetByTemplate('workspace-summary')}
-                  >
-                    Workspace overview
-                  </button>
                 </div>
               </div>
             )}
