@@ -385,7 +385,7 @@ const executeStep = async <
   scope: TemplateScope<TDefinition, TParsers>,
   ctx: StepExecutionContext<TDefinition>
 ): Promise<WorkflowTurnForStep<TDefinition, TStep, TParsers>> => {
-  const roleConfig = ctx.definition.roles[step.role]
+  const roleConfig = ctx.definition.roles[step.key]
   if (!roleConfig) {
     throw new Error(`Workflow role ${step.role} missing definition`)
   }
@@ -396,6 +396,7 @@ const executeStep = async <
   const prompt = renderPrompt(step.prompt, scope)
   const parser = parseJsonPayload(step.role, roleConfig.parser)
   const { raw, parsed } = await invokeStructuredJsonCall({
+    step: step.key,
     role: step.role,
     systemPrompt: roleConfig.systemPrompt,
     basePrompt: prompt,

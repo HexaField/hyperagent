@@ -42,6 +42,7 @@ export type AgentRunResponse<T = unknown> = {
 }
 
 export type AgentStreamEvent = {
+  step: string
   role: string
   round: number
   parts: Part[]
@@ -97,6 +98,7 @@ const captureDiffSnapshot = async (args: {
 }
 
 export async function invokeStructuredJsonCall<T>(options: {
+  step: string
   role: string
   systemPrompt: string
   basePrompt: string
@@ -141,6 +143,7 @@ export async function invokeStructuredJsonCall<T>(options: {
       const parsed = options.parseResponse ? options.parseResponse(raw) : (undefined! as T)
 
       options.onStream?.({
+        step: options.step,
         role: options.role,
         round: attempt,
         parts: response.parts,
