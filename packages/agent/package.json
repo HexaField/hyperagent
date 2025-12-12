@@ -21,7 +21,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "cd \"$(dirname \"$npm_package_json\")\" && tsup && rm -f tsconfig.tsbuildinfo && npx tsc --incremental false -p tsconfig.json --emitDeclarationOnly --declaration --declarationMap --outDir dist && mkdir -p dist/workflows && cp src/workflows/README.md dist/README.md && cp src/workflows/README.md dist/workflows/README.md",
+    "build": "cd \"$(dirname \"$npm_package_json\")\" && rollup -c",
     "pretest": "npm run build",
     "test": "PKG_DIR=\"$(dirname \"$npm_package_json\")\" && ROOT=\"$(cd \"$PKG_DIR/../..\" && pwd)\" && vitest run --config \"$ROOT/vitest.config.ts\" --root \"$ROOT\" --dir \"$PKG_DIR/src\""
   },
@@ -30,7 +30,11 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "tsup": "^8.5.1",
+    "@rollup/plugin-commonjs": "^29.0.0",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-typescript": "^12.3.0",
+    "fast-glob": "^3.3.3",
+    "rollup": "^4.53.3",
     "typescript": "^5.4.2",
     "vitest": "^1.2.1"
   },
