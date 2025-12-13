@@ -1,13 +1,7 @@
 import type { AgentWorkflowDefinition } from '../workflow-schema'
 
 // Embed the workflows API documentation inline so the prompt is self-contained.
-const workflowsReadme = `# Agent Workflow JSON Schema (API)
-
-This document describes the JSON structure that defines agent workflows for the orchestrator. Workflows are expressed as JSON documents that the orchestrator loads, validates, and executes deterministically. Each document describes the roles involved, how sessions are created, shared state, prompt templates, and the transitions that determine when a run should advance, exit, or emit a final outcome.
-
----
-
-## Workflow Document Structure
+const workflowsReadme = `# Workflow Document Structure
 
 Every workflow document must satisfy the canonical JSON Schema for workflows. The runtime ships a Zod-based \`workflowDefinitionSchema\` which is used to validate inputs; this guide describes the structure expected by that schema.
 
