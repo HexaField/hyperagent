@@ -275,7 +275,7 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
   const [editingPersonaMarkdown, setEditingPersonaMarkdown] = createSignal<string>('')
   const [draftPersonaId, setDraftPersonaId] = createSignal<string | null>(null)
   const [draftPersonaDetail, setDraftPersonaDetail] = createSignal<PersonaDetail | null>(null)
-  
+
   const [draftLaunchMode, setDraftLaunchMode] = createSignal<'local' | 'docker'>('local')
   let drawerHideTimeout: number | null = null
   const scrollController = createConversationScrollController()
@@ -389,16 +389,16 @@ export default function CodingAgentConsole(props: CodingAgentConsoleProps) {
         const run = await startCodingAgentRun({
           workspacePath,
           prompt: text,
-              model: modelId,
-              personaId: personaToUse,
-              execution: draftLaunchMode()
+          model: modelId,
+          personaId: personaToUse,
+          execution: draftLaunchMode()
         })
         setSessionOverrides((prev) => ({
           ...prev,
           [run.id]: {
             modelId: normalizeModelId(null, modelId),
-                ...(personaToUse ? { personaId: personaToUse } : {}),
-                execution: draftLaunchMode()
+            ...(personaToUse ? { personaId: personaToUse } : {}),
+            execution: draftLaunchMode()
           }
         }))
         setDraftingSession(false)
