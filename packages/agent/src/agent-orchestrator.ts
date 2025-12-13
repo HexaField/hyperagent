@@ -29,6 +29,7 @@ import {
   WorkflowStepDefinition,
   WorkflowTransitionDefinition,
   workflowDefinitionSchema,
+  workflowParserSchemaToZod,
   type WorkflowParserJsonOutput,
   type WorkflowParserJsonSchema
 } from './workflow-schema'
@@ -385,16 +386,23 @@ const executeStep = async <
   scope: TemplateScope<TDefinition, TParsers>,
   ctx: StepExecutionContext<TDefinition>
 ): Promise<WorkflowTurnForStep<TDefinition, TStep, TParsers>> => {
-  const roleConfig = ctx.definition.roles[step.key]
+  const roleConfig = ctx.definition.roles[step.role]
   if (!roleConfig) {
-    throw new Error(`Workflow role ${step.role} missing definition`)
+    throw new Error(`Workflow step ${step.role} missing role configuration.`)
   }
   const session = ctx.sessions[step.role]
   if (!session) {
     throw new Error(`No session available for role ${step.role}`)
   }
   const prompt = renderPrompt(step.prompt, scope)
-  const parser = parseJsonPayload(step.role, roleConfig.parser)
+  const parserDefinition = ctx.definition.parsers?.[roleConfig.parser]
+  if (!parserDefinition) {
+    throw new Error(
+      `Parser '${roleConfig.parser}' for role '${step.role}' is not defined in workflow '${ctx.definition.id}'.`
+    )
+  }
+  const parserSchema = workflowParserSchemaToZod(parserDefinition as WorkflowParserJsonSchema)
+  const parser = parseJsonPayload(step.role, roleConfig.parser, parserSchema)
   const { raw, parsed } = await invokeStructuredJsonCall({
     step: step.key,
     role: step.role,
@@ -405,7 +413,7 @@ const executeStep = async <
     runId: ctx.runId,
     directory: ctx.directory,
     onStream: ctx.onStream,
-    parseResponse: (response) => parser(step.role, response)
+    parseResponse: parser
   })
   return {
     key: step.key,

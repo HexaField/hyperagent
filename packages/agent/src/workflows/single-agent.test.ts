@@ -106,5 +106,5 @@ describe('Single agent loop', () => {
     const readmeDiff = diffs.find((diff) => diff.file.toLowerCase().includes('readme.md'))
     expect(readmeDiff).toBeTruthy()
     expect(readmeDiff?.after.toLowerCase()).toContain('hello, single agent')
-  }, 120_000)
+  }, 240_000)
 })

@@ -21,9 +21,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "cd \"$(dirname \"$npm_package_json\")\" && rollup -c",
+    "build": "rollup -c",
     "pretest": "npm run build",
-    "test": "PKG_DIR=\"$(dirname \"$npm_package_json\")\" && ROOT=\"$(cd \"$PKG_DIR/../..\" && pwd)\" && vitest run --config \"$ROOT/vitest.config.ts\" --root \"$ROOT\" --dir \"$PKG_DIR/src\""
+    "test": "vitest run"
   },
   "dependencies": {
     "@opencode-ai/sdk": "^1.0.129",

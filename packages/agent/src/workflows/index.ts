@@ -1,4 +1,3 @@
-import { configureWorkflowParsers } from '../agent'
 import type { AgentWorkflowResult } from '../agent-orchestrator'
 import {
   workflowDefinitionSchema,
@@ -28,28 +27,13 @@ type MergedParserSchemas<TDefs extends readonly AgentWorkflowDefinition[]> = {
   >[K]
 }
 
-export const collectParserSchemasFromDefinitions = <const TDefs extends readonly AgentWorkflowDefinition[]>(
-  ...definitions: TDefs
-) => {
-  const registry = {} as MergedParserSchemas<TDefs>
-  definitions.forEach((definition) => {
-    const parsers = definition.parsers ?? {}
-    Object.entries(parsers).forEach(([name, schema]) => {
-      ;(registry as Record<string, unknown>)[name] = workflowParserSchemaToZod(schema as WorkflowParserJsonSchema)
-    })
-  })
-  return registry
-}
+type BuiltinWorkflowDefinitions = [
+  typeof singleAgentWorkflowDocument,
+  typeof verifierWorkerWorkflowDocument,
+  typeof workflowCreateWorkflowDocument
+]
 
-export const registeredWorkflowParserSchemas = configureWorkflowParsers(
-  collectParserSchemasFromDefinitions(
-    singleAgentWorkflowDocument,
-    verifierWorkerWorkflowDocument,
-    workflowCreateWorkflowDocument
-  )
-)
-
-export type RegisteredWorkflowParserSchemas = typeof registeredWorkflowParserSchemas
+export type RegisteredWorkflowParserSchemas = MergedParserSchemas<BuiltinWorkflowDefinitions>
 
 export function hydrateWorkflowDefinition<const TSource extends AgentWorkflowDefinition>(source: TSource): TSource {
   workflowDefinitionSchema.parse(source as AgentWorkflowDefinitionDraft)

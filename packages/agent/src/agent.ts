@@ -16,26 +16,6 @@ export type WorkflowParserOutput<
   TName extends keyof TRegistry & string
 > = WorkflowParserOutputs<TRegistry>[TName]
 
-let workflowParserRegistry: WorkflowParserRegistry | null = null
-
-export function configureWorkflowParsers<const TRegistry extends WorkflowParserRegistry>(
-  registry: TRegistry
-): TRegistry {
-  workflowParserRegistry = registry
-  return registry
-}
-
-const requireWorkflowParserSchema = (parserName: string): z.ZodTypeAny => {
-  if (!workflowParserRegistry) {
-    throw new Error('No workflow parsers configured. Call configureWorkflowParsers before running workflows.')
-  }
-  const schema = workflowParserRegistry[parserName]
-  if (!schema) {
-    throw new Error(`Workflow parser '${parserName}' is not registered.`)
-  }
-  return schema
-}
-
 export type AgentRunResponse<T = unknown> = {
   runId: string
   result: Promise<T>
@@ -175,9 +155,8 @@ export function buildRetryPrompt(basePrompt: string, errorMessage: string): stri
 IMPORTANT: Your previous response was invalid JSON (${errorMessage}). Respond again with STRICT JSON only, without code fences or commentary.`
 }
 
-export function parseJsonPayload(_role: string, parserName: string) {
-  const schema = requireWorkflowParserSchema(parserName)
-  return (role: string, res: string): unknown => {
+export function parseJsonPayload(role: string, parserName: string, schema: z.ZodTypeAny) {
+  return (res: string): unknown => {
     const jsonText = extractJson(res)
     let payload: unknown
     try {
