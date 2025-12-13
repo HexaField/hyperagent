@@ -242,7 +242,13 @@ export const workflowDefinitionSchema = z.object({
   flow: z.object({
     bootstrap: workflowStepSchema.optional(),
     round: workflowRoundSchema
-  })
+  }),
+  // Optional user input schema. Each key maps to a compact JSON-schema-like
+  // parser (the same shape used for `parsers`) describing the expected type
+  // and optional default value for that input. Runtime callers can provide a
+  // `user` object matching these keys; values will be typed/validated
+  // according to the provided schema.
+  user: z.record(z.string(), workflowParserJsonSchema).optional()
 })
 
 type WorkflowConditionDraft = z.infer<typeof workflowConditionSchema>

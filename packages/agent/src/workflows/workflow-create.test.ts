@@ -56,7 +56,7 @@ describe('Workflow-create authoring', () => {
     const scenario = `Create a workflow that can create a markdown file named "workflow-created.md" with the content "This file was created by a workflow."`
 
     const agentRun = await runAgentWorkflow(workflowCreateWorkflowDefinition, {
-      userInstructions: scenario,
+      user: { instructions: scenario },
       model: model,
       sessionDir
     })

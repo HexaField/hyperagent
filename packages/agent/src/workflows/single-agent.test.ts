@@ -1,11 +1,11 @@
+import { getWorkflowRunDiff, runAgentWorkflow } from '@hexafield/agent-workflow/agent-orchestrator'
+import { RunMeta } from '@hexafield/agent-workflow/provenance'
+import { singleAgentWorkflowDefinition } from '@hexafield/agent-workflow/workflows'
 import type { FileDiff } from '@opencode-ai/sdk'
 import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { singleAgentWorkflowDefinition } from '@hexafield/agent-workflow/workflows'
-import { getWorkflowRunDiff, runAgentWorkflow } from '@hexafield/agent-workflow/agent-orchestrator'
-import { RunMeta } from '@hexafield/agent-workflow/provenance'
 import { opencodeTestHooks } from '../opencodeTestHooks'
 
 function commandExists(cmd: string): boolean {
@@ -56,7 +56,7 @@ describe('Single agent loop', () => {
     const scenario = `Create a readme.md file that includes the text "Hello, single agent".`
 
     const agentRun = await runAgentWorkflow(singleAgentWorkflowDefinition, {
-      userInstructions: scenario,
+      user: { instructions: scenario },
       model: model,
       sessionDir
     })
@@ -96,7 +96,8 @@ describe('Single agent loop', () => {
       expect(userMessages.length).toBeGreaterThan(0)
       expect(
         userMessages.some(
-          (message) => typeof message.payload?.text === 'string' && message.payload.text.includes('Hello')
+          (message) =>
+            typeof message.payload?.instructions === 'string' && message.payload.instructions.includes('Hello')
         )
       ).toBe(true)
     }

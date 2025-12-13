@@ -114,12 +114,11 @@ export function appendLogEntry(runId: string, entry: LogEntryInit, directory: st
 export function recordUserMessage(
   runId: string,
   directory: string,
-  message: string,
+  message: Record<string, unknown> | undefined,
   metadata?: Record<string, unknown>
 ) {
-  const text = typeof message === 'string' ? message.trim() : ''
-  if (!text.length) return
-  const payload: Record<string, unknown> = { text }
+  if (!message || typeof message !== 'object') return
+  const payload: Record<string, unknown> = { ...message }
   if (metadata && Object.keys(metadata).length) {
     Object.assign(payload, metadata)
   }

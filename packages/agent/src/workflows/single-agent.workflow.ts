@@ -21,6 +21,9 @@ export const singleAgentWorkflowDocument = {
   state: {
     initial: {}
   },
+  user: {
+    instructions: { type: 'string', default: '' }
+  },
   flow: {
     round: {
       start: 'agent',

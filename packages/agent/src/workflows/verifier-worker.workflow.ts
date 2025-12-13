@@ -51,6 +51,9 @@ export const verifierWorkerWorkflowDocument = {
       latestCritique: ''
     }
   },
+  user: {
+    instructions: { type: 'string', default: '' }
+  },
   flow: {
     bootstrap: {
       key: 'bootstrap',

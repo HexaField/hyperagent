@@ -35,6 +35,9 @@ export const workflowCreateWorkflowDocument = {
     }
   },
   state: { initial: {} },
+  user: {
+    instructions: { type: 'string', default: '' }
+  },
   flow: {
     round: {
       start: 'createWorkflow',

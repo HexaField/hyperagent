@@ -102,10 +102,17 @@ Define parser shapes in `parsers` using a compact JSON schema that supports `str
 
 Prompt sections, state initializers, `stateUpdates`, and transition `reason` fields all support handlebars-style expressions:
 
-- `{{user.instructions}}`, `{{run.id}}`, `{{round}}`, `{{maxRounds}}` reference built-in scope values.
+- `{{user.<key>}}` (keys are declared by the workflow `user` schema or supplied at runtime), `{{run.id}}`, `{{round}}`, `{{maxRounds}}` reference built-in scope values.
 - `{{steps.worker.raw}}` accesses the raw JSON emitted by a prior step within the same round.
 - `{{parsed.instructions}}` refers to the parsed payload of the current step.
 - Literal strings can provide fallbacks using `||`, e.g. `{{parsed.instructions||state.pendingInstructions}}`.
+
+User inputs and typing
+
+- The workflow `user` property is a JSON-schema-like map (the same compact parser shape used in `parsers`) describing expected runtime inputs. Each entry is a parser schema such as `{ type: 'string', default: '' }` or `{ type: 'number' }`.
+- Keys that include a `default` are optional at runtime; keys without a `default` are required. The orchestrator derives TypeScript types from this schema (via `UserInputsFromDefinition<T>`) so incorrect or missing required fields produce compile-time errors.
+- At runtime, `runAgentWorkflow` compiles Zod parsers from the workflow `user` schema and validates `options.user`. Defaults declared in the schema are applied automatically. If validation fails the call throws `Invalid user inputs for workflow <id>: <zod details>`.
+- If you need templated defaults (defaults that reference `{{run.id}}` or `{{state.x}}`) we can add a step to render string defaults before parsing; currently defaults must be literal values.
 
 ### Transitions & Exits
 
@@ -161,6 +168,10 @@ When defining workflows in TypeScript (`*.workflow.ts`), use `as const` on the d
   "roles": {
     "worker": { "systemPrompt": "...", "parser": "worker" },
     "verifier": { "systemPrompt": "...", "parser": "verifier" }
+  },
+  "user": {
+    "instructions": "",
+    "context": ""
   },
   "state": {
     "initial": {

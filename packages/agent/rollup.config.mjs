@@ -1,9 +1,9 @@
-import path from 'path'
-import fg from 'fast-glob'
-import { nodeResolve } from '@rollup/plugin-node-resolve'
 import commonjs from '@rollup/plugin-commonjs'
+import { nodeResolve } from '@rollup/plugin-node-resolve'
 import typescript from '@rollup/plugin-typescript'
+import fg from 'fast-glob'
 import fs from 'fs'
+import path from 'path'
 
 const base = path.resolve(process.cwd())
 

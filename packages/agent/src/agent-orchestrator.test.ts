@@ -1,7 +1,8 @@
 import {
   getWorkflowRunDiff,
   loadWorkflowDefinition,
-  runAgentWorkflow
+  runAgentWorkflow,
+  UserInputsFromDefinition
 } from '@hexafield/agent-workflow/agent-orchestrator'
 import { RunMeta } from '@hexafield/agent-workflow/provenance'
 import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from '@hexafield/agent-workflow/workflows'
@@ -57,8 +58,11 @@ describe('Agent orchestrator workflows', () => {
 
     const scenario = 'Create a readme.md file that includes the text "Hello, world".'
 
+    type UserInputs = UserInputsFromDefinition<typeof verifierWorkerWorkflowDefinition>
+    const userPayload: UserInputs = { instructions: scenario }
+
     const response = await runAgentWorkflow(workflow, {
-      userInstructions: scenario,
+      user: userPayload,
       model,
       sessionDir,
       maxRounds: 5
@@ -136,7 +140,7 @@ describe('Agent orchestrator workflows', () => {
     const scenario = 'Create a log.txt file that includes a single line "orchestrator".'
 
     const response = await runAgentWorkflow(workflow, {
-      userInstructions: scenario,
+      user: { instructions: scenario },
       model,
       sessionDir,
       maxRounds: 1

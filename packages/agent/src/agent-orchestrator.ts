@@ -2,12 +2,8 @@ import type { FileDiff, Session } from '@opencode-ai/sdk'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import {
-  AgentRunResponse,
-  AgentStreamCallback,
-  invokeStructuredJsonCall,
-  parseJsonPayload
-} from './agent'
+import { z } from 'zod'
+import { AgentRunResponse, AgentStreamCallback, invokeStructuredJsonCall, parseJsonPayload } from './agent'
 import { createSession, getMessageDiff, getSession } from './opencode'
 import {
   RunMeta,
@@ -28,12 +24,12 @@ import {
   WorkflowTransitionDefinition,
   workflowDefinitionSchema,
   workflowParserSchemaToZod,
+  type JsonSchemaType,
   type WorkflowParserJsonOutput,
   type WorkflowParserJsonSchema
 } from './workflow-schema'
 
-export type AgentWorkflowRunOptions = {
-  userInstructions: string
+type AgentWorkflowRunOptionsBase = {
   sessionDir: string
   model?: string
   runID?: string
@@ -43,6 +39,26 @@ export type AgentWorkflowRunOptions = {
   workflowSource?: 'builtin' | 'user'
   workflowLabel?: string
 }
+export type UserInputsFromDefinition<TDefinition extends AgentWorkflowDefinition> = TDefinition extends {
+  user: infer U
+}
+  ? U extends Record<string, WorkflowParserJsonSchema>
+    ? // Separate keys that have defaults (optional at runtime) from those that do not (required)
+      {
+        // required keys (no `default` present on the schema)
+        [K in keyof U as U[K] extends { default?: unknown } ? never : K]: JsonSchemaType<U[K]>
+      } & {
+        // optional keys (have a `default` in the schema)
+        [K in keyof U as U[K] extends { default?: unknown } ? K : never]?: JsonSchemaType<U[K]>
+      }
+    : Record<string, unknown>
+  : Record<string, unknown>
+
+export type AgentWorkflowRunOptions<TDefinition extends AgentWorkflowDefinition = AgentWorkflowDefinition> =
+  AgentWorkflowRunOptionsBase & {
+    /** Map of user-provided input values. Keys become available under `user.<key>` in templates. */
+    user: UserInputsFromDefinition<TDefinition>
+  }
 
 export type WorkflowRoleName<TDefinition extends AgentWorkflowDefinition> = keyof TDefinition['roles'] & string
 
@@ -69,12 +85,10 @@ type StepDefinitionByKey<TDefinition extends AgentWorkflowDefinition, TKey exten
   { key: TKey }
 >
 
-type ParserOutputForRole<
-  TDefinition extends AgentWorkflowDefinition,
-  Role extends WorkflowRoleName<TDefinition>
-> = ParserSchemaForRole<TDefinition, Role> extends WorkflowParserJsonSchema
-  ? WorkflowParserJsonOutput<ParserSchemaForRole<TDefinition, Role>>
-  : unknown
+type ParserOutputForRole<TDefinition extends AgentWorkflowDefinition, Role extends WorkflowRoleName<TDefinition>> =
+  ParserSchemaForRole<TDefinition, Role> extends WorkflowParserJsonSchema
+    ? WorkflowParserJsonOutput<ParserSchemaForRole<TDefinition, Role>>
+    : unknown
 
 type WorkflowTurnForStep<
   TDefinition extends AgentWorkflowDefinition,
@@ -198,7 +212,7 @@ type StepDictionary<TDefinition extends AgentWorkflowDefinition> = Partial<{
 }>
 
 type TemplateScope<TDefinition extends AgentWorkflowDefinition> = {
-  user: { instructions: string }
+  user: Record<string, unknown>
   run: { id: string }
   state: Record<string, string>
   steps: StepDictionary<TDefinition>
@@ -318,6 +332,27 @@ const initializeState = <TDefinition extends AgentWorkflowDefinition>(
     state[key] = renderTemplateString(value, scoped)
   }
   return state
+}
+
+const initializeUserInputs = <TDefinition extends AgentWorkflowDefinition>(
+  userDefs: Record<string, WorkflowParserJsonSchema> | undefined,
+  scope: TemplateScope<TDefinition>
+): Record<string, unknown> => {
+  if (!userDefs) return {}
+  const user: Record<string, unknown> = {}
+  for (const [key, schema] of Object.entries(userDefs) as Array<[string, WorkflowParserJsonSchema]>) {
+    try {
+      const parser = workflowParserSchemaToZod(schema as any)
+      // If the schema provides a default, parsing `undefined` will yield it.
+      const parsed = parser.parse(undefined)
+      if (parsed !== undefined) {
+        user[key] = parsed
+      }
+    } catch {
+      // No default or parsing failed; leave undefined
+    }
+  }
+  return user
 }
 
 type StepExecutionContext<TDefinition extends AgentWorkflowDefinition> = {
@@ -576,7 +611,7 @@ const resolveTransition = <TDefinition extends AgentWorkflowDefinition>(
 
 export async function runAgentWorkflow<TDefinition extends AgentWorkflowDefinition>(
   definition: TDefinition,
-  options: AgentWorkflowRunOptions
+  options: AgentWorkflowRunOptions<TDefinition>
 ): Promise<AgentRunResponse<AgentWorkflowResult<TDefinition>>> {
   if (!options.sessionDir) {
     throw new Error('sessionDir is required for runAgentWorkflow')
@@ -591,15 +626,18 @@ export async function runAgentWorkflow<TDefinition extends AgentWorkflowDefiniti
     workflowSource: options.workflowSource,
     workflowLabel: options.workflowLabel ?? definition.description
   })
-  recordUserMessage(runId, directory, options.userInstructions, {
+  // Record provided user inputs (structured object required)
+  const userPayload = options.user
+  recordUserMessage(runId, directory, userPayload, {
     workflowId: options.workflowId ?? definition.id,
     workflowSource: options.workflowSource ?? 'builtin'
   })
 
   const resultPromise = (async (): Promise<AgentWorkflowResult<TDefinition>> => {
     const state: Record<string, string> = {}
+    // create a baseScope with an empty user map so templating can render user defaults
     const baseScope: TemplateScope<TDefinition> = {
-      user: { instructions: options.userInstructions },
+      user: {},
       run: { id: runId },
       state,
       steps: {} as StepDictionary<TDefinition>,
@@ -607,6 +645,33 @@ export async function runAgentWorkflow<TDefinition extends AgentWorkflowDefiniti
       maxRounds,
       bootstrap: undefined
     }
+
+    // initialize user inputs from workflow definition, then overlay runtime inputs
+    const initializedUser = initializeUserInputs<TDefinition>(definition.user as any, baseScope)
+
+    // If workflow declares a `user` schema, build a Zod parser to validate
+    // runtime-provided `options.user`. Use `.partial()` so callers may omit
+    // fields; defaults declared in schema will be applied by the individual
+    // parsers when parsing undefined.
+    let validatedRuntimeUser: Record<string, unknown> = {}
+    if (definition.user && Object.keys(definition.user).length > 0) {
+      const shape: Record<string, z.ZodTypeAny> = {}
+      for (const [key, schema] of Object.entries(definition.user as Record<string, WorkflowParserJsonSchema>)) {
+        shape[key] = workflowParserSchemaToZod(schema as WorkflowParserJsonSchema)
+      }
+      const userParser = z.object(shape)
+      try {
+        validatedRuntimeUser = userParser.parse(options.user ?? {})
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        throw new Error(`Invalid user inputs for workflow ${definition.id}: ${message}`)
+      }
+    } else {
+      validatedRuntimeUser = options.user ?? {}
+    }
+
+    baseScope.user = { ...initializedUser, ...validatedRuntimeUser }
+
     const initializedState = initializeState<TDefinition>(definition.state?.initial, baseScope)
     Object.assign(state, initializedState)
 
@@ -623,9 +688,11 @@ export async function runAgentWorkflow<TDefinition extends AgentWorkflowDefiniti
     if (definition.flow.bootstrap) {
       const bootstrapScope = cloneScope(baseScope, { round: 0, steps: {} as StepDictionary<TDefinition> })
       const bootstrapDefinition = definition.flow.bootstrap as BootstrapStepDefinition<TDefinition>
-      const executedBootstrap = (await executeStep(bootstrapDefinition, bootstrapScope, execCtx)) as BootstrapTurn<
-        TDefinition
-      >
+      const executedBootstrap = (await executeStep(
+        bootstrapDefinition,
+        bootstrapScope,
+        execCtx
+      )) as BootstrapTurn<TDefinition>
       bootstrapTurn = executedBootstrap
       baseScope.bootstrap = executedBootstrap
       const bootstrapStepScope = scopeWithStep(bootstrapScope, executedBootstrap)
