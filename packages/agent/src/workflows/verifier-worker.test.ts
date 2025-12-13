@@ -1,15 +1,11 @@
+import { getWorkflowRunDiff, runAgentWorkflow } from '@hexafield/agent-workflow/agent-orchestrator'
+import { RunMeta } from '@hexafield/agent-workflow/provenance'
+import { verifierWorkerWorkflowDefinition } from '@hexafield/agent-workflow/workflows'
 import type { FileDiff } from '@opencode-ai/sdk'
 import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import {
-  RegisteredWorkflowParserSchemas,
-  VerifierWorkerWorkflowDefinition,
-  verifierWorkerWorkflowDefinition
-} from '@hexafield/agent-workflow/workflows'
-import { getWorkflowRunDiff, runAgentWorkflow } from '@hexafield/agent-workflow/agent-orchestrator'
-import { RunMeta } from '@hexafield/agent-workflow/provenance'
 import { opencodeTestHooks } from '../opencodeTestHooks'
 
 function commandExists(cmd: string): boolean {
@@ -59,20 +55,28 @@ describe('Verifier/worker collaboration loop', () => {
 
     const scenario = `Create a readme.md file that includes the text "Hello, world".`
 
-    const response = await runAgentWorkflow<VerifierWorkerWorkflowDefinition, RegisteredWorkflowParserSchemas>(
-      verifierWorkerWorkflowDefinition,
-      {
-        userInstructions: scenario,
-        model: model,
-        maxRounds: 5,
-        sessionDir
-      }
-    )
+    const response = await runAgentWorkflow(verifierWorkerWorkflowDefinition, {
+      userInstructions: scenario,
+      model: model,
+      maxRounds: 5,
+      sessionDir
+    })
 
     const result = await response.result
 
     const bootstrap = result.bootstrap!
     expect(bootstrap.round).toBe(0)
+
+    // assert types
+    bootstrap.parsed.critique
+    bootstrap.parsed.instructions
+    bootstrap.parsed.priority
+    bootstrap.parsed.verdict
+
+    // assert non-types for strict parsing
+    // @ts-expect-error
+    bootstrap.parsed.unexpectedField
+
     expect(bootstrap.parsed.instructions.trim().length).toBeGreaterThan(0)
 
     expect(result.rounds.length).toBeGreaterThan(0)

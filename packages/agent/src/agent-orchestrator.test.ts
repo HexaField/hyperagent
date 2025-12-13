@@ -1,17 +1,15 @@
+import {
+  getWorkflowRunDiff,
+  loadWorkflowDefinition,
+  runAgentWorkflow
+} from '@hexafield/agent-workflow/agent-orchestrator'
+import { RunMeta } from '@hexafield/agent-workflow/provenance'
+import { singleAgentWorkflowDefinition, verifierWorkerWorkflowDefinition } from '@hexafield/agent-workflow/workflows'
 import { FileDiff } from '@opencode-ai/sdk'
 import { execSync, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { getWorkflowRunDiff, loadWorkflowDefinition, runAgentWorkflow } from '@hexafield/agent-workflow/agent-orchestrator'
-import { RunMeta } from '@hexafield/agent-workflow/provenance'
-import {
-  RegisteredWorkflowParserSchemas,
-  SingleAgentWorkflowDefinition,
-  VerifierWorkerWorkflowDefinition,
-  singleAgentWorkflowDefinition,
-  verifierWorkerWorkflowDefinition
-} from '@hexafield/agent-workflow/workflows'
 import { opencodeTestHooks } from './opencodeTestHooks'
 
 const model = 'github-copilot/gpt-5-mini'
@@ -59,15 +57,12 @@ describe('Agent orchestrator workflows', () => {
 
     const scenario = 'Create a readme.md file that includes the text "Hello, world".'
 
-    const response = await runAgentWorkflow<VerifierWorkerWorkflowDefinition, RegisteredWorkflowParserSchemas>(
-      workflow,
-      {
-        userInstructions: scenario,
-        model,
-        sessionDir,
-        maxRounds: 5
-      }
-    )
+    const response = await runAgentWorkflow(workflow, {
+      userInstructions: scenario,
+      model,
+      sessionDir,
+      maxRounds: 5
+    })
 
     const result = await response.result
 
@@ -140,7 +135,7 @@ describe('Agent orchestrator workflows', () => {
 
     const scenario = 'Create a log.txt file that includes a single line "orchestrator".'
 
-    const response = await runAgentWorkflow<SingleAgentWorkflowDefinition, RegisteredWorkflowParserSchemas>(workflow, {
+    const response = await runAgentWorkflow(workflow, {
       userInstructions: scenario,
       model,
       sessionDir,

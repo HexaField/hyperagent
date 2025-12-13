@@ -5,17 +5,6 @@ import { appendLogEntry } from './provenance'
 
 const MAX_JSON_ATTEMPTS = 3
 
-export type WorkflowParserRegistry = Record<string, z.ZodTypeAny>
-
-export type WorkflowParserOutputs<TRegistry extends WorkflowParserRegistry> = {
-  [Name in keyof TRegistry]: z.infer<TRegistry[Name]>
-}
-
-export type WorkflowParserOutput<
-  TRegistry extends WorkflowParserRegistry,
-  TName extends keyof TRegistry & string
-> = WorkflowParserOutputs<TRegistry>[TName]
-
 export type AgentRunResponse<T = unknown> = {
   runId: string
   result: Promise<T>
