@@ -22,6 +22,7 @@
   ],
   "scripts": {
     "build": "rollup -c",
+    "coverage": "vitest run --coverage",
     "pretest": "npm run build",
     "test": "vitest run"
   },
@@ -33,10 +34,11 @@
     "@rollup/plugin-commonjs": "^29.0.0",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-typescript": "^12.3.0",
+    "@vitest/coverage-v8": "^4.0.15",
     "fast-glob": "^3.3.3",
     "rollup": "^4.53.3",
-    "typescript": "^5.4.2",
-    "vitest": "^1.2.1"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
   },
   "engines": {
     "node": ">=18"

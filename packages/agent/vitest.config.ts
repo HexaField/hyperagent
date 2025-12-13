@@ -7,7 +7,8 @@ export default defineConfig({
     passWithNoTests: true,
     exclude: ['node_modules/**', 'serve/node_modules/**', 'dist/**'],
     environment: 'node',
-    environmentMatchGlobs: [],
-    setupFiles: []
+    coverage: {
+      reportsDirectory: './.coverage'
+    }
   }
 })

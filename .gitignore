@@ -13,3 +13,4 @@ package-lock.json
 .github/prompts
 .agents/
 .agents-test/
+.coverage
